@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.07';
+const VERSION = '2026.09.13.08';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -612,7 +612,82 @@ function startController() {
 // ---- HTTP passthrough to HA ----
 // xfwd:true adds X-Forwarded-For/Proto/Host so HA's trusted_networks auth provider
 // sees the real browser IP (needs http.use_x_forwarded_for + trusted_proxies on HA side).
-const proxy = httpProxy.createProxyServer({ target: HA_BASE, changeOrigin: true, ws: false, autoRewrite: true, xfwd: true });
+// autoRewrite is deliberately OFF: it rewrites a redirect's HOST but never its SCHEME, which
+// is an infinite redirect loop behind TLS termination (see rewriteLocation below). We do the
+// whole job in a proxyRes handler instead — same condition, plus scheme and query params.
+const proxy = httpProxy.createProxyServer({ target: HA_BASE, changeOrigin: true, ws: false, xfwd: true });
+
+// The origin as the BROWSER sees it, which is not necessarily the one we were reached on.
+// Note xfwd APPENDS our own hop to x-forwarded-proto (so Caddy's "https" becomes
+// "https,http"), hence first-entry-wins. x-forwarded-host is not appended, so it keeps the
+// outermost value. With no upstream proxy this yields exactly our own scheme/host.
+function clientOrigin(req) {
+  const first = (v) => String(v || '').split(',')[0].trim();
+  return {
+    proto: first(req.headers['x-forwarded-proto']) || 'http',
+    host: first(req.headers['x-forwarded-host']) || req.headers.host || '',
+  };
+}
+
+const TARGET_HOST = (() => { try { return new URL(HA_BASE).host; } catch { return ''; } })();
+
+// Set scheme + authority on a URL. Deliberately NOT `url.host = host`: the WHATWG host setter
+// keeps the existing port when the value it's given has none, so rewriting HA's
+// `http://10.0.0.5:8123/...` to a port-less public host left `https://example.org:8123/...`.
+// hostname/port must be set separately. The `]` check keeps IPv6 literals (`[::1]:8123`) intact.
+function setOrigin(url, proto, host) {
+  const i = host.lastIndexOf(':');
+  const hasPort = i > host.lastIndexOf(']');
+  url.protocol = `${proto}:`;
+  url.hostname = hasPort ? host.slice(0, i) : host;
+  url.port = hasPort ? host.slice(i + 1) : '';
+}
+
+// Point a redirect back at the origin the browser actually used.
+//
+// `changeOrigin` makes HA see the request as arriving at HA_BASE, so its absolute redirects
+// come back naming HA's own address. http-proxy's `autoRewrite` fixed the host but left the
+// scheme alone, so behind an HTTPS terminator the browser was sent from
+// `https://ha.example.org/...` to `http://ha.example.org/...`; the edge proxy bounced it
+// straight back to HTTPS, HA reissued the same redirect, and the page never loaded —
+// `.../:8123./:8123./:8123./...` (issue #9).
+//
+// Query params matter just as much: HA's auth flow carries absolute URLs in `redirect_uri`,
+// and autoRewrite never touched those, so login bounced the browser to HA's internal address
+// — unreachable from outside the LAN.
+function rewriteLocation(raw, proto, host, targetHost = TARGET_HOST) {
+  if (!raw || !host) return raw;
+  const base = `${proto}://${host}`;
+  let u;
+  try { u = new URL(raw, base); } catch { return raw; }
+  // Rewrite when it points at HA itself, or already at the browser's host but on the wrong
+  // scheme. Anything genuinely third-party is left alone.
+  if (u.host === targetHost || u.host === host) setOrigin(u, proto, host);
+  for (const key of ['redirect_uri', 'hass_url']) {
+    const v = u.searchParams.get(key);
+    if (!v) continue;
+    try {
+      const q = new URL(v);
+      if (q.host === targetHost || q.host === host) {
+        setOrigin(q, proto, host);
+        u.searchParams.set(key, q.toString());
+      }
+    } catch { /* not an absolute URL — leave it */ }
+  }
+  // A relative Location stays relative; making it absolute would be a gratuitous change.
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? u.toString() : u.pathname + u.search + u.hash;
+}
+
+proxy.on('proxyRes', (proxyRes, req) => {
+  const loc = proxyRes.headers.location;
+  if (!loc || proxyRes.statusCode < 300 || proxyRes.statusCode >= 400) return;
+  const { proto, host } = clientOrigin(req);
+  const next = rewriteLocation(loc, proto, host);
+  if (next !== loc) {
+    logThrottled(`redirect:${proto}:${host}`, `rewrote redirect for ${proto}://${host}: ${loc} -> ${next}`);
+    proxyRes.headers.location = next;
+  }
+});
 // Node reports dual-stack client IPs as IPv4-mapped IPv6 (e.g. ::ffff:192.168.5.247).
 // HA's trusted_networks auth provider matches plain IPv4 subnets, and a mapped address
 // won't match an IPv4 network — so normalize X-Forwarded-For to bare IPv4, or
