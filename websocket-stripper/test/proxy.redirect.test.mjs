@@ -41,6 +41,8 @@ describe('#9 redirects point back at the origin the browser used', () => {
       '/abs': (p) => `http://127.0.0.1:${p}/lovelace/0`,
       '/auth': (p) => `http://127.0.0.1:${p}/auth/authorize?client_id=x&redirect_uri=http%3A%2F%2F127.0.0.1%3A${p}%2F`,
       '/third-party': 'https://example.com/oauth/callback',
+      // The companion app authenticates with a custom-scheme callback.
+      '/app-auth': (p) => `http://127.0.0.1:${p}/auth/authorize?client_id=https%3A%2F%2Fhome-assistant.io%2Fandroid&redirect_uri=homeassistant%3A%2F%2Fauth-callback`,
     });
     proxy = spawn(process.execPath, [PROXY], {
       env: {
@@ -74,6 +76,17 @@ describe('#9 redirects point back at the origin the browser used', () => {
     assert.equal(u.origin, 'https://ha.duckdns.org');
     assert.equal(u.searchParams.get('redirect_uri'), 'https://ha.duckdns.org/',
       'login must come back through the proxy, not HA\'s internal address');
+  });
+
+  it('does not mangle a custom-scheme redirect_uri (companion app auth)', async () => {
+    // homeassistant://auth-callback parses with host 'auth-callback', which matches neither
+    // HA nor the browser host — so it must pass through untouched. Broadening the rewrite to
+    // "any absolute redirect_uri" would silently break app login and be miserable to debug.
+    const { location } = await viaEdge('/app-auth');
+    const u = new URL(location);
+    assert.equal(u.origin, 'https://ha.duckdns.org', 'the redirect itself is still rewritten');
+    assert.equal(u.searchParams.get('redirect_uri'), 'homeassistant://auth-callback');
+    assert.equal(u.searchParams.get('client_id'), 'https://home-assistant.io/android');
   });
 
   it('leaves a relative redirect relative', async () => {
