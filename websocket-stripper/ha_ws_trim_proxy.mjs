@@ -694,7 +694,18 @@ function cardMatchesBody(type, cached) {
   return frags.filter(isDistinctive).length >= 2;
 }
 
-const bodyHasIcon = (body, ns) => body.includes(ns + ':');
+// An icon namespace is matched two ways, and it needs both.
+//
+// A *user* of the namespace writes `cbi:bulb`, so the colon form finds them. Matching the
+// bare namespace instead is how the 3-character `cbi` came to keep 4.8MB of bundles that
+// merely contained those letters in base64 blobs and minified identifiers — `cbi:` appeared
+// in none of them.
+//
+// But the *provider* never writes the colon form at all: it registers the namespace as a
+// key, `customIconsets["cil"]`. Matching only the colon form drops the very bundle that
+// serves the icons, which is what happened to custom-icons.js, the provider of `cil:`.
+const ICON_REG = (ns) => new RegExp('customIcons(?:ets)?\\s*\\[\\s*[\'"`]' + ns + '[\'"`]');
+const bodyHasIcon = (body, ns) => body.includes(ns + ':') || ICON_REG(ns).test(body);
 
 // never > always > content match > fail-open. A resource we could not read is always kept:
 // being unable to check is not evidence it is unused.

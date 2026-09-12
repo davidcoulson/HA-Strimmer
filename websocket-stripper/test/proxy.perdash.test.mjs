@@ -15,7 +15,7 @@ import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 
 // How many resources the mock serves. Derived, not hard-coded: two tests assert "nothing
 // was removed", and a literal count made adding a fixture resource look like a regression.
-const TOTAL_RESOURCES = 6;
+const TOTAL_RESOURCES = 7;
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
@@ -288,6 +288,9 @@ describe('resource trimming', () => {
       assert.ok(urls.some((u) => u.includes('icon-pack')), 'a body containing "cbi:" must be kept');
       assert.ok(!urls.some((u) => u.includes('cbi-lookalike')),
         'a body containing only the bare letters "cbi" must NOT be kept');
+      // The pack that SERVES the namespace registers it as a key and never writes `cbi:`.
+      assert.ok(urls.some((u) => u.includes('provider')),
+        'the provider registering customIconsets["cbi"] must be kept');
     } finally { px.kill(); await m2.close(); }
   });
 

@@ -2,6 +2,17 @@
 
 ## 2026.09.12.06 — 2026-09-12
 
+An icon namespace is matched **both** as `ns:` (how a user writes it) and as a registration
+key, `customIconsets["ns"]` (how the pack that serves it writes it — a provider never writes
+the colon form at all). Matching only the colon form dropped `custom-icons.js`, the provider
+of `cil:`, from every dashboard.
+
+Fragment distinctiveness is **measured**, not a stop-word list: document frequency across the
+resources actually read, with anything in more than a quarter of them disqualified. The first
+attempt used a hand-written list, and `grid`, `layout`, `entity` and `progress` slipped
+through it and matched nearly every bundle — taking one panel from 2,998KB to 11,876KB, four
+times worse than the bug being fixed.
+
 **Icon namespaces are matched with their colon, and card types can match by fragments.**
 Two bugs in the resource matcher, found by breaking down what one dashboard was actually
 keeping.
