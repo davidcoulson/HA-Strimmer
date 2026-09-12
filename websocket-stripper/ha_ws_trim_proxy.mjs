@@ -42,7 +42,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.04';
+const VERSION = '2026.09.12.05';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -271,6 +271,7 @@ function applyOverrides(set, realIds) {
 async function buildAllow(rpc, renderTemplate) {
   const states = await rpc({ type: 'get_states' });
   const realIds = states.map((s) => s.entity_id);
+  const byId = new Map(states.map((st) => [st.entity_id, st]));
   const registries = await fetchRegistries(rpc);
   const union = new Set();
   const perDash = new Map();
@@ -283,7 +284,12 @@ async function buildAllow(rpc, renderTemplate) {
       const set = allowlistFor(cfg, states, registries, tpls);
       log(`  ${p}: ${set.size} entities`);
       perDash.set(p, set);
-      keysByDash.set(p, resourceKeys(cfg));
+      // Resource keys come from the dashboard config AND from the icons of the entities
+      // this dashboard shows. The second half matters: an entity's icon usually lives in
+      // the entity registry, not in any dashboard's YAML, so a config-only scan misses it
+      // and drops the icon pack that renders it. Measured here: 20 entities carry `phu:`
+      // icons set in the registry, and the string "phu" appears in no dashboard config.
+      keysByDash.set(p, resourceKeys(cfg, set, byId));
       set.forEach((e) => union.add(e));
     } catch (e) { failed++; log(`  ${p}: FAILED ${e.message}`); }
   }
@@ -632,8 +638,18 @@ let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
 // in every minified bundle ever written, so every resource "matches" and nothing is dropped.
 // Observed exactly that: 45 resources, 39 kept, 97KB saved instead of 18MB.
 const MIN_KEY = 3;
-function resourceKeys(cfg) {
+function resourceKeys(cfg, allowed = null, byId = null) {
   const keys = new Set();
+  // Icons of the entities this dashboard actually shows, which are typically registry
+  // values rather than anything written in the config.
+  if (allowed && byId) {
+    for (const id of allowed) {
+      const ic = byId.get(id)?.attributes?.icon;
+      if (typeof ic !== 'string') continue;
+      const m = ic.match(/^([a-z][a-z0-9_]{2,15}):[a-z]/);
+      if (m && !BUILTIN_ICON_NS.has(m[1])) keys.add(m[1]);
+    }
+  }
   (function walk(n) {
     if (Array.isArray(n)) return n.forEach(walk);
     if (n && typeof n === 'object') return Object.values(n).forEach(walk);

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.09.12.05 — 2026-09-12
+
+**Resource matching now reads the icons of the entities a dashboard shows, not just its
+config text.** An entity's icon normally lives in the entity registry, so a config-only scan
+never sees it and drops the icon pack that renders it. Measured here: 20 entities carry
+`phu:` icons set in the registry, and the string `phu` appears in no dashboard's YAML.
+
+Without this, keeping those icons working meant pinning the pack in
+`resources_always_forward` for every dashboard — 4,571KB on a panel that shows none of
+those 20 entities, 60% of its entire resource payload. With it, the pack is kept for the
+dashboards that show `phu:` entities and dropped for the ones that don't, automatically.
+
+
 ## 2026.09.12.04 — 2026-09-12
 
 **Resources dropped by *every* dashboard are now called out separately in the log**, with
