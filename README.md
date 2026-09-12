@@ -1,84 +1,83 @@
-# HA WebSocket Stripper — make slow Home Assistant dashboards load fast
+# 🚿 WebSocket Stripper
 
-> **Speed up slow-loading Home Assistant dashboards on large instances.** A lightweight
-> reverse-proxy add-on that serves your *real* Lovelace dashboards but strips the entity
-> WebSocket down to only what each dashboard uses — so kiosks, wall panels, tablets, and
-> Fully Kiosk Browser displays load in a fraction of the time, with zero loss of fidelity.
+### Your Home Assistant dashboards are slow because every page loads *your entire house*.
 
-**Keywords:** Home Assistant slow dashboard, Lovelace performance, kiosk / wall-panel
-load time, large instance with thousands of entities, `subscribe_entities` / `get_states`
-firehose, WebSocket optimization, fast HA dashboard, Mushroom & custom-card kiosk.
+Open a dashboard — even one showing four lights — and Home Assistant sends the browser
+**every entity you own**, then streams every change to all of them, forever. On a big
+install that is megabytes before a single card appears. On a wall panel or an old tablet,
+it is the difference between a dashboard and a loading screen.
 
-A reverse proxy that serves your **real** Home Assistant dashboards (real frontend,
-real cards — Mushroom, button-card, everything) but **strips the entity websocket** so a
-kiosk page only subscribes to the entities that dashboard actually uses. On a big
-instance (thousands of entities) this cuts the startup `get_states` / `subscribe_entities`
-firehose down to a few dozen entities, so dashboards load fast — with **zero visual
-approximation**, because it *is* the real frontend.
+This add-on sits in front of Home Assistant and sends each dashboard **only what it
+actually shows**. Same Home Assistant. Same dashboards. Same cards. Just not the other
+9,000 entities.
 
-## Why this exists
+---
 
-Home Assistant's frontend subscribes to **every entity** in your instance at page load
-(`get_states` + `subscribe_entities` with no filter), then streams every state change for
-all of them over the WebSocket. On a small setup that's fine. On a large instance — a few
-thousand entities, plus heavy custom cards (Mushroom, button-card, auto-entities,
-mini-graph-card) — that startup firehose makes dashboards **slow to load and sluggish to
-interact with**, which is especially painful on low-powered kiosks, wall tablets, and
-fridge/door displays that just need to show a handful of entities.
+## ⚡ The difference
 
-HA has no built-in way to tell a single dashboard "only subscribe to the entities I
-actually render." This add-on adds exactly that, **without** rebuilding your dashboards or
-sacrificing fidelity: it's a transparent proxy in front of HA that auto-detects each
-dashboard's entities and trims the subscription at the source. You keep your real cards
-and themes; the page just stops downloading and tracking thousands of irrelevant entities.
+Measured on a Sonoff NSPanel Pro (a genuinely slow wall panel) against a Home Assistant
+with **9,751 entities**:
 
-## How it works
+| | 😴 Without | 🚀 With |
+|---|---|---|
+| **Dashboard appears in** | 60 seconds | **16 seconds** |
+| Entities sent to the page | 9,751 | **104** |
+| Data per page load | 2.5 MB | **112 KB** |
+| Data per hour, just sitting there | ~17 MB | **~0.5 MB** |
+| Custom card code sent | 21 MB | **3 MB** |
 
-The proxy passes all HTTP straight through to HA (frontend bundles, auth, custom-card
-files, lovelace config). It intercepts only `/api/websocket`, where it:
+**≈ 4× faster**, and the panel stops thrashing.
 
-- rewrites `subscribe_entities` (no filter) to `entity_ids = <allowlist>`, so HA streams
-  only those entities;
-- filters the `get_states` response to the allowlist;
-- trims the **entity, device and area registries** to what the connection can see —
-  including `config/entity_registry/list_for_display`, which on a large instance is the
-  single biggest payload the frontend fetches;
-- optionally trims the **Lovelace resource list**, so a dashboard is sent only the custom
-  cards it actually renders instead of every card installed (off by default);
-- **compresses** the websocket, which Home Assistant's own does and the `ws` library
-  does not do by default.
+---
 
-Everything else passes through unchanged, so the real frontend renders normally.
+## 🎁 What you get
 
-The **allowlist** is the union of the entities used by each configured dashboard
-(computed from its `lovelace/config`: card tree walk + `auto-entities` expansion + a
-scan for entity ids referenced inside templates), plus your `always_forward` and minus
-your `never_forward` overrides.
+- 🏃 **Dashboards that open in seconds**, not in "go and make a coffee"
+- 📱 **Way less mobile data** — great if you reach HA from outside the house
+- 🔋 **Old tablets and wall panels become usable again** — no new hardware
+- 🎨 **Nothing looks different.** It is your real Home Assistant frontend, your real
+  cards, your real theme. Nothing is re-implemented or approximated
+- 🧩 **No changes to your dashboards.** It works out what each one needs by reading it
+- 🛟 **Fails safe.** If it is ever unsure, it sends *more*, not less
 
-`auto-entities` filter cards are expanded against your live entities **and registries**, the
-same way HA's frontend resolves them:
+---
 
-| Filter key | Resolved how |
-|---|---|
-| `entity_id`, `domain` | matched directly |
-| `area`, `label`, `device`, `integration` | via the HA registries (matches id **or** name) |
-| `name` | against `friendly_name` |
-| `group` | expands to the group's members |
-| `template` | rendered through HA, then real entity ids are taken from the output |
-| `state`, `attributes` | **over-included** — an entity that doesn't match right now is still forwarded, so the card shows it when it later does |
+## 🔍 How it works, briefly
 
-Every one of those accepts an exact id, a `*` glob (anchored), or a `/regex/` (**not**
-auto-anchored — supply your own `^`/`$`), matching auto-entities' own behaviour. Entities are
-also pulled in **transitively through groups**, so a card naming a group — or expanding one
-client-side, like `enhanced-shutter-card`'s `show_group_members` — gets its members too, even
-though they appear nowhere in the dashboard config.
+```mermaid
+flowchart LR
+    B["📱 Your panel<br/>or phone"] --> S["🚿 Stripper"]
+    S --> H["🏠 Home<br/>Assistant"]
+    H -. "everything you own<br/>9,751 entities" .-> S
+    S -. "just this dashboard<br/>104 entities" .-> B
+```
 
-The allowlist **recomputes live** when you edit a dashboard or change area/label/device
-assignments — no add-on restart, and no kiosk reload either: when a rebuild *adds* entities,
-open dashboard connections are dropped so the frontend reconnects and picks them up on its
-own.
+Home Assistant has no way to tell one dashboard *"only subscribe to what I show"*. This
+adds exactly that, as a transparent proxy — so you point your kiosk at it instead of at
+Home Assistant, and everything else stays the same.
 
-## Install as a Home Assistant add-on
+It trims four things: the **entity stream**, the **entity/device/area registries** (on a
+big install, quietly the biggest download of the lot), the **custom-card list**, and it
+**turns compression back on**.
+
+---
+
+## 🤔 What it will *not* fix
+
+Being straight with you, because measuring this took a while:
+
+- **It does not make Home Assistant's own frontend boot faster.** That is roughly 16
+  seconds on a slow panel and this add-on cannot touch it. A dashboard with *one* card
+  was no quicker than a full one
+- **It is for kiosks and panels.** Send your admin browsing through it and
+  Settings → Entities and Developer Tools will look oddly empty, because they genuinely
+  expect everything. Keep a normal URL for that
+- **It helps in proportion to your instance.** A few hundred entities? You will barely
+  notice. A few thousand? Night and day
+
+---
+
+## 🛠️ Set it up (about 5 minutes)
 
 1. HA → **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add:
    `https://github.com/davidcoulson/HA-Websocket-Stripper`  <!-- fork -->
@@ -114,7 +113,7 @@ own.
 No long-lived token needed in the add-on — it uses the add-on's `SUPERVISOR_TOKEN` to
 read the dashboard configs.
 
-## Passwordless kiosk login (trusted_networks)
+## 🔓 Skip the login screen on a wall panel
 
 For a wall panel / fridge kiosk you usually don't want a password prompt. HA's
 [`trusted_networks`](https://www.home-assistant.io/docs/authentication/providers/#trusted-networks)
@@ -166,7 +165,7 @@ changes, not a YAML quick-reload).
 > `homeassistant`/`supervisor` hostnames), set the `ha_base` / `allow_ws_url` options to
 > pin them to IPs, e.g. `ha_base: http://192.168.1.2:8123`.
 
-## Behind another reverse proxy (Caddy / nginx / Traefik, HTTPS)
+## 🌐 Behind your own reverse proxy (Caddy / nginx / Traefik, HTTPS)
 
 Putting your own reverse proxy in front of the add-on works — useful for TLS termination and
 external access, and required for browser features that only work on a secure origin (mic
@@ -189,7 +188,7 @@ http:
 > request with **400 Bad Request** (`Incorrect number of elements in X-Forward-Proto`) while
 > a direct connection to `:8123` worked fine. If you hit that, update.
 
-## Run locally (dev, no add-on)
+## 💻 Run it locally (for developers)
 
 ```bash
 cd websocket-stripper
@@ -206,7 +205,7 @@ integration tests that drive the real proxy against a mock HA).
 
 Set `STRIP_ENTITIES=0` to passthrough untrimmed for an A/B load comparison.
 
-## Notes
+## 📓 Good to know
 
 - The frontend JS bundles still load (and are cached after first visit); this targets the
   per-load entity firehose, which is the part that scales with instance size. Custom-card
@@ -229,15 +228,36 @@ Set `STRIP_ENTITIES=0` to passthrough untrimmed for an A/B load comparison.
 - See `CLAUDE.md` for architecture/decisions and `websocket-stripper/DOCS.md` for option
   details.
 
-## Support
+## ☕ Credit & support
 
-If this saved you an evening of debugging, a coffee is appreciated.
+This is a fork of [GabrielGoldsteinAnidea/HA-Websocket-Stripper](https://github.com/GabrielGoldsteinAnidea/HA-Websocket-Stripper)
+— the original idea and the hard part are Gabriel's. If it saved you an evening, a coffee is
+appreciated.
 
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/gabrielgoldstein)
 
-## What's new in 0.2.3
+## 🆕 What's new
 
 Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG.md).
+
+**The big ones, in plain English:**
+
+- 🎯 **Each panel gets only its own dashboard.** Before, every kiosk got everything *any*
+  listed dashboard needed. Now a panel showing one dashboard pays for one dashboard —
+  104 entities instead of 391 on the instance this was built against
+- 📇 **The hidden address-book downloads got trimmed too.** Home Assistant sends a list of
+  every entity, device and area you own on *every* page load. On a big install this is
+  quietly the largest download of all — **10 MB of it here**, now about a hundred rows
+- 🗜️ **Compression is back on.** Home Assistant compresses its websocket; the proxy
+  accidentally dropped that. It doesn't any more
+- 🎨 **Only the custom cards a dashboard uses.** Home Assistant hands every dashboard every
+  custom card you have ever installed — **21 MB** here. Opt-in, since it's the one feature
+  that can fail quietly (`trim_resources`)
+- 🧠 **Repeat visits are cheaper.** Identical answers are remembered and served instantly
+  instead of making Home Assistant build them all over again
+- 🏷️ **Every setting now explains itself** right in the add-on's Configuration tab
+
+### 0.2.3
 
 - **auto-entities globs and regexes work on every filter key** — `/^sensor\.pv_.*_power$/`
   and friends resolve instead of matching nothing, on `domain` / `area` / `label` / `device`
