@@ -197,6 +197,37 @@ describe('live allowlist rebuild on lovelace_updated', () => {
     assert.ok(mock.lastSubscribeEntities().includes('light.decoy'));
     c.close();
   });
+
+  // Regression: the trimmed-registry cache is keyed by ALLOW_VERSION, and a recompute used
+  // not to bump it — only the reconnect path did. So after a dashboard edit, connections kept
+  // being answered from registries trimmed to the PREVIOUS allowlist. The growth case is the
+  // harmful one, because applyAllow deliberately recycles every open kiosk when the allowlist
+  // grows: those reconnections would come back to registry rows missing the very entities
+  // that were just added, and their names and areas would quietly fail to resolve.
+  it('retires cached registry answers when a dashboard edit changes the allowlist', async () => {
+    // Populate the cache for the CURRENT allowlist.
+    const first = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await first.authed;
+    const before = (await first.rpc({ type: 'config/entity_registry/list' })).result;
+    assert.ok(!before.some((r) => r.entity_id === 'light.kitchen'), 'not on the dashboard yet');
+    first.close();
+
+    // Grow the dashboard by an entity that HAS a registry row.
+    mock.setConfig('test-dash', { views: [{ path: 'main', cards: [
+      { type: 'entities', entities: ['light.living_room', 'light.decoy', 'light.kitchen'] },
+    ] }] });
+    mock.fireLovelaceUpdated('test-dash');
+    await proxy.waitForLog(/\+added:[^\n]*light\.kitchen/, 6000);
+
+    const after = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await after.authed;
+    const rows = (await after.rpc({ type: 'config/entity_registry/list' })).result;
+    after.close();
+    assert.ok(
+      rows.some((r) => r.entity_id === 'light.kitchen'),
+      'a stale cached registry answer was served after the dashboard grew',
+    );
+  });
 });
 
 // Regression tests for the HA-reboot crash: the add-on used to die outright when HA went

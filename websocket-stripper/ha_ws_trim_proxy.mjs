@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import httpProxy from 'http-proxy';
 import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers } from './lovelace_extract.mjs';
+import * as stats from './stats.mjs';
 
 // ---- config (add-on options.json or env) ----
 function loadOptions() {
@@ -42,7 +43,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.10';
+const VERSION = '2026.09.12.11';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -53,6 +54,12 @@ const HA_WS = HA_BASE.replace(/^http/, 'ws') + '/api/websocket';     // browser 
 // add-on binds this directly on the host, so the option is the only way to move it off
 // 8099 (the Network tab can't remap a host-network port) — see issue #6.
 const PORT = parseInt(process.env.PORT || OPT.port || '8099', 10);
+// The Ingress panel + JSON API live on their own port, deliberately NOT on PORT: everything
+// on PORT is the proxied Home Assistant namespace, and a dashboard whose url_path collided
+// with a stats path would be a genuinely confusing failure. Fixed rather than an option
+// because Supervisor reads `ingress_port` from config.yaml at install time — an option the
+// user could change would silently break the sidebar panel.
+const STATS_PORT = parseInt(process.env.STATS_PORT || '8100', 10);
 const DASH_PATHS = toList(OPT.dashboards ?? (process.env.DASH_PATHS || process.env.DASH_PATH));
 // strip_entities: true (default) = inject the allowlist so HA streams only needed entities.
 //   false = pass the websocket straight through (full firehose) for A/B comparison.
@@ -357,6 +364,14 @@ function applyAllow(built, why, { merge = false } = {}) {
   const removed = [...ALLOW].filter((e) => !next.has(e)).sort();
   ALLOW = next;
   ALLOW_BY_DASH = nextByDash;
+  // Retire the cached registry answers whenever the allowlist actually moved. Without this
+  // the cache key (which embeds ALLOW_VERSION) is unchanged by a recompute, so a dashboard
+  // edit keeps being answered from registries trimmed to the PREVIOUS allowlist. The growth
+  // case is the damaging one: refreshOpenConnections() below recycles every open kiosk
+  // precisely so it picks up the new entities, and a stale cache would then hand those
+  // reconnections registry rows that omit them — names and areas silently failing to resolve
+  // on exactly the entities that were just added. Only the reconnect path used to bump this.
+  if (added.length || removed.length) { ALLOW_VERSION++; REG_RESPONSE_CACHE.clear(); }
   const fmt = (a) => (a.length > 25 ? `${a.slice(0, 25).join(', ')} …(+${a.length - 25} more)` : a.join(', '));
   log(`allowlist ${why}: ${ALLOW.size} entities (+${added.length} -${removed.length})`);
   if (added.length) log(`  +added: ${fmt(added)}`);
@@ -667,6 +682,12 @@ const BUILTIN_ICON_NS = new Set(['mdi', 'hass', 'hassio', 'homeassistant', 'cust
 
 const RESOURCE_CACHE = new Map();     // url -> { tested:Set, present:Set|null, bytes }
 let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
+// Per-dashboard resource figures for the stats panel. Populated by buildResources().
+let RESOURCE_STATS = new Map();       // dash -> { kept, dropped, keptKB, droppedKB }
+// How big the instance actually is, learned from the first untrimmed get_states we see
+// rather than counted up front — that answer is the whole instance by definition, so it is
+// both free and exactly right. Lets the panel say "104 of 9,751" instead of just "104".
+let INSTANCE_ENTITIES = 0;
 
 // Every token a dashboard might need a resource FOR: `custom:x` card/row/badge/feature types,
 // and icon-pack prefixes (`foo:bar` where foo isn't built in).
@@ -774,8 +795,8 @@ async function buildResources(rpc, keysByDash) {
   if (!TRIM_RESOURCES) return;
   let rows;
   try { rows = await rpc({ type: 'lovelace/resources' }); }
-  catch (e) { log(`  resources: FAILED (${e.message}) — forwarding all resources`); RESOURCES_BY_DASH = new Map(); return; }
-  if (!Array.isArray(rows)) { RESOURCES_BY_DASH = new Map(); return; }
+  catch (e) { log(`  resources: FAILED (${e.message}) — forwarding all resources`); RESOURCES_BY_DASH = new Map(); RESOURCE_STATS = new Map(); return; }
+  if (!Array.isArray(rows)) { RESOURCES_BY_DASH = new Map(); RESOURCE_STATS = new Map(); return; }
 
   // Every token any dashboard could match on, tagged by kind so a card type and an icon
   // namespace that happen to share a name can never be confused for one another.
@@ -827,6 +848,7 @@ async function buildResources(rpc, keysByDash) {
   }
 
   const byDash = new Map();
+  RESOURCE_STATS = new Map();
   for (const [dash, keys] of keysByDash) {
     const keep = new Set();
     let keptB = 0, dropB = 0;
@@ -836,6 +858,10 @@ async function buildResources(rpc, keysByDash) {
       else dropB += bytes;
     }
     byDash.set(dash, keep);
+    RESOURCE_STATS.set(dash, {
+      kept: keep.size, dropped: rows.length - keep.size,
+      keptKB: Math.round(keptB / 1024), droppedKB: Math.round(dropB / 1024),
+    });
     const needs = [...[...keys.cards].sort(), ...[...keys.icons].sort().map((i) => i + ':')];
     log(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
     log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
@@ -1009,7 +1035,7 @@ server.on('upgrade', (req, socket, head) => {
     }
     const { set, dash, via } = allowFor(req);
     if (dash) log(`/api/websocket for ${clientIp(req)}: serving ${dash} via ${via} (${set.size} entities, union is ${ALLOW.size})`);
-    wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash));
+    wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, { ip: clientIp(req), via }));
   } else {
     // Keyed on the path, not req.url: camera stream URLs carry a per-request signature, so
     // keying on the whole thing would defeat the throttle (and grow the map) during a retry storm.
@@ -1021,8 +1047,9 @@ server.on('upgrade', (req, socket, head) => {
 // `allow` is THIS connection's allowlist — one dashboard's, or the union when the client
 // couldn't be attributed. Captured per bridge rather than read from the global, so two
 // kiosks on different dashboards get genuinely different subscriptions.
-function bridge(browserWs, allow = ALLOW, dash = null) {
+function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
   const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0 });
+  const connId = stats.connOpen({ ip: meta.ip, dash, via: meta.via, allowSize: allow.size });
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
   const registryIds = new Map();    // request id -> which registry, to trim its result
@@ -1045,6 +1072,7 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
         // Safe against HA's increasing-id rule because nothing is sent to HA at all, and
         // the browser still sees replies in the order it asked.
         logThrottled(`regcache:${kind}`, `${kind} registry served from cache${dash ? ` (${dash})` : ''}`);
+        stats.recordCacheHit(hit.length);
         safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
         return;
       }
@@ -1084,12 +1112,24 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
 
   haWs.on('message', (raw) => {
     let s = raw.toString(); let m;
-    try { m = JSON.parse(s); } catch { return safeSend(s); }
+    // Sizes are measured on the decoded JSON, i.e. what the browser has to parse. The wire is
+    // smaller when permessage-deflate is on, and deliberately not what the panel reports.
+    const inBytes = Buffer.byteLength(s);
+    let cat = null;
+    const done = () => {
+      const outBytes = Buffer.byteLength(s);
+      if (cat) stats.recordTrim(cat, inBytes, outBytes);
+      stats.connTraffic(connId, inBytes, outBytes, cat === null);
+      return safeSend(s);
+    };
+    try { m = JSON.parse(s); } catch { return done(); }
     if (STRIP && m && m.type === 'result' && getStatesIds.has(m.id) && Array.isArray(m.result)) {
       const before = m.result.length;
       m.result = m.result.filter((e) => allow.has(e.entity_id));
       getStatesIds.delete(m.id);
       s = JSON.stringify(m);
+      cat = 'states';
+      if (before > INSTANCE_ENTITIES) INSTANCE_ENTITIES = before;
       log(`get_states trimmed ${before} -> ${m.result.length}${dash ? ` (${dash})` : ''}`);
     }
     // Registry trimming. The entity registry is one row per entity for the WHOLE instance —
@@ -1111,6 +1151,7 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
         s = JSON.stringify(m);
         logThrottled(`reg:${kind}`, `${kind} registry trimmed ${before} -> ${after}${dash ? ` (${dash})` : ''}`);
       }
+      cat = `registry:${kind}`;
       // Keep the trimmed rows for the next connection on this allowlist. Stored as a JSON
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
@@ -1134,6 +1175,7 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
         s = JSON.stringify(m);
         logThrottled('services', `get_services trimmed ${before} -> ${after} domains${dash ? ` (${dash})` : ''}`);
       }
+      cat = 'services';
     }
     // Lovelace resources, trimmed to the ones this dashboard actually needs. Only ever for a
     // connection we attributed to a dashboard: an unattributed connection gets the union of
@@ -1149,6 +1191,7 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
           s = JSON.stringify(m);
           logThrottled('resources', `lovelace resources trimmed ${before} -> ${m.result.length} (${dash})`);
         }
+        cat = 'resources';
       }
     }
     // Defensive egress filter (belt-and-suspenders): HA already trims to the injected
@@ -1170,17 +1213,75 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
         if (ev.r.length !== before) changed = true;
       }
       if (changed) s = JSON.stringify(m);
+      stats.recordEvent(Buffer.byteLength(s));
     }
-    safeSend(s);
+    return done();
   });
 
   function safeSend(s) { try { if (browserWs.readyState === 1) browserWs.send(s); } catch {} }
-  const close = () => { openBridges.delete(close); try { browserWs.close(); } catch {} try { haWs.close(); } catch {} };
+  const close = () => { openBridges.delete(close); stats.connClose(connId); try { browserWs.close(); } catch {} try { haWs.close(); } catch {} };
   openBridges.add(close);            // so a grown allowlist can recycle this connection (#7)
   browserWs.on('close', close); browserWs.on('error', close);
   haWs.on('close', close);
   haWs.on('error', (e) => { logThrottled(`haws:${e.code || e.message}`, `HA ws error ${e.message}`); close(); });
 }
+
+// ---- stats panel + JSON API ----
+// Served on STATS_PORT, which config.yaml declares as the add-on's `ingress_port`, so HA
+// renders the panel in the sidebar with no extra configuration. The same JSON is reachable
+// directly at http://<host>:8100/stats.json for a `rest` sensor, a scrape, or curl.
+//
+// Read-only by design: it exposes what the proxy already logs, nothing more, and offers no
+// way to change anything. That matters because Ingress hands the page to any logged-in HA
+// user — if this could mutate options, it would need a permission model it has no business
+// owning.
+const PANEL_HTML = (() => {
+  try { return fs.readFileSync(new URL('./panel.html', import.meta.url)); }
+  catch (e) { log(`stats: panel.html unreadable (${e.message}) — the JSON API still works`); return null; }
+})();
+
+function statsExtras() {
+  return {
+    version: VERSION,
+    options: {
+      strip_entities: STRIP,
+      per_dashboard: PER_DASH,
+      trim_registries: TRIM_REGISTRIES,
+      compress_websocket: COMPRESS_WS,
+      trim_resources: TRIM_RESOURCES,
+      trim_services: TRIM_SERVICES,
+    },
+    allowlist: {
+      ready: ALLOW_READY,
+      union: ALLOW.size,
+      instanceEntities: INSTANCE_ENTITIES,
+      version: ALLOW_VERSION,
+      byDashboard: Object.fromEntries([...ALLOW_BY_DASH].map(([d, s]) => [d, s.size])),
+    },
+    resources: { byDashboard: Object.fromEntries(RESOURCE_STATS) },
+  };
+}
+
+const statsServer = http.createServer((req, res) => {
+  // Ingress rewrites the path prefix, so match on the tail rather than the whole URL.
+  const path = String(req.url || '/').split('?')[0].replace(/\/+$/, '') || '/';
+  if (path.endsWith('/stats.json')) {
+    const body = JSON.stringify(stats.snapshot(statsExtras()), null, 2);
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(body);
+  }
+  if (path === '/' || path.endsWith('/index.html')) {
+    if (!PANEL_HTML) { res.writeHead(500, { 'content-type': 'text/plain' }); return res.end('panel.html missing'); }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(PANEL_HTML);
+  }
+  res.writeHead(404, { 'content-type': 'text/plain' });
+  res.end('not found');
+});
+// A stats port that will not bind is an inconvenience, NOT a reason to take the proxy down
+// with it — the add-on's actual job is unaffected. Log it and carry on, unlike PORT below.
+statsServer.on('error', (e) => logThrottled(`stats:${e.code || e.message}`, `stats server unavailable (${e.message}) — proxying is unaffected`));
+statsServer.listen(STATS_PORT, () => log(`stats panel on :${STATS_PORT} (ingress) — JSON at :${STATS_PORT}/stats.json`));
 
 // ---- boot ----
 log(`ha-ws-trim-proxy v${VERSION} starting`);

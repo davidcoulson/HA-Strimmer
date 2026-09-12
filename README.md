@@ -260,6 +260,7 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
 - 🧠 **Repeat visits are cheaper.** Identical answers are remembered and served instantly
   instead of making Home Assistant build them all over again
 - 🏷️ **Every setting now explains itself** right in the add-on's Configuration tab
+- 📊 **A stats panel in your HA sidebar.** See what it is actually saving you — connected panels, before/after sizes per dashboard, live traffic — instead of only finding out when something looks wrong. There is a `stats.json` behind it too, so you can graph any of it with a `rest` sensor
 
 ### 0.2.3
 

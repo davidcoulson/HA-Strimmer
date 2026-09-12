@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026.09.12.11 — 2026-09-12
+
+**A statistics panel in the Home Assistant sidebar, and a JSON API behind it.** Until now the
+only evidence the add-on was doing anything was the log — which you read once something
+already looks wrong. The panel shows clients connected and which dashboard each was
+attributed to, measured before/after for every trimmed payload, per-dashboard entity and
+resource figures, registry cache hits, and live update throughput. Served over Ingress on its
+own port (8100), so it needs no configuration and no extra exposed port; the same data is at
+`http://<host>:8100/stats.json` for a `rest` sensor or a scrape.
+
+It reports only what it can honestly measure. The trimmed payloads have a real before/after —
+the proxy holds HA's full answer and its own trimmed answer in the same function, so "saved"
+is a subtraction. The event stream does not: HA filters it server-side from the entity list
+the add-on injects, so the untrimmed volume never exists anywhere and cannot be measured. It
+is reported as throughput and never folded into the savings total.
+
+**Fixed: a dashboard edit left stale trimmed registries in the cache.** The response cache
+added in `.10` is keyed by allowlist version, but only the reconnect path bumped it — a
+`lovelace_updated` recompute did not. So after any dashboard edit, connections kept being
+answered from registries trimmed to the *previous* allowlist. The growth case was the
+damaging one: `applyAllow` recycles every open kiosk precisely so it picks up new entities,
+and those reconnections came back to registry rows that omitted them, leaving names and areas
+quietly unresolved on exactly the entities just added.
+
 ## 2026.09.12.10 — 2026-09-12
 
 **Trimmed registry answers are now cached across connections.** The registries are
