@@ -42,7 +42,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.09';
+const VERSION = '2026.09.12.10';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -65,6 +65,14 @@ const STRIP = OPT.strip_entities !== undefined ? !!OPT.strip_entities
 // host, which is why it can be turned off on very weak hardware.
 const COMPRESS_WS = OPT.compress_websocket !== undefined ? !!OPT.compress_websocket
   : (process.env.COMPRESS_WS ?? '1') !== '0';
+
+// `get_services` is every service of every integration, and it is sent on every page load:
+// 193KB across 115 domains on the instance this was built against, of which only 45 domains
+// had any entity at all. The frontend needs it for service pickers and the automation
+// editor, so trimming it to the domains a connection can see is the same trade as
+// trim_resources — fine for a kiosk, visibly lossy in the admin UI. Off by default.
+const TRIM_SERVICES = OPT.trim_services !== undefined ? !!OPT.trim_services
+  : (process.env.TRIM_SERVICES ?? '0') !== '0';
 
 // Lovelace resources are instance-wide: HA has no per-dashboard scoping, so every kiosk
 // downloads, parses and compiles EVERY custom card in the install. Measured on the instance
@@ -448,7 +456,7 @@ function startController() {
             backoff = 1000; attempts = 0;
             const next = await buildAllow(rpc, renderTemplate);
             if (!settled) {
-              ALLOW = next.union; ALLOW_BY_DASH = next.perDash;
+              ALLOW = next.union; ALLOW_BY_DASH = next.perDash; ALLOW_VERSION++; REG_RESPONSE_CACHE.clear();
               settled = true; ALLOW_READY = true; resolve(ALLOW);
             }
             else applyAllow(next, 'recomputed (reconnect)', { merge: true });
@@ -578,6 +586,21 @@ proxy.on('error', (e, req, res) => {
 // The entity registry in particular is one row per entity — the single largest payload left
 // once states are trimmed, and the one that scales with instance size rather than with what
 // the dashboard shows.
+// A trimmed registry answer, reusable across connections.
+//
+// The registries are per-INSTANCE, not per-connection: for a given allowlist every client
+// gets byte-identical rows. Without this, each connection that asks makes Home Assistant
+// serialise the whole registry again — 16k rows and ~10MB for the entity registry here —
+// and makes this proxy parse it again. A single kiosk load opens several websockets, and a
+// handful of panels multiplies that into real CPU on the HA host for no new information.
+//
+// Keyed by allowlist VERSION as well as kind and dashboard, so a rebuild retires every
+// entry rather than needing them hunted down; the rebuild also clears the map outright so
+// stale generations cannot accumulate.
+let ALLOW_VERSION = 0;
+const REG_RESPONSE_CACHE = new Map();
+const regCacheKey = (kind, dash) => `${kind}|${dash ?? '(union)'}|${ALLOW_VERSION}`;
+
 const REGISTRY_TYPES = new Map([
   ['config/entity_registry/list', 'entity'],
   ['config/entity_registry/list_for_display', 'entity_display'],
@@ -1004,6 +1027,7 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
   const registryIds = new Map();    // request id -> which registry, to trim its result
   const resourceIds = new Set();    // lovelace/resources requests, to trim their result
+  const serviceIds = new Set();     // get_services requests, to trim their result
   const queue = []; let haOpen = false;
   const toHA = (s) => { if (haOpen) haWs.send(s); else queue.push(s); };
 
@@ -1013,8 +1037,21 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
     let s = raw.toString(); let m;
     try { m = JSON.parse(s); } catch { return toHA(s); }
     if (STRIP && m && m.type === 'get_states') getStatesIds.add(m.id);
-    if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) registryIds.set(m.id, REGISTRY_TYPES.get(m.type));
+    if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) {
+      const kind = REGISTRY_TYPES.get(m.type);
+      const hit = REG_RESPONSE_CACHE.get(regCacheKey(kind, dash));
+      if (hit !== undefined) {
+        // Answer locally and never forward: HA is not asked to build the registry again.
+        // Safe against HA's increasing-id rule because nothing is sent to HA at all, and
+        // the browser still sees replies in the order it asked.
+        logThrottled(`regcache:${kind}`, `${kind} registry served from cache${dash ? ` (${dash})` : ''}`);
+        safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
+        return;
+      }
+      registryIds.set(m.id, kind);
+    }
     if (STRIP && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
+    if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') serviceIds.add(m.id);
     if (STRIP && m && m.type === 'subscribe_entities' && !m.entity_ids) {
       // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
       // nothing", it's "no filter" (HA: `set(msg["entity_ids"]) or None`). Sending one would
@@ -1074,6 +1111,29 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
         s = JSON.stringify(m);
         logThrottled(`reg:${kind}`, `${kind} registry trimmed ${before} -> ${after}${dash ? ` (${dash})` : ''}`);
       }
+      // Keep the trimmed rows for the next connection on this allowlist. Stored as a JSON
+      // STRING, not an object: it is only ever spliced back into a reply, so serialising it
+      // once here saves doing it per hit, and nothing downstream can mutate a string.
+      REG_RESPONSE_CACHE.set(regCacheKey(kind, dash), JSON.stringify(m.result));
+    }
+    // get_services, cut to the domains this connection can actually see.
+    //
+    // `homeassistant` is always kept: it carries the generic services (turn_on, toggle,
+    // reload) that apply across domains, so dropping it breaks far more than it saves.
+    if (STRIP && TRIM_SERVICES && m && m.type === 'result' && serviceIds.has(m.id)
+        && m.result && typeof m.result === 'object' && !Array.isArray(m.result)) {
+      serviceIds.delete(m.id);
+      const keep = new Set(['homeassistant']);
+      for (const id of allow) keep.add(String(id).split('.')[0]);
+      const before = Object.keys(m.result).length;
+      const next = {};
+      for (const [domain, svcs] of Object.entries(m.result)) if (keep.has(domain)) next[domain] = svcs;
+      const after = Object.keys(next).length;
+      if (after && after !== before) {
+        m.result = next;
+        s = JSON.stringify(m);
+        logThrottled('services', `get_services trimmed ${before} -> ${after} domains${dash ? ` (${dash})` : ''}`);
+      }
     }
     // Lovelace resources, trimmed to the ones this dashboard actually needs. Only ever for a
     // connection we attributed to a dashboard: an unattributed connection gets the union of
@@ -1125,7 +1185,7 @@ function bridge(browserWs, allow = ALLOW, dash = null) {
 // ---- boot ----
 log(`ha-ws-trim-proxy v${VERSION} starting`);
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
-log(`options: per_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES}`);
+log(`options: per_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together
 // (host boot, a core update), and core can take minutes to answer — the proxy's job is to
 // wait for it, not to exit. HTTP proxies through immediately (502 while HA is down, like any

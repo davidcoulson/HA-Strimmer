@@ -51,6 +51,13 @@ configuration:
       Home Assistant, so every kiosk normally parses every card you have installed. OFF BY
       DEFAULT because a wrongly dropped resource can fail SILENTLY — see the Documentation
       tab before enabling, and read the "dropped by ALL dashboards" block in the log.
+  trim_services:
+    name: Trim the service list
+    description: >-
+      Cuts get_services to the domains this connection can see. It carries every service of
+      every integration and is sent on every page load — 193KB across 115 domains on a large
+      install. Off by default: the frontend uses it for service pickers and the automation
+      editor, so this is fine for a kiosk and visibly lossy in the admin UI.
   resources_always_forward:
     name: Always send these resources
     description: >-

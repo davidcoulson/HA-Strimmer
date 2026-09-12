@@ -375,6 +375,50 @@ describe('resource trimming', () => {
   });
 });
 
+// get_services carries every service of every integration and is sent on every page load —
+// 193KB across 115 domains on the instance this was built against, where only 45 domains had
+// any entity at all.
+describe('get_services trimming', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash', port, extraEnv: { TRIM_SERVICES: '1' } });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  const services = async (p) => {
+    const c = haClient(`ws://127.0.0.1:${p}/api/websocket`);
+    await c.authed;
+    const r = (await c.rpc({ type: 'get_services' })).result;
+    c.close();
+    return r;
+  };
+
+  it('keeps the domains the connection can see and drops the rest', async () => {
+    const r = await services(port);
+    assert.ok(r.light, 'a domain this dashboard shows must survive');
+    assert.ok(!r.vacuum, 'a domain with no entity on any dashboard must be dropped');
+    assert.ok(!r.lawn_mower, 'likewise');
+  });
+
+  it('always keeps homeassistant, whose services are domain-agnostic', async () => {
+    const r = await services(port);
+    assert.ok(r.homeassistant, 'turn_on/toggle/reload apply across domains — dropping them breaks more than it saves');
+  });
+
+  it('trim_services off (the default) leaves every domain', async () => {
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: 'test-dash', port: p2 });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const r = await services(p2);
+      assert.ok(r.vacuum && r.lawn_mower, 'with the option off nothing is removed');
+    } finally { px.kill(); }
+  });
+});
+
 describe('registry trimming', () => {
   let mock, proxy, port;
   before(async () => {
@@ -416,6 +460,37 @@ describe('registry trimming', () => {
     assert.ok(!ids.has('light.kitchen'), 'an entity no dashboard shows must not survive');
     assert.deepEqual(r.entity_categories, { 0: 'config', 1: 'diagnostic' },
       'the category map is not per-entity and must be passed through intact');
+  });
+
+  // Registries are per-INSTANCE: for one allowlist every client gets byte-identical rows.
+  // A kiosk load opens several websockets, so without a cache HA re-serialises ~10MB of
+  // entity registry per connection and this proxy re-parses it, for no new information.
+  //
+  // Its own proxy and mock on purpose: the cache is warm by this point in the shared
+  // instance, so "the first connection fetches" is only observable on a cold one.
+  it('serves the second connection from cache without asking HA again', async () => {
+    const m2 = await startMockHa();
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port: p2 });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const ask = async () => {
+        const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`);
+        await c.authed;
+        const rows = (await c.rpc({ type: 'config/entity_registry/list' })).result;
+        c.close();
+        return rows;
+      };
+      const before = m2.rpcCount('config/entity_registry/list');
+      const first = await ask();
+      const mid = m2.rpcCount('config/entity_registry/list');
+      const second = await ask();
+      const after = m2.rpcCount('config/entity_registry/list');
+
+      assert.equal(mid - before, 1, 'the first connection must fetch it from HA');
+      assert.equal(after - mid, 0, 'the second must not — that is the whole point');
+      assert.deepEqual(second, first, 'and must still get identical rows');
+    } finally { px.kill(); await m2.close(); }
   });
 
   it('trim_registries=0 leaves the registry untouched', async () => {

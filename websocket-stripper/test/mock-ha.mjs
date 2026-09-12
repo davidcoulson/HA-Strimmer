@@ -65,6 +65,7 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
     httpHits: [],
     conns: new Set(),          // { ws, eventSubs:Map<event_type,id>, entitySubIds:Set }
     lastSubscribeEntities: null,
+    rpcCounts: new Map(),       // message type -> how many times the proxy asked HA
     renderedTemplates: [],       // template sources the proxy asked HA to render
     unsubscribed: [],            // subscription ids the proxy released
     hangTemplates: false,        // accept render_template, never push the event
@@ -119,10 +120,17 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
     ws.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
       if (m.type === 'auth') { ws.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.7.0' })); return; }
+      if (m.type) state.rpcCounts.set(m.type, (state.rpcCounts.get(m.type) || 0) + 1);
       const ok = (result) => ws.send(JSON.stringify({ id: m.id, type: 'result', success: true, result }));
       if (m.type in registries) return ok(registries[m.type]);   // config/*_registry/list
       switch (m.type) {
         case 'get_states': return ok(states);
+        case 'get_services': return ok({
+          light: { turn_on: {} }, sensor: { x: {} }, camera: { snapshot: {} },
+          switch: { turn_on: {} }, binary_sensor: { y: {} },
+          homeassistant: { restart: {} },            // generic services, must always survive
+          vacuum: { start: {} }, lawn_mower: { mow: {} },   // no entity on any dashboard
+        });
         case 'lovelace/resources': return ok(resources);
         case 'lovelace/config': {
           const cfg = configs[m.url_path];
@@ -162,6 +170,7 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
   await new Promise((res) => server.listen(port, '127.0.0.1', res));
 
   return {
+    rpcCount: (type) => state.rpcCounts.get(type) || 0,
     port,
     base: `http://127.0.0.1:${port}`,
     wsUrl: `ws://127.0.0.1:${port}/api/websocket`,

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.09.12.10 — 2026-09-12
+
+**Trimmed registry answers are now cached across connections.** The registries are
+per-*instance*: for a given allowlist every client gets byte-identical rows. Each connection
+that asked was making Home Assistant serialise the whole thing again — 16k rows and ~10MB of
+entity registry here — and this proxy parse it again. A single kiosk load opens several
+websockets, so that multiplied into real CPU on the HA host for no new information. A cached
+answer is now served locally and never forwarded. Keyed by allowlist version, so a rebuild
+retires every entry.
+
+**`trim_services` (default off)** cuts `get_services` to the domains a connection can see.
+It is sent on every page load and carries every service of every integration: **193KB across
+115 domains**, where only **45 domains** had any entity at all. `homeassistant` is always
+kept — its services are domain-agnostic, so dropping it breaks more than it saves. Off by
+default for the same reason as `trim_resources`: fine for a kiosk, visibly lossy in the
+admin UI.
+
+
 ## 2026.09.12.09 — 2026-09-12
 
 **Per-browser dashboard attribution via a cookie, so NAT stops collapsing clients together.**
