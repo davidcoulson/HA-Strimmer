@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.09.12.04 — 2026-09-12
+
+**Resources dropped by *every* dashboard are now called out separately in the log**, with
+guidance. That set is the signature of the one failure the documented tuning loop cannot
+catch: "load the dashboard and see what looks wrong" finds a card that won't render or an
+icon that goes blank, but not a resource that registers no element and is named by no
+dashboard, yet runs on load and subscribes to state — an idle timer, a camera pop-up, a
+heartbeat. Drop one of those and the dashboard is pixel-identical; only the behaviour stops.
+
+`DOCS.md` names that as a third class needing `resources_always_forward`, alongside frontend
+patchers and icon packs, and marks which are loud and which is silent.
+
+Raised by @ajguerre1 reviewing the upstream PR, from production: they lost a doorbell pop-up
+on 28 panels for three days to the same failure one level down, where entity scoping stripped
+the helpers a resident module read. Home Assistant's half kept working and the chime still
+played, so the house sounded normal while the screens did nothing.
+
+The per-dashboard drop detail moved out of the per-dashboard loop into this one block —
+previously it printed every dropped URL once per dashboard, which on a six-dashboard instance
+was most of the startup log.
+
+**`per_dashboard` is retained here**, unlike on the upstream PR branch where it was withdrawn
+in favour of upstream #13. This fork is what the add-on is built from, and #13 is not merged,
+so removing it would serve every connection the union instead of its own dashboard.
+
+
 ## 2026.09.12.02 — 2026-09-12
 
 **Per-dashboard Lovelace resource trimming (`trim_resources`, default off).** Resources are

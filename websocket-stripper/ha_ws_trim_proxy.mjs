@@ -42,7 +42,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.02';
+const VERSION = '2026.09.12.04';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -704,13 +704,38 @@ async function buildResources(rpc, keysByDash) {
     byDash.set(dash, keep);
     log(`  resources ${dash} needs: ${[...keys].sort().join(', ') || '(none)'}`);
     log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
-    for (const r of rows) {
-      if (keep.has(r.url)) continue;
-      const kb = ((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024).toFixed(0);
-      log(`      drop ${String(kb).padStart(6)}KB ${r.url.split('?')[0]}`);
-    }
   }
   RESOURCES_BY_DASH = byDash;
+
+  // Resources dropped by EVERY dashboard get their own warning, because this set is the
+  // exact signature of the one failure the tuning loop cannot catch.
+  //
+  // The documented way to tune this option is "load the dashboard and see what looks
+  // wrong". That works for a card that fails to render or an icon that goes blank. It does
+  // not work for a resource that registers no element and is named by no dashboard, but
+  // runs on load and subscribes to state — an idle timer, a camera pop-up, a heartbeat.
+  // Drop one of those and the dashboard is pixel-identical; only the behaviour stops, and
+  // nothing reports it on either side. (Reported by @ajguerre1 on upstream #15, who lost a
+  // doorbell pop-up on 28 panels for three days to the same failure one level down, via
+  // entities.)
+  //
+  // The proxy cannot tell that class apart from a genuinely unused resource — but the
+  // reader can, instantly. So say which ones they are rather than burying them in the
+  // per-dashboard drop lists.
+  const servedAnywhere = new Set();
+  for (const keep of byDash.values()) for (const u of keep) servedAnywhere.add(u);
+  const droppedByAll = rows.filter((r) => !servedAnywhere.has(r.url));
+  if (droppedByAll.length) {
+    const kb = droppedByAll.reduce((t, r) => t + (RESOURCE_CACHE.get(r.url)?.bytes || 0), 0) / 1024;
+    log(`  resources: ${droppedByAll.length} dropped by ALL dashboards (no dashboard references them), ${kb.toFixed(0)}KB.`);
+    log('    If any of these run on load rather than rendering a card — an idle timer, a');
+    log('    pop-up, a heartbeat — add them to resources_always_forward. Dropping one of');
+    log('    those is INVISIBLE: the dashboard renders normally and only the behaviour stops.');
+    for (const r of droppedByAll) {
+      const b = ((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024).toFixed(0);
+      log(`      drop ${String(b).padStart(6)}KB ${r.url.split('?')[0]}`);
+    }
+  }
 }
 
 // ---- which dashboard is this client looking at? ----
