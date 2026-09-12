@@ -28,6 +28,14 @@ const DEFAULT_RESOURCES = [
   { id: 'r1', type: 'module', url: '/res/my-fancy-card.js' },
   { id: 'r2', type: 'module', url: '/res/unrelated-widget.js' },
   { id: 'r3', type: 'module', url: '/res/global-patcher.js' },
+  // Body contains the bare letters "cbi" but never "cbi:" — the shape that made a
+  // 3-character icon namespace keep megabytes of unrelated bundles.
+  { id: 'r4', type: 'module', url: '/res/cbi-lookalike.js' },
+  // Body contains a real "cbi:" icon reference.
+  { id: 'r5', type: 'module', url: '/res/icon-pack.js?sample=cbi:bulb' },
+  // Never contains the literal element name, only its fragments — a bundle that builds
+  // `ha-bambulab-print_status-card` at runtime.
+  { id: 'r6', type: 'module', url: '/res/bambulab-print_status-bundle.js' },
 ];
 
 const DEFAULT_REGISTRIES = {

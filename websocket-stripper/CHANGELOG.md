@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.09.12.06 — 2026-09-12
+
+**Icon namespaces are matched with their colon, and card types can match by fragments.**
+Two bugs in the resource matcher, found by breaking down what one dashboard was actually
+keeping.
+
+*False positives.* A namespace was matched as a bare substring, so the 3-character `cbi`
+kept **4,818KB** of bundles that merely contained those letters — inside base64 blobs,
+minified identifiers, and one `cbid:`. `cbi:` appeared in none of them. An icon reference
+always carries its colon, so that is what is matched now.
+
+*False negatives, hidden by those false positives.* `ha-bambulab-cards.js` is 3.2MB and a
+dashboard renders `ha-bambulab-print_status-card` — a string that appears **nowhere** in the
+bundle, which builds its element names at runtime. It was being kept only by the accidental
+`cbi` hit. Tightening the icon match alone would therefore have broken those cards.
+
+So a card type now matches on its literal name *or*, failing that, on every one of its
+distinctive fragments (`bambulab` **and** `print_status`), requiring at least two so a single
+generic word can never carry a match on its own.
+
+
 ## 2026.09.12.05 — 2026-09-12
 
 **Resource matching now reads the icons of the entities a dashboard shows, not just its

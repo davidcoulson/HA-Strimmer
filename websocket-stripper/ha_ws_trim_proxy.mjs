@@ -42,7 +42,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.05';
+const VERSION = '2026.09.12.06';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -639,7 +639,9 @@ let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
 // Observed exactly that: 45 resources, 39 kept, 97KB saved instead of 18MB.
 const MIN_KEY = 3;
 function resourceKeys(cfg, allowed = null, byId = null) {
-  const keys = new Set();
+  const cards = new Set();      // custom card/row/badge/feature types
+  const icons = new Set();      // non-builtin icon namespaces
+  const addIcon = (ns) => { if (ns.length >= MIN_KEY && !BUILTIN_ICON_NS.has(ns)) icons.add(ns); };
   // Icons of the entities this dashboard actually shows, which are typically registry
   // values rather than anything written in the config.
   if (allowed && byId) {
@@ -647,20 +649,49 @@ function resourceKeys(cfg, allowed = null, byId = null) {
       const ic = byId.get(id)?.attributes?.icon;
       if (typeof ic !== 'string') continue;
       const m = ic.match(/^([a-z][a-z0-9_]{2,15}):[a-z]/);
-      if (m && !BUILTIN_ICON_NS.has(m[1])) keys.add(m[1]);
+      if (m) addIcon(m[1]);
     }
   }
   (function walk(n) {
     if (Array.isArray(n)) return n.forEach(walk);
     if (n && typeof n === 'object') return Object.values(n).forEach(walk);
     if (typeof n !== 'string') return;
-    if (n.startsWith('custom:')) keys.add(n.slice(7));
+    if (n.startsWith('custom:') && n.length > 7 + MIN_KEY) cards.add(n.slice(7));
     const ic = n.match(/^([a-z][a-z0-9_]{2,15}):([a-z][a-z0-9-]*)$/);
-    if (ic && !BUILTIN_ICON_NS.has(ic[1])) keys.add(ic[1]);
+    if (ic) addIcon(ic[1]);
   })(cfg);
-  for (const k of keys) if (k.length < MIN_KEY) keys.delete(k);
-  return keys;
+  return { cards, icons };
 }
+
+// Words too common to identify anything on their own.
+const GENERIC_FRAGMENT = new Set(['card', 'cards', 'custom', 'lovelace', 'hacs', 'home',
+  'assistant', 'view', 'type', 'icon', 'icons', 'element', 'badge', 'feature', 'stack']);
+
+// A card type split into the parts that actually identify it. Split on `-` only: an
+// underscore is usually *inside* one meaningful word (`print_status`), and breaking it
+// would leave two fragments generic enough to match anything.
+function cardFragments(type) {
+  return type.split('-').filter((p) => p.length >= 4 && !GENERIC_FRAGMENT.has(p));
+}
+
+// Does this body provide this card type?
+//
+// The literal name first, which is the strong signal. The fragment fallback exists for
+// bundles that BUILD their element names at runtime: `ha-bambulab-cards.js` is 3.2MB, a
+// dashboard renders `ha-bambulab-print_status-card`, and that string appears nowhere in the
+// file — only `bambulab` and `print_status` separately. Requiring every fragment (and at
+// least two of them) keeps that specific, where any single fragment would not be.
+function bodyHasCard(body, type) {
+  if (body.includes(type)) return true;
+  const frags = cardFragments(type);
+  return frags.length >= 2 && frags.every((f) => body.includes(f));
+}
+
+// An icon namespace is matched WITH its colon. Matching the bare namespace is how a
+// 3-character key like `cbi` came to keep 4.8MB of bundles that merely happened to contain
+// those letters inside base64 blobs and minified identifiers — `cbi:` appeared in none of
+// them.
+const bodyHasIcon = (body, ns) => body.includes(ns + ':');
 
 // never > always > content match > fail-open. A resource we could not read is always kept:
 // being unable to check is not evidence it is unused.
@@ -673,8 +704,9 @@ function keepResource(url, keys) {
   if (matchesUrl(RES_NEVER, url)) return false;
   if (matchesUrl(RES_ALWAYS, url)) return true;
   const c = RESOURCE_CACHE.get(url);
-  if (!c || c.present === null) return true;
-  for (const k of keys) if (c.present.has(k)) return true;
+  if (!c || c.present === null) return true;      // unreadable: cannot check, so keep
+  for (const k of keys.cards) if (c.present.has('card:' + k)) return true;
+  for (const k of keys.icons) if (c.present.has('icon:' + k)) return true;
   return false;
 }
 
@@ -685,8 +717,15 @@ async function buildResources(rpc, keysByDash) {
   catch (e) { log(`  resources: FAILED (${e.message}) — forwarding all resources`); RESOURCES_BY_DASH = new Map(); return; }
   if (!Array.isArray(rows)) { RESOURCES_BY_DASH = new Map(); return; }
 
-  const unionKeys = new Set();
-  for (const ks of keysByDash.values()) ks.forEach((k) => unionKeys.add(k));
+  // Every token any dashboard could match on, tagged by kind so a card type and an icon
+  // namespace that happen to share a name can never be confused for one another.
+  const unionCards = new Set(), unionIcons = new Set();
+  for (const ks of keysByDash.values()) {
+    ks.cards.forEach((k) => unionCards.add(k));
+    ks.icons.forEach((k) => unionIcons.add(k));
+  }
+  const unionKeys = new Set([...[...unionCards].map((k) => 'card:' + k),
+                             ...[...unionIcons].map((k) => 'icon:' + k)]);
   // One fetch per resource, tested against every dashboard's keys at once. Bodies are read
   // and discarded one at a time — the whole set is ~21MB on a large install and must not be
   // held in memory. The cache is keyed by URL, which carries HACS's version tag, so an
@@ -699,7 +738,10 @@ async function buildResources(rpc, keysByDash) {
       const body = await (await fetch(abs, { signal: AbortSignal.timeout(20000) })).text();
       RESOURCE_CACHE.set(r.url, {
         tested: new Set(unionKeys),
-        present: new Set([...unionKeys].filter((k) => body.includes(k))),
+        present: new Set([
+          ...[...unionCards].filter((k) => bodyHasCard(body, k)).map((k) => 'card:' + k),
+          ...[...unionIcons].filter((k) => bodyHasIcon(body, k)).map((k) => 'icon:' + k),
+        ]),
         bytes: body.length,
       });
     } catch (e) {
@@ -718,7 +760,8 @@ async function buildResources(rpc, keysByDash) {
       else dropB += bytes;
     }
     byDash.set(dash, keep);
-    log(`  resources ${dash} needs: ${[...keys].sort().join(', ') || '(none)'}`);
+    const needs = [...[...keys.cards].sort(), ...[...keys.icons].sort().map((i) => i + ':')];
+    log(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
     log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
   }
   RESOURCES_BY_DASH = byDash;
