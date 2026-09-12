@@ -1,4 +1,6 @@
-# 🚿 WebSocket Stripper
+<p align="center">
+  <img src="assets/banner.png" alt="WebSocket Stripper — not the whole house" width="640">
+</p>
 
 ### Your Home Assistant dashboards are slow because every page loads *your entire house*.
 

@@ -1,104 +1,131 @@
 #!/usr/bin/env python3
-"""Generate the add-on's icon.png and logo.png.
+"""Generate the add-on's icon and the README banner.
 
-Kept as a script rather than checked-in-blobs-only so the artwork can be adjusted without
-redrawing it by hand. Run from the repo root:  python3 tools/make_icon.py
+Run from the repo root:  python3 tools/make_icon.py
 
-The mark is a funnel: many entities go in, few come out — the whole add-on in one shape. It
-deliberately echoes `mdi:filter-variant`, the panel_icon used for the Ingress sidebar entry,
-so the sidebar and the add-on list read as the same thing.
+Produces:
+  websocket-stripper/icon.png   128x128, dark, shown in the Apps list
+  assets/banner.png             1200x320, white, shown at the top of the README
 
-Everything is drawn at 4x and downsampled, which is how the diagonals get clean edges;
-PIL has no antialiased polygon fill.
+The mark is a funnel: five entities go in, one comes out — the whole add-on in one shape. It
+deliberately echoes `mdi:filter-variant`, the panel_icon on the Ingress sidebar entry, so the
+sidebar, the stats panel and the Apps list all read as the same thing.
+
+There is deliberately **no logo.png**. Home Assistant renders that small enough on the add-on
+page that a wordmark and tagline are illegible, so the add-on ships the mark alone and the
+wordmark lives on the README, where there is room for it.
+
+The banner is on a solid white ground rather than transparent: GitHub renders READMEs on both
+light and dark, and a transparent PNG would need text that works on both, which no single
+colour does. White is legible either way.
+
+Everything is drawn at 4x and downsampled — PIL has no antialiased polygon fill, and the
+funnel is all diagonals.
 """
-from PIL import Image, ImageDraw, ImageFont
+
 from pathlib import Path
 
-SS = 4                                  # supersample factor
-NAVY = (18, 38, 58)                     # background, matches the stats panel's dark ground
-BLUE = (79, 195, 247)                   # funnel, the panel's dark-mode accent
+from PIL import Image, ImageDraw, ImageFont
+
+SS = 4  # supersample factor
+
+# Dark palette (icon) — the stats panel's own dark ground and accent.
+NAVY = (18, 38, 58)
+BLUE = (79, 195, 247)
 WHITE = (255, 255, 255)
-OUT = Path(__file__).resolve().parent.parent / "websocket-stripper"
+
+# Light palette (banner) — same hue family, darkened so it holds against white.
+INK = (15, 23, 42)
+SKY = (14, 165, 233)
+SLATE = (100, 116, 139)
+
+TAGLINE = "not the whole house"
+
+ROOT = Path(__file__).resolve().parent.parent
+FONTS = (
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
+
+# The mark in design units on a 1024 grid, so both renderers share one geometry.
+DOTS_IN = (250, 381, 512, 643, 774)
+DOT_Y, DOT_R = 215, 34
+MOUTH_Y, MOUTH_HALF = 345, 322
+NECK_Y, NECK_HALF = 585, 46
+STEM_Y = 725
+OUT_Y = 815
 
 
-def rounded(size, radius, colour):
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    ImageDraw.Draw(img).rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=colour)
-    return img
+def _face(size):
+    for path in FONTS:
+        try:
+            return ImageFont.truetype(path, size, index=0)
+        except OSError:
+            continue
+    return None
 
 
-def funnel(d, cx, top, half_w, neck_y, neck_half, stem_bottom, colour):
-    """A filter/funnel: wide mouth, converging walls, short stem."""
+def draw_mark(d, cx, u, oy, funnel_colour, dot_colour):
+    """Draw the funnel centred on cx, scaled by u, offset vertically by oy."""
+    y = lambda v: int(v * u + oy)
+    r = int(DOT_R * u)
+    for x in DOTS_IN:
+        px = cx + int((x - 512) * u)
+        d.ellipse([px - r, y(DOT_Y) - r, px + r, y(DOT_Y) + r], fill=dot_colour)
     d.polygon(
         [
-            (cx - half_w, top), (cx + half_w, top),
-            (cx + neck_half, neck_y), (cx + neck_half, stem_bottom),
-            (cx - neck_half, stem_bottom), (cx - neck_half, neck_y),
+            (cx - int(MOUTH_HALF * u), y(MOUTH_Y)), (cx + int(MOUTH_HALF * u), y(MOUTH_Y)),
+            (cx + int(NECK_HALF * u), y(NECK_Y)), (cx + int(NECK_HALF * u), y(STEM_Y)),
+            (cx - int(NECK_HALF * u), y(STEM_Y)), (cx - int(NECK_HALF * u), y(NECK_Y)),
         ],
-        fill=colour,
+        fill=funnel_colour,
     )
-
-
-def dots(d, xs, y, r, colour):
-    for x in xs:
-        d.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+    d.ellipse([cx - r, y(OUT_Y) - r, cx + r, y(OUT_Y) + r], fill=dot_colour)
 
 
 def make_icon(px=128):
     S = px * SS
-    img = rounded(S, int(S * 0.18), NAVY)
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    u = S / 1024                                  # design units -> pixels
-    # Five entities in, one out: the ratio is the point, so the counts are not decorative.
-    dots(d, [int(x * u) for x in (250, 381, 512, 643, 774)], int(215 * u), int(34 * u), WHITE)
-    funnel(d, int(512 * u), int(345 * u), int(322 * u), int(585 * u), int(46 * u), int(725 * u), BLUE)
-    dots(d, [int(512 * u)], int(815 * u), int(34 * u), WHITE)
+    d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.18), fill=NAVY)
+    draw_mark(d, S // 2, S / 1024, 0, BLUE, WHITE)
     return img.resize((px, px), Image.LANCZOS)
 
 
-def make_logo(w=500, h=200):
-    """The mark in a left gutter, wordmark to its right.
-
-    The mark's box is computed rather than eyeballed: at this size, drawing it from the same
-    design units as the icon put the funnel's mouth off the left edge and the dots behind the
-    text. Derive the scale from the width the mark should occupy, then centre it vertically.
-    """
+def make_banner(w=1200, h=320):
     W, H = w * SS, h * SS
-    img = Image.new("RGBA", (W, H), NAVY)
+    img = Image.new("RGB", (W, H), WHITE)
     d = ImageDraw.Draw(img)
 
-    margin = int(W * 0.03)
-    mouth = W * 0.17                              # how wide the funnel's mouth should be
-    u = mouth / 644                               # 644 = the mouth's width in design units
-    cx = margin + int(322 * u)
+    margin = int(W * 0.045)
+    u = (H * 0.62) / (OUT_Y + DOT_R - (DOT_Y - DOT_R))   # mark height as a share of the banner
+    cx = margin + int(MOUTH_HALF * u)
+    oy = (H - (OUT_Y + DOT_R - (DOT_Y - DOT_R)) * u) / 2 - (DOT_Y - DOT_R) * u
+    draw_mark(d, cx, u, oy, SKY, INK)
 
-    # Design-space extremes: top of the dot row, bottom of the outflow dot.
-    top_u, bot_u = 215 - 34, 815 + 34
-    oy = (H - (bot_u - top_u) * u) / 2 - top_u * u
+    tx = cx + int(MOUTH_HALF * u) + int(W * 0.05)
+    f_big = _face(int(H * 0.26))
+    if not f_big:
+        return img.resize((w, h), Image.LANCZOS)
 
-    y = lambda v: int(v * u + oy)
-    dots(d, [cx + int((x - 512) * u) for x in (250, 381, 512, 643, 774)], y(215), int(34 * u), WHITE)
-    funnel(d, cx, y(345), int(322 * u), y(585), int(46 * u), y(725), BLUE)
-    dots(d, [cx], y(815), int(34 * u), WHITE)
+    # Wordmark on one line, so the banner reads as a title rather than a stack.
+    name_a, name_b = "WebSocket ", "Stripper"
+    d.text((tx, int(H * 0.28)), name_a, font=f_big, fill=INK)
+    d.text((tx + f_big.getlength(name_a), int(H * 0.28)), name_b, font=f_big, fill=SKY)
 
-    f_big = f_small = None
-    for path in ("/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts/Helvetica.ttc"):
-        try:
-            f_big = ImageFont.truetype(path, int(H * 0.19), index=0)
-            f_small = ImageFont.truetype(path, int(H * 0.095), index=0)
-            break
-        except OSError:
-            continue
-    if f_big:
-        tx = cx + int(322 * u) + int(W * 0.06)
-        d.text((tx, int(H * 0.26)), "WebSocket", font=f_big, fill=WHITE)
-        d.text((tx, int(H * 0.48)), "Stripper", font=f_big, fill=BLUE)
-        d.text((tx + 2, int(H * 0.74)), "only what the dashboard uses", font=f_small, fill=(150, 170, 190))
+    # Fit the tagline to what is left, so editing TAGLINE can never push it off the canvas.
+    avail = W - tx - margin
+    size = int(H * 0.13)
+    while size > 10 and _face(size).getlength(TAGLINE) > avail:
+        size -= 2
+    d.text((tx + 3, int(H * 0.60)), TAGLINE, font=_face(size), fill=SLATE)
     return img.resize((w, h), Image.LANCZOS)
 
 
 if __name__ == "__main__":
-    OUT.mkdir(exist_ok=True)
-    make_icon().save(OUT / "icon.png")
-    make_logo().save(OUT / "logo.png")
-    print(f"wrote {OUT/'icon.png'} and {OUT/'logo.png'}")
+    (ROOT / "websocket-stripper").mkdir(exist_ok=True)
+    (ROOT / "assets").mkdir(exist_ok=True)
+    make_icon().save(ROOT / "websocket-stripper" / "icon.png")
+    make_banner().save(ROOT / "assets" / "banner.png")
+    print("wrote websocket-stripper/icon.png and assets/banner.png")
