@@ -302,7 +302,7 @@ describe('resource trimming', () => {
     try {
       await px.waitForLog(/union allowlist for/);
       const urls = await resourcesFor(p2, '/bambu-dash');
-      assert.ok(urls.some((u) => u.includes('bambulab-print_status-bundle')),
+      assert.ok(urls.some((u) => u.includes('bambulab-print_status-cards')),
         'all fragments present must count as a match');
       assert.ok(!urls.some((u) => u.includes('unrelated-widget')),
         'a bundle sharing no fragment must still be dropped');

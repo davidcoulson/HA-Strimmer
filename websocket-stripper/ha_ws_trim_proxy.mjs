@@ -663,34 +663,37 @@ function resourceKeys(cfg, allowed = null, byId = null) {
   return { cards, icons };
 }
 
-// Words too common to identify anything on their own.
-const GENERIC_FRAGMENT = new Set(['card', 'cards', 'custom', 'lovelace', 'hacs', 'home',
-  'assistant', 'view', 'type', 'icon', 'icons', 'element', 'badge', 'feature', 'stack']);
-
-// A card type split into the parts that actually identify it. Split on `-` only: an
-// underscore is usually *inside* one meaningful word (`print_status`), and breaking it
-// would leave two fragments generic enough to match anything.
+// A card type split into candidate identifying parts. Split on `-` only: an underscore
+// usually sits inside one meaningful word (`print_status`), and breaking it would leave
+// fragments generic enough to match anything.
 function cardFragments(type) {
-  return type.split('-').filter((p) => p.length >= 4 && !GENERIC_FRAGMENT.has(p));
+  return type.split('-').filter((p) => p.length >= 4);
 }
+
+// How many resources contain each fragment, and the cutoff above which a fragment is too
+// common to identify anything. MEASURED rather than a hand-maintained stop-word list: the
+// first attempt at this used one, and `grid`, `layout`, `entity` and `progress` all slipped
+// through it and matched nearly every bundle on the instance — which took one panel from
+// 2,998KB to 11,876KB. A fragment present in a quarter of all resources says nothing.
+let FRAG_DF = new Map();
+let FRAG_DF_MAX = 0;
+const isDistinctive = (f) => (FRAG_DF.get(f) || 0) <= FRAG_DF_MAX;
 
 // Does this body provide this card type?
 //
-// The literal name first, which is the strong signal. The fragment fallback exists for
-// bundles that BUILD their element names at runtime: `ha-bambulab-cards.js` is 3.2MB, a
-// dashboard renders `ha-bambulab-print_status-card`, and that string appears nowhere in the
-// file — only `bambulab` and `print_status` separately. Requiring every fragment (and at
-// least two of them) keeps that specific, where any single fragment would not be.
-function bodyHasCard(body, type) {
-  if (body.includes(type)) return true;
+// The literal name is the strong signal. The fragment fallback exists for bundles that
+// BUILD their element names at runtime: `ha-bambulab-cards.js` is 3.2MB, a dashboard
+// renders `ha-bambulab-print_status-card`, and that string appears nowhere in the file —
+// only `bambulab` and `print_status` separately. Every fragment must be present, and at
+// least two of them must be distinctive, so a pair of common words can never carry a match.
+function cardMatchesBody(type, cached) {
+  if (cached.literal.has(type)) return true;
   const frags = cardFragments(type);
-  return frags.length >= 2 && frags.every((f) => body.includes(f));
+  if (frags.length < 2) return false;
+  if (!frags.every((f) => cached.frags.has(f))) return false;
+  return frags.filter(isDistinctive).length >= 2;
 }
 
-// An icon namespace is matched WITH its colon. Matching the bare namespace is how a
-// 3-character key like `cbi` came to keep 4.8MB of bundles that merely happened to contain
-// those letters inside base64 blobs and minified identifiers — `cbi:` appeared in none of
-// them.
 const bodyHasIcon = (body, ns) => body.includes(ns + ':');
 
 // never > always > content match > fail-open. A resource we could not read is always kept:
@@ -704,9 +707,9 @@ function keepResource(url, keys) {
   if (matchesUrl(RES_NEVER, url)) return false;
   if (matchesUrl(RES_ALWAYS, url)) return true;
   const c = RESOURCE_CACHE.get(url);
-  if (!c || c.present === null) return true;      // unreadable: cannot check, so keep
-  for (const k of keys.cards) if (c.present.has('card:' + k)) return true;
-  for (const k of keys.icons) if (c.present.has('icon:' + k)) return true;
+  if (!c || c.unreadable) return true;            // cannot check, so keep
+  for (const k of keys.icons) if (c.icons.has(k)) return true;
+  for (const k of keys.cards) if (cardMatchesBody(k, c)) return true;
   return false;
 }
 
@@ -724,8 +727,11 @@ async function buildResources(rpc, keysByDash) {
     ks.cards.forEach((k) => unionCards.add(k));
     ks.icons.forEach((k) => unionIcons.add(k));
   }
+  const unionFrags = new Set();
+  for (const c of unionCards) for (const f of cardFragments(c)) unionFrags.add(f);
   const unionKeys = new Set([...[...unionCards].map((k) => 'card:' + k),
-                             ...[...unionIcons].map((k) => 'icon:' + k)]);
+                             ...[...unionIcons].map((k) => 'icon:' + k),
+                             ...[...unionFrags].map((k) => 'frag:' + k)]);
   // One fetch per resource, tested against every dashboard's keys at once. Bodies are read
   // and discarded one at a time — the whole set is ~21MB on a large install and must not be
   // held in memory. The cache is keyed by URL, which carries HACS's version tag, so an
@@ -738,16 +744,29 @@ async function buildResources(rpc, keysByDash) {
       const body = await (await fetch(abs, { signal: AbortSignal.timeout(20000) })).text();
       RESOURCE_CACHE.set(r.url, {
         tested: new Set(unionKeys),
-        present: new Set([
-          ...[...unionCards].filter((k) => bodyHasCard(body, k)).map((k) => 'card:' + k),
-          ...[...unionIcons].filter((k) => bodyHasIcon(body, k)).map((k) => 'icon:' + k),
-        ]),
+        literal: new Set([...unionCards].filter((k) => body.includes(k))),
+        icons: new Set([...unionIcons].filter((k) => bodyHasIcon(body, k))),
+        frags: new Set([...unionFrags].filter((f) => body.includes(f))),
+        unreadable: false,
         bytes: body.length,
       });
     } catch (e) {
-      RESOURCE_CACHE.set(r.url, { tested: new Set(unionKeys), present: null, bytes: 0 });
+      RESOURCE_CACHE.set(r.url, { tested: new Set(unionKeys), literal: new Set(), icons: new Set(), frags: new Set(), unreadable: true, bytes: 0 });
       logThrottled(`res:${r.url}`, `  resources: could not read ${r.url} (${e.message}) — always forwarding it`);
     }
+  }
+
+  // Document frequency across the resources we could actually read. A fragment in more than
+  // a quarter of them identifies nothing, so it cannot carry a fragment match on its own.
+  const readable = rows.filter((r) => !RESOURCE_CACHE.get(r.url)?.unreadable);
+  FRAG_DF = new Map();
+  for (const f of unionFrags) {
+    FRAG_DF.set(f, readable.filter((r) => RESOURCE_CACHE.get(r.url).frags.has(f)).length);
+  }
+  FRAG_DF_MAX = Math.max(1, Math.floor(readable.length * 0.25));
+  const common = [...unionFrags].filter((f) => !isDistinctive(f));
+  if (common.length) {
+    log(`  resources: ${common.length} fragment(s) too common to identify a card (>${FRAG_DF_MAX} of ${readable.length}): ${common.sort().join(', ')}`);
   }
 
   const byDash = new Map();

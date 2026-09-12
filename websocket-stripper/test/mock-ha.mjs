@@ -35,7 +35,7 @@ const DEFAULT_RESOURCES = [
   { id: 'r5', type: 'module', url: '/res/icon-pack.js?sample=cbi:bulb' },
   // Never contains the literal element name, only its fragments — a bundle that builds
   // `ha-bambulab-print_status-card` at runtime.
-  { id: 'r6', type: 'module', url: '/res/bambulab-print_status-bundle.js' },
+  { id: 'r6', type: 'module', url: '/res/bambulab-print_status-cards.js' },
 ];
 
 const DEFAULT_REGISTRIES = {
