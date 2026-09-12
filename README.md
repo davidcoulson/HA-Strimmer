@@ -39,6 +39,10 @@ with **9,751 entities**:
   cards, your real theme. Nothing is re-implemented or approximated
 - 🧩 **No changes to your dashboards.** It works out what each one needs by reading it
 - 🛟 **Fails safe.** If it is ever unsure, it sends *more*, not less
+- 🤖 **Built with AI assistance — and proven on real hardware.** Every number above was
+  measured on a live Home Assistant instance and a real wall panel, not estimated. The
+  optimisations were AI-assisted, then tested against actual dashboards, tablets and
+  devices until the stopwatch agreed
 
 ---
 
