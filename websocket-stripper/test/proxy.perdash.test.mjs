@@ -58,7 +58,7 @@ function spawnProxy({ mock, dashPaths, port, extraEnv = {} }) {
 const httpGet = (url) => new Promise((resolve, reject) => {
   const req = http.get(url, (res) => {
     let body = ''; res.on('data', (c) => body += c);
-    res.on('end', () => resolve({ status: res.statusCode, body }));
+    res.on('end', () => resolve({ status: res.statusCode, body, setCookie: res.headers['set-cookie'] }));
   });
   req.on('error', reject);
 });
@@ -117,6 +117,59 @@ describe('per-dashboard allowlists', () => {
 
 // Deliberately its own proxy: the IP->dashboard hint is sticky by design, so a connection
 // that has never fetched a dashboard page only exists on a freshly started proxy.
+// The IP hint is shared by every device behind one NAT, so a phone and a laptop on the
+// same WAN address overwrite each other. A cookie is per-browser, which is the granularity
+// actually wanted — and it is what makes remote access through a tunnel work, where every
+// client arrives from one address.
+describe('cookie attribution survives a shared IP', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  // Same process, so the same source IP for both — exactly the NAT case.
+  const withCookie = async (dash) => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'test-token', dash ? { Cookie: `ws_dash=${dash}` } : undefined);
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    await new Promise((r) => setTimeout(r, 300));
+    const got = mock.lastSubscribeEntities();
+    c.close();
+    return new Set(got ?? []);
+  };
+
+  it('a dashboard page GET sets the cookie', async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/test-dash`);
+    assert.match(String(res.setCookie ?? ''), /ws_dash=test-dash/,
+      'the page response must stamp the dashboard on the browser');
+  });
+
+  it('two clients on the SAME ip get different allowlists from their cookies', async () => {
+    const a = await withCookie('test-dash');
+    const b = await withCookie('auto-dash');
+    assert.ok(a.has('camera.front'), 'test-dash cookie gets test-dash entities');
+    assert.ok(!a.has('light.bedroom'), 'and not the other dashboard\'s');
+    assert.ok(b.has('light.bedroom'), 'auto-dash cookie gets auto-dash entities');
+    assert.ok(!b.has('camera.front'), 'and not the other dashboard\'s');
+  });
+
+  it('the cookie wins over a conflicting IP hint', async () => {
+    await httpGet(`http://127.0.0.1:${port}/auto-dash`);   // IP hint now says auto-dash
+    const got = await withCookie('test-dash');             // cookie says test-dash
+    assert.ok(got.has('camera.front') && !got.has('light.bedroom'),
+      'the per-browser signal must beat the per-IP one');
+  });
+
+  it('an unknown cookie value falls back rather than serving nothing', async () => {
+    const got = await withCookie('not-a-dashboard');
+    assert.ok(got.size > 0, 'an empty entity_ids would mean NO filter to HA');
+  });
+});
+
 describe('an unattributed client still gets the union', () => {
   let mock, proxy, port;
   before(async () => {

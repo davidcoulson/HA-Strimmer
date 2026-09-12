@@ -207,8 +207,10 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
 
 // Minimal browser-side ws client that performs the HA auth handshake, then lets tests
 // send commands and await specific replies.
-export function haClient(url, token = 'test-token') {
-  const ws = new WebSocket(url);
+export function haClient(url, token = 'test-token', headers = undefined) {
+  // `headers` lets a test send a Cookie, which is how per-browser dashboard attribution
+  // is exercised without needing two source IPs.
+  const ws = new WebSocket(url, headers ? { headers } : undefined);
   let nextId = 1;
   const waiters = [];
   const authed = new Promise((resolve, reject) => {

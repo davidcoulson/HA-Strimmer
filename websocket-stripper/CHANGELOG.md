@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026.09.12.09 — 2026-09-12
+
+**Per-browser dashboard attribution via a cookie, so NAT stops collapsing clients together.**
+
+The IP hint is shared by every device behind one address. A phone and a laptop on the same
+WAN address overwrite each other's attribution, and the loser is served another dashboard's
+allowlist until it reloads. That is not an edge case when access goes through a tunnel, where
+every remote client arrives from one address.
+
+A dashboard page response now stamps `ws_dash=<url_path>` on the browser, and the websocket
+upgrade reads it back. Precedence is **cookie, then IP hint, then the union** — so nothing
+regresses for a client that sends no cookie, and the log now names which signal was used
+(`serving basement-stairs-panel via cookie`) so a wrong allowlist is diagnosable rather than
+mysterious.
+
+The cookie holds the dashboard path itself, not an opaque id, which keeps attribution
+**stateless**: there is no server-side map to lose, so the add-on can restart mid-session
+without any client losing its scope. A tampered value can only name a dashboard already in
+the configured list — a set that client could reach anyway — and an unrecognised one falls
+through to the next signal.
+
+Note this solves a different problem from user-based scoping: a user identifies an *account*,
+so two devices signed in as the same person still collide. A cookie identifies a *browser*.
+
+
 ## 2026.09.12.07 — 2026-09-12
 
 **The Configuration tab now explains itself.** Added `translations/en.yaml`, so every option

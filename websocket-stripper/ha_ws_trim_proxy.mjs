@@ -42,7 +42,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.07';
+const VERSION = '2026.09.12.09';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -532,6 +532,29 @@ const proxy = httpProxy.createProxyServer({ target: HA_BASE, changeOrigin: true,
 // -> a hard 400 on every request. Keeping the chain intact keeps the counts in step, and
 // preserves the real client IP through the upstream proxy instead of hiding it behind Caddy.
 const normalizeXff = (v) => String(v).split(',').map((s) => s.trim().replace(/^::ffff:/, '')).filter(Boolean).join(', ');
+// Stamp the dashboard onto the browser itself.
+//
+// The IP hint below is coarse by construction: every device behind one NAT shares it, so a
+// phone and a laptop on the same WAN address overwrite each other's attribution and the
+// loser is served another dashboard's allowlist until it reloads. A cookie is per-browser,
+// which is the granularity actually wanted.
+//
+// The VALUE is the dashboard path, not an opaque id, so attribution stays stateless: there
+// is no server-side map to lose on restart, and the proxy can be restarted mid-session
+// without any client losing its scope. A tampered value can only name another configured
+// dashboard, which is a set the client could already reach, so it grants nothing.
+proxy.on('proxyRes', (proxyRes, req) => {
+  if (!PER_DASH) return;
+  const dash = dashFromUrl(req.url);
+  if (!dash) return;
+  const existing = proxyRes.headers['set-cookie'];
+  const prior = Array.isArray(existing) ? existing : existing ? [existing] : [];
+  proxyRes.headers['set-cookie'] = [
+    ...prior,
+    `${DASH_COOKIE}=${encodeURIComponent(dash)}; Path=/; Max-Age=31536000; SameSite=Lax`,
+  ];
+});
+
 proxy.on('proxyReq', (proxyReq, req) => {
   const xff = proxyReq.getHeader('x-forwarded-for') ?? req.headers['x-forwarded-for'];
   if (xff) proxyReq.setHeader('x-forwarded-for', normalizeXff(xff));
@@ -883,13 +906,39 @@ function noteClientDash(req) {
 // The allowlist this connection should get: its own dashboard's if we know it and it is
 // non-empty, else the union. Never returns an empty set when the union has entries — an
 // empty entity_ids means "no filter" to HA, i.e. the whole firehose.
+const DASH_COOKIE = 'ws_dash';
+
+/// The dashboard this browser was last served, from its own cookie. Per-browser, so it
+/// survives NAT — unlike the IP hint, which every device behind one address shares.
+function dashFromCookie(req) {
+  const raw = req.headers?.cookie;
+  if (!raw) return null;
+  for (const part of String(raw).split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() !== DASH_COOKIE) continue;
+    let v; try { v = decodeURIComponent(part.slice(eq + 1).trim()); } catch { return null; }
+    return DASH_PATHS.includes(v) ? v : null;   // only ever a dashboard we actually serve
+  }
+  return null;
+}
+
+// Cookie first, then the IP hint, then the union. Never returns an empty set when the union
+// has entries — an empty entity_ids means "no filter" to HA, i.e. the whole firehose.
 function allowFor(req) {
-  if (!PER_DASH) return { set: ALLOW, dash: null };
+  if (!PER_DASH) return { set: ALLOW, dash: null, via: null };
+  for (const [path, via] of [[dashFromCookie(req), 'cookie'], [ipHint(req), 'ip']]) {
+    if (!path) continue;
+    const set = ALLOW_BY_DASH.get(path);
+    if (set?.size) return { set, dash: path, via };
+  }
+  return { set: ALLOW, dash: null, via: null };
+}
+
+function ipHint(req) {
   const hit = clientDash.get(clientIp(req));
-  if (!hit || Date.now() - hit.at > CLIENT_DASH_TTL_MS) return { set: ALLOW, dash: null };
-  const set = ALLOW_BY_DASH.get(hit.path);
-  if (!set?.size) return { set: ALLOW, dash: null };
-  return { set, dash: hit.path };
+  if (!hit || Date.now() - hit.at > CLIENT_DASH_TTL_MS) return null;
+  return hit.path;
 }
 
 const server = http.createServer((req, res) => { noteClientDash(req); proxy.web(req, res); });
@@ -935,8 +984,8 @@ server.on('upgrade', (req, socket, head) => {
       } catch { socket.destroy(); }
       return;
     }
-    const { set, dash } = allowFor(req);
-    if (dash) log(`/api/websocket for ${clientIp(req)}: serving ${dash} (${set.size} entities, union is ${ALLOW.size})`);
+    const { set, dash, via } = allowFor(req);
+    if (dash) log(`/api/websocket for ${clientIp(req)}: serving ${dash} via ${via} (${set.size} entities, union is ${ALLOW.size})`);
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash));
   } else {
     // Keyed on the path, not req.url: camera stream URLs carry a per-request signature, so
