@@ -103,8 +103,8 @@ Being straight with you, because measuring this took a while:
    ```
    Every option has a name and description in the **Configuration** tab, so you can read
    what each does without leaving Home Assistant.
-3. Start it. Browse `http://<ha-host>:8099/<your-dashboard>`. Point your kiosk browser
-   there. To move it off `8099` (e.g. it collides with Zigbee2MQTT), set the `port` option
+3. Start it. Browse `http://<ha-host>:9123/<your-dashboard>`. Point your kiosk browser
+   there. To move it off `9123` (e.g. it collides with Zigbee2MQTT), set the `port` option
    — because the add-on runs `host_network: true`, the **Network** tab can't remap it.
 
 > **Tip — keep broad admin dashboards out of the `dashboards` list.** The allowlist is the
@@ -201,7 +201,7 @@ HA_TOKEN="<long-lived-token>" \
   HA_BASE="http://homeassistant.mgmt:8123" \
   DASH_PATHS="kitchen-panel,hallway-kiosk" \
   node ha_ws_trim_proxy.mjs
-# then open http://localhost:8099/kitchen-panel
+# then open http://localhost:9123/kitchen-panel
 ```
 
 Run `npm test` for the suite (extractor + registry/filter resolution unit tests, plus

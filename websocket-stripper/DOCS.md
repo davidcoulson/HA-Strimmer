@@ -19,7 +19,7 @@ uses, so kiosk/wall-panel pages load fast on large instances — with no loss of
 | `trim_resources` | bool | `false` (default). Trims **Lovelace resources** (custom cards) per dashboard. Resources are instance-wide in HA, so every kiosk downloads and parses every custom card you have installed — 21MB of JavaScript for a 4-card wall panel on the instance this was built against. A resource is kept when the dashboard's card types (or non-builtin icon prefixes) appear in its file. **Off by default**, and see the tuning section below before turning it on — some resources fail *silently* when dropped. Every drop is logged with its size. |
 | `resources_always_forward` | list | URL patterns (literal substring, e.g. `kiosk-mode`, or `/regex/`) always sent. Needed for plugins that patch the frontend instead of registering a card — they contain none of the dashboard's card names, so the content match cannot tell they're used. In practice: `kiosk-mode`, icon packs, and anything that restyles core cards. |
 | `resources_never_forward` | list | URL patterns never sent to any dashboard. Wins over `resources_always_forward`. |
-| `port` | int | Port the add-on listens on (default `8099`). Because it runs with `host_network: true`, this option is how you move it off `8099` — the **Network** tab can't remap a host-network port. Change it if `8099` collides with another add-on (e.g. Zigbee2MQTT). |
+| `port` | int | Port the add-on listens on (default `9123`). Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another add-on (e.g. Zigbee2MQTT). |
 | `ha_base` | string | Optional. Override the Home Assistant base URL the add-on proxies to (default `http://homeassistant:8123`). Set this if `host_network` is on and the internal `homeassistant` hostname doesn't resolve — e.g. `http://192.168.4.2:8123`. |
 | `allow_ws_url` | string | Optional. Override the websocket URL used once at startup to precompute the allowlist (default `ws://supervisor/core/websocket`). Set if `supervisor` doesn't resolve under `host_network` — e.g. `ws://192.168.4.2:8123/api/websocket` (also requires a token via `ALLOW_TOKEN`). |
 
@@ -43,11 +43,11 @@ backslashes must be escaped (`"\\."`).
 
 ## Usage
 
-After starting, browse to `http://<ha-host>:8099/<dashboard-url-path>`, e.g.
-`http://homeassistant.local:8099/fridge-status`. Point your kiosk browser at that URL.
+After starting, browse to `http://<ha-host>:9123/<dashboard-url-path>`, e.g.
+`http://homeassistant.local:9123/fridge-status`. Point your kiosk browser at that URL.
 
 > **Port:** because this add-on runs with `host_network: true` (see the tradeoff below),
-> it binds directly on the host and the **Network** tab cannot remap it. If `8099` collides
+> it binds directly on the host and the **Network** tab cannot remap it. If `9123` collides
 > with another add-on (e.g. Zigbee2MQTT), set the `port` option instead.
 
 The first visit prompts a normal HA login (it's a different origin); after that it's your
@@ -93,8 +93,8 @@ real IP never reaches HA and `trusted_networks` can't match it.
 
 **What it costs.**
 
-- **The port is rigid.** It binds `:8099` on the host directly; the **Network** tab can't
-  remap it, so a clash with another add-on on `8099` can't be fixed there (see #6 above).
+- **The port is rigid.** It binds `:9123` on the host directly; the **Network** tab can't
+  remap it, so a clash with another add-on on `9123` can't be fixed there (see #6 above).
 - **Internal DNS can break.** The `homeassistant` and `supervisor` hostnames may not
   resolve in host-network mode. If startup fails, pin them to IPs with the `ha_base` and
   `allow_ws_url` options (e.g. `ha_base: http://192.168.4.2:8123`).

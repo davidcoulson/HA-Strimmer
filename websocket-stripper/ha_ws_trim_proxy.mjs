@@ -20,7 +20,7 @@
 //                  proxy for the allowlist precompute, proxies to http://homeassistant:8123.
 //   * dev/CLI    — reads env vars, uses HA_TOKEN against HA_BASE directly.
 //
-// Env (dev): HA_TOKEN, HA_BASE (default http://homeassistant.mgmt:8123), PORT (8099),
+// Env (dev): HA_TOKEN, HA_BASE (default http://homeassistant.mgmt:8123), PORT (9123),
 //   DASH_PATHS (comma/newline list), ALWAYS_FORWARD, NEVER_FORWARD (literals or /regex/),
 //   STRIP_ENTITIES (default 1; 0 = passthrough for A/B compare),
 //   ALLOW_WS_URL / ALLOW_TOKEN (override the allowlist-precompute connection).
@@ -43,17 +43,17 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.12';
+const VERSION = '2026.09.12.13';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
 
 const HA_BASE = process.env.HA_BASE || OPT.ha_base || (inAddon ? 'http://homeassistant:8123' : 'http://homeassistant.mgmt:8123');
 const HA_WS = HA_BASE.replace(/^http/, 'ws') + '/api/websocket';     // browser ws relay target
-// Port precedence: PORT env (dev) > `port` add-on option > 8099. Under host_network the
+// Port precedence: PORT env (dev) > `port` add-on option > 9123. Under host_network the
 // add-on binds this directly on the host, so the option is the only way to move it off
-// 8099 (the Network tab can't remap a host-network port) — see issue #6.
-const PORT = parseInt(process.env.PORT || OPT.port || '8099', 10);
+// 9123 (the Network tab can't remap a host-network port) — see issue #6.
+const PORT = parseInt(process.env.PORT || OPT.port || '9123', 10);
 // The Ingress panel + JSON API live on their own port, deliberately NOT on PORT: everything
 // on PORT is the proxied Home Assistant namespace, and a dashboard whose url_path collided
 // with a stats path would be a genuinely confusing failure. Fixed rather than an option
@@ -1303,7 +1303,7 @@ server.listen(PORT, () => {
   log(`HA trim-proxy listening on :${PORT}  ->  ${HA_BASE}`);
   DASH_PATHS.forEach((p) => log(`  open: http://<host>:${PORT}/${p}`));
 });
-// A port we can't bind is a real config error (another add-on on :8099 — see issue #6) and
+// A port we can't bind is a real config error (another add-on on :9123 — see issue #6) and
 // worth exiting for; anything else the server surfaces is not worth dying over.
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE' || e.code === 'EACCES') {
