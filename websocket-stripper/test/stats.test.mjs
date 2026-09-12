@@ -72,6 +72,26 @@ describe('stats counters', () => {
     assert.equal(s.clients.total, 2, 'lifetime count must not go down when a client leaves');
   });
 
+  it('reports no rate for a connection too young to have one', () => {
+    stats.reset();
+    const id = stats.connOpen({ ip: '10.0.0.3', dash: 'kitchen', via: 'ip', allowSize: 5 });
+    stats.connTraffic(id, 200000, 200000, true);
+    const c = stats.snapshot().clients.list[0];
+    // Extrapolating 200KB from a connection milliseconds old would claim megabytes/min.
+    assert.equal(c.eventBytesPerMin, null, 'a sub-minute connection must not report a rate');
+    assert.equal(c.eventBytes, 200000, 'the raw total is still reported');
+  });
+
+  it('counts only genuine events as event traffic', () => {
+    stats.reset();
+    const id = stats.connOpen({ ip: '10.0.0.4', dash: null, via: null, allowSize: 1 });
+    stats.connTraffic(id, 500, 500, false);   // an untrimmed reply, e.g. lovelace/config
+    stats.connTraffic(id, 100, 100, true);    // an actual state event
+    const c = stats.snapshot().clients.list[0];
+    assert.equal(c.eventBytes, 100, 'untrimmed replies must not be counted as update traffic');
+    assert.equal(c.toBrowser, 600, 'but they do count toward total traffic');
+  });
+
   it('survives a division by zero when nothing has been trimmed', () => {
     stats.reset();
     const s = stats.snapshot();

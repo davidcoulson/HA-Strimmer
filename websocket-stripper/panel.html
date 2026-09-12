@@ -143,10 +143,11 @@ async function tick() {
   $('savedAbs').textContent = kb(s.savings.saved) + ' of ' + kb(s.savings.before) + ' not sent';
   $('clients').textContent = s.clients.open;
   $('clientsTotal').textContent = s.clients.total + ' since start';
-  const perClient = s.clients.list.length
-    ? Math.round(s.clients.list.reduce((t, c) => t + c.eventBytesPerMin, 0) / s.clients.list.length)
-    : 0;
-  $('evRate').textContent = kb(perClient);
+  // Only clients old enough to have a real rate; the rest report null on purpose.
+  const rated = s.clients.list.filter((c) => c.eventBytesPerMin != null);
+  $('evRate').textContent = rated.length
+    ? kb(Math.round(rated.reduce((t, c) => t + c.eventBytesPerMin, 0) / rated.length))
+    : '—';
   $('cacheHits').textContent = s.registryCache.hits;
   $('cacheBytes').textContent = kb(s.registryCache.bytesServed) + ' HA never rebuilt';
 

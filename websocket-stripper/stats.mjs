@@ -81,13 +81,17 @@ export function snapshot(extra = {}) {
     before += t.before; after += t.after;
   }
   const clients = [...conns.values()].map((c) => {
-    const mins = Math.max((now - c.since) / 60000, 1 / 60);
+    // A per-minute rate taken from a connection that is four seconds old is not a
+    // measurement, it is that connection's opening burst multiplied by fifteen. Report null
+    // until a full minute exists to divide by, and let the panel render that as "—".
+    const ageMs = now - c.since;
+    const rate = ageMs >= 60000 ? Math.round(c.eventBytes / (ageMs / 60000)) : null;
     return {
       id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize,
       connectedSec: Math.round((now - c.since) / 1000), messages: c.msgs,
       fromHA: c.fromHA, toBrowser: c.toBrowser,
       eventBytes: c.eventBytes,
-      eventBytesPerMin: Math.round(c.eventBytes / mins),
+      eventBytesPerMin: rate,
     };
   }).sort((a, b) => a.id - b.id);
 

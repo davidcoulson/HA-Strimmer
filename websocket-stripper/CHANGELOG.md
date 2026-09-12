@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026.09.12.12 — 2026-09-12
+
+Three corrections to the new panel, all found by deploying it and reading its own output.
+
+**Update traffic counted far more than updates.** A message was filed as event traffic when
+it matched none of the four trimmed categories, which swept in `lovelace/config` and every
+other untrimmed reply. It now requires `type === "event"`.
+
+**A per-minute rate from a four-second-old connection is not a measurement.** Dividing an
+opening burst by a fraction of a minute produced rates in the megabytes. The rate is null
+until a connection has a full minute behind it, and the panel renders that as "—".
+
+**The instance size was always zero.** It was learned from a browser's `get_states`, but the
+modern frontend subscribes instead of polling and may never send one. Taken from the control
+connection's own fetch instead, which asks for every state by definition.
+
 ## 2026.09.12.11 — 2026-09-12
 
 **A statistics panel in the Home Assistant sidebar, and a JSON API behind it.** Until now the

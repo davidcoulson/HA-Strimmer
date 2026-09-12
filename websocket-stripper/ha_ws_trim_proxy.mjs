@@ -43,7 +43,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.11';
+const VERSION = '2026.09.12.12';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -286,6 +286,10 @@ function applyOverrides(set, realIds) {
 async function buildAllow(rpc, renderTemplate) {
   const states = await rpc({ type: 'get_states' });
   const realIds = states.map((s) => s.entity_id);
+  // The control connection asks for every state by definition, so this is the instance size.
+  // Do NOT learn it from a browser's get_states instead: the modern frontend subscribes
+  // rather than polling, so that path can go a whole uptime without ever firing.
+  INSTANCE_ENTITIES = states.length;
   const byId = new Map(states.map((st) => [st.entity_id, st]));
   const registries = await fetchRegistries(rpc);
   const union = new Set();
@@ -684,9 +688,8 @@ const RESOURCE_CACHE = new Map();     // url -> { tested:Set, present:Set|null, 
 let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
 // Per-dashboard resource figures for the stats panel. Populated by buildResources().
 let RESOURCE_STATS = new Map();       // dash -> { kept, dropped, keptKB, droppedKB }
-// How big the instance actually is, learned from the first untrimmed get_states we see
-// rather than counted up front — that answer is the whole instance by definition, so it is
-// both free and exactly right. Lets the panel say "104 of 9,751" instead of just "104".
+// How big the instance actually is, taken from the control connection's own get_states —
+// which asks for everything by definition. Lets the panel say "104 of 9,751", not just "104".
 let INSTANCE_ENTITIES = 0;
 
 // Every token a dashboard might need a resource FOR: `custom:x` card/row/badge/feature types,
@@ -1116,10 +1119,14 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
     // smaller when permessage-deflate is on, and deliberately not what the panel reports.
     const inBytes = Buffer.byteLength(s);
     let cat = null;
+    let isEvent = false;
     const done = () => {
       const outBytes = Buffer.byteLength(s);
       if (cat) stats.recordTrim(cat, inBytes, outBytes);
-      stats.connTraffic(connId, inBytes, outBytes, cat === null);
+      // Strictly `type === "event"`. This used to be `cat === null`, i.e. "not one of the
+      // four trimmed categories", which swept up lovelace/config and every other untrimmed
+      // reply and reported the lot as live update traffic.
+      stats.connTraffic(connId, inBytes, outBytes, isEvent);
       return safeSend(s);
     };
     try { m = JSON.parse(s); } catch { return done(); }
@@ -1214,6 +1221,7 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       }
       if (changed) s = JSON.stringify(m);
       stats.recordEvent(Buffer.byteLength(s));
+      isEvent = true;
     }
     return done();
   });
