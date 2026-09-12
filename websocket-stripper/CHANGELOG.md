@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026.09.12.07 — 2026-09-12
+
+**The Configuration tab now explains itself.** Added `translations/en.yaml`, so every option
+renders with a proper name and description in Home Assistant instead of a bare key like
+`resources_always_forward`. The warnings that matter are in the UI now — that
+`trim_resources` can fail silently, that `compress_websocket` should be left on, and that
+an entity read by panel-side JavaScript needs `always_forward` while one only written does
+not. Two tests keep the file in step with the schema in both directions.
+
+**Documentation corrected.** The README and DOCS both still claimed registries and
+custom-card resources "pass through untouched", which stopped being true when registry
+trimming landed. Both now describe what is actually trimmed, and the README's example config
+shows the current options rather than only the original four.
+
+
 ## 2026.09.12.06 — 2026-09-12
 
 An icon namespace is matched **both** as `ns:` (how a user writes it) and as a registration
