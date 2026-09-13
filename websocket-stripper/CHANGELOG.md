@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026.09.13.08 — 2026-09-13
+
+**Fixed: an infinite redirect loop behind your own HTTPS reverse proxy.**
+
+If you put Caddy, nginx or Traefik in front of the add-on to terminate TLS, pages never
+loaded and the URL degenerated into `.../:8123./:8123./:8123./...`. Two separate defects, both
+caused by `http-proxy`'s `autoRewrite`:
+
+1. It rewrites a redirect's **host** but never its **scheme**. `changeOrigin` makes Home
+   Assistant see the request as arriving at its own address, so its absolute redirects name
+   that address. `autoRewrite` corrected the host and left the scheme alone — so the browser
+   was sent from `https://your.host/…` to `http://your.host/…`, the edge proxy bounced it
+   straight back to HTTPS, HA reissued the same redirect, and round it went.
+2. Absolute URLs **inside query parameters** were never touched, so the auth flow's
+   `redirect_uri` still pointed at HA's internal LAN address — unreachable from outside.
+   That is the half that broke logging in remotely.
+
+`autoRewrite` is now off, and the rewrite is done properly in a `proxyRes` handler: scheme
+and host together, plus `redirect_uri` and `hass_url`. Relative redirects stay relative,
+genuinely third-party redirects are left alone, and a **custom-scheme `redirect_uri` — which
+is how the iOS and Android companion apps complete authentication — is explicitly preserved**
+rather than mangled into an https URL the app cannot follow.
+
+The scheme and host are read from the **first** entry of `x-forwarded-proto`/`-host`, because
+`xfwd` appends our own hop (Caddy's `https` arrives as `https,http`).
+
+Credit where it is due: this was root-caused and fixed by the upstream maintainer
+(GabrielGoldsteinAnidea) on a branch that was never merged, so this fork carried the bug
+despite being well ahead of upstream otherwise. Cherry-picked here with authorship intact;
+the only change was the version number, upstream having called it `0.2.4-rc1`.
+
+Reported in upstream issues #9 (genik70, dimatx) and #8 (companion app).
+
 ## 2026.09.13.07 — 2026-09-13
 
 **Every connection now reports how long it took to become useful.** Three numbers per client,
