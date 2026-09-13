@@ -121,6 +121,49 @@ describe('per-dashboard allowlists', () => {
 // same WAN address overwrite each other. A cookie is per-browser, which is the granularity
 // actually wanted — and it is what makes remote access through a tunnel work, where every
 // client arrives from one address.
+describe('per-dashboard always_forward', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash,auto-dash', port,
+      // Only test-dash may see the decoys. group-dash must not pay for them — that is the
+      // entire reason this option exists: a global always_forward puts the cost on every
+      // panel, which on a real instance meant 252 update entities landing on a wall panel
+      // that shows four lights.
+      extraEnv: { DASHBOARD_OVERRIDES: JSON.stringify([
+        { dashboard: 'test-dash', always_forward: ['/^sensor\\.decoy_/'] },
+      ]) },
+    });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  // FIRST in this block on purpose: the IP hint set by a page GET lives for ten minutes, so a
+  // test that fetched a dashboard page would leave this client attributed and never see the
+  // union at all.
+  it('still includes them in the union, so an unattributed client is never short', async () => {
+    const union = await injectedFor(port, mock, null);
+    assert.ok(union.has('sensor.decoy_power'), 'union covers whatever dashboard it might be');
+    assert.ok(union.has('light.bedroom'), 'and still covers the other dashboard');
+  });
+
+  it('adds the entities to the named dashboard only', async () => {
+    const named = await injectedFor(port, mock, '/test-dash/main');
+    assert.ok(named.has('sensor.decoy_power'), 'the named dashboard gets the override');
+    assert.ok(named.has('sensor.decoy_energy'));
+  });
+
+  it('leaves every other dashboard untouched', async () => {
+    const other = await injectedFor(port, mock, '/auto-dash/main');
+    assert.ok(!other.has('sensor.decoy_power'), 'another dashboard must not pay for it');
+    assert.ok(!other.has('sensor.decoy_energy'));
+    assert.ok(other.has('light.bedroom'), 'but still gets its own entities');
+  });
+
+});
+
 describe('cookie attribution survives a shared IP', () => {
   let mock, proxy, port;
   before(async () => {

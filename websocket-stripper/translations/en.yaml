@@ -58,6 +58,14 @@ configuration:
       every integration and is sent on every page load — 193KB across 115 domains on a large
       install. Off by default: the frontend uses it for service pickers and the automation
       editor, so this is fine for a kiosk and visibly lossy in the admin UI.
+  dashboard_overrides:
+    name: Per-dashboard entity rules
+    description: >-
+      Always/never lists that apply to ONE dashboard instead of all of them. The global lists
+      above are right for something every dashboard needs; they are wrong for something a
+      single dashboard needs, because every panel then pays for it. Give a dashboard's
+      url_path, then its own always_forward / never_forward patterns — same syntax as the
+      global lists. The global never list still wins last.
   resources_always_forward:
     name: Always send these resources
     description: >-

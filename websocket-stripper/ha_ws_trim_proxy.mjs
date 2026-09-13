@@ -44,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.21';
+const VERSION = '2026.09.13.01';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -109,6 +109,25 @@ function parseRules(v) {
 }
 const ALWAYS = parseRules(OPT.always_forward ?? process.env.ALWAYS_FORWARD);
 const NEVER = parseRules(OPT.never_forward ?? process.env.NEVER_FORWARD);
+// Per-dashboard always/never, on top of the global lists above.
+//
+// The global lists are the right shape for something every dashboard needs (a clock, an
+// Assist pipeline). They are the wrong shape for something ONE dashboard needs: forcing
+// `update.*` in globally to fix a sidebar counter on the admin dashboard added 252 entities
+// to a wall panel that shows four lights, which is most of the trimming given back.
+// dash -> { always: rules, never: rules }
+const PER_DASH_RULES = new Map(
+  (() => {
+    const raw = OPT.dashboard_overrides
+      ?? (process.env.DASHBOARD_OVERRIDES ? JSON.parse(process.env.DASHBOARD_OVERRIDES) : []);
+    return Array.isArray(raw) ? raw : [];
+  })()
+    .filter((o) => o && typeof o.dashboard === 'string')
+    .map((o) => [o.dashboard, {
+      always: parseRules(o.always_forward),
+      never: parseRules(o.never_forward),
+    }]),
+);
 const matchesAny = (rules, id) => rules.some((r) => (r.re ? r.re.test(id) : r.literal === id));
 
 if (!ALLOW_TOKEN) {
@@ -273,13 +292,19 @@ async function renderTemplates(cfg, renderTemplate) {
 // the union: `always_forward` exists for entities no card names — the Assist pipeline and
 // wake-word entities a Voice Satellite card drives, say — and those are needed on whichever
 // dashboard the kiosk actually has open, not merely somewhere in the union.
-function applyOverrides(set, realIds) {
+// `dash` is the dashboard this set belongs to, or null for the union. Per-dashboard rules are
+// applied ON TOP of the global ones, and the never list still wins last — a global `never` is
+// a statement about the whole instance, so a per-dashboard `always` must not override it.
+function applyOverrides(set, realIds, dash = null) {
+  const extra = (dash && PER_DASH_RULES.get(dash)) || { always: [], never: [] };
   const out = new Set(set);
-  ALWAYS.forEach((r) => {
+  [...ALWAYS, ...extra.always].forEach((r) => {
     if (r.literal) out.add(r.literal);
     else realIds.forEach((eid) => { if (r.re.test(eid)) out.add(eid); });
   });
-  [...out].forEach((eid) => { if (matchesAny(NEVER, eid)) out.delete(eid); });
+  [...out].forEach((eid) => {
+    if (matchesAny(NEVER, eid) || matchesAny(extra.never, eid)) out.delete(eid);
+  });
   return out;
 }
 
@@ -326,7 +351,10 @@ async function buildAllow(rpc, renderTemplate) {
     throw new Error(`no dashboard config available yet (all ${failed} failed) — HA not ready, or none of these url_paths exist`);
   }
   const baseN = union.size;
-  for (const [p, set] of perDash) perDash.set(p, applyOverrides(set, realIds));
+  for (const [p, set] of perDash) perDash.set(p, applyOverrides(set, realIds, p));
+  // The union takes every per-dashboard set after ITS own overrides, so an unattributed
+  // connection is never served less than the dashboard it might actually be showing.
+  for (const set of perDash.values()) set.forEach((e) => union.add(e));
   const withOverrides = applyOverrides(union, realIds);
   // Registry reachability is computed against the UNION deliberately: a connection served a
   // single dashboard's entities may still legitimately name a device or area belonging to
@@ -1102,7 +1130,10 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') serviceIds.add(m.id);
     // No event_type means "every event", which includes state_changed.
     if (STRIP && m && m.type === 'subscribe_events'
-        && (!m.event_type || m.event_type === 'state_changed')) stateChangedSubs.add(m.id);
+        && (!m.event_type || m.event_type === 'state_changed')) {
+      stateChangedSubs.add(m.id);
+      log(`subscribe_events(${m.event_type ?? 'ALL EVENTS'}) id=${m.id} from ${meta.ip ?? '?'} dash=${dash ?? '(union)'}`);
+    }
     if (STRIP && m && m.type === 'subscribe_entities' && !m.entity_ids) {
       // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
       // nothing", it's "no filter" (HA: `set(msg["entity_ids"]) or None`). Sending one would
@@ -1190,107 +1221,78 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       logThrottled('unparsed-frame', `frame that is neither binary nor JSON (${raw?.length ?? '?'} bytes): ${e.message}`);
       return done();
     }
-    if (Array.isArray(m)) {
-      const before = m.length;
-      const kept = m.filter((x) => !dropStateChanged(x));
-      cat = null;
-      stats.recordTraffic(`event:state_changed (batched x${before})`, inBytes);
-      logThrottled('batch-ids', `batched frame: dash=${dash} allow=${allow.size} ids=${JSON.stringify([...new Set(m.map((x) => x?.id))].slice(0, 4))} `
-        + `subs=${JSON.stringify([...stateChangedSubs])} `
-        + `entities=${JSON.stringify(m.slice(0, 4).map((x) => {
-            const id = x?.event?.data?.entity_id;
-            return `${id}:${allow.has(id) ? 'ALLOWED' : 'blocked'}`;
-          }))}`);
-      if (!kept.length) return;                       // nothing survived: send nothing
-      if (kept.length !== before) {
-        s = JSON.stringify(kept);
-        logThrottled('batch-trim', `batched state_changed trimmed ${before} -> ${kept.length} per frame${dash ? ` (${dash})` : ''}`);
+
+    // Apply the trims to ONE message.
+    //
+    // All of this used to be written against the top-level object, so a BATCHED frame — Home
+    // Assistant packs several messages into a single JSON array — bypassed every trim. That is
+    // not a small leak: ~13.5MB of untrimmed registry rode inside batched frames on every
+    // connection while `trim_registries` was on and logging success for the unbatched ones.
+    // Returns null to drop the message entirely.
+    let changed = false;
+    const transform = (msg) => {
+      if (!msg || typeof msg !== 'object') return msg;
+      if (dropStateChanged(msg)) return null;
+
+      if (STRIP && msg.type === 'result' && getStatesIds.has(msg.id) && Array.isArray(msg.result)) {
+        const before = msg.result.length;
+        msg.result = msg.result.filter((e) => allow.has(e.entity_id));
+        getStatesIds.delete(msg.id);
+        changed = true;
+        cat = 'states';
+        if (before > INSTANCE_ENTITIES) INSTANCE_ENTITIES = before;
+        log(`get_states trimmed ${before} -> ${msg.result.length}${dash ? ` (${dash})` : ''}`);
       }
-      stats.connTraffic(connId, inBytes, Buffer.byteLength(s), true);
-      stats.recordEvent(Buffer.byteLength(s));
-      return safeSend(s);
-    }
-    // A single (unbatched) state_changed from the same subscription gets the same treatment.
-    if (dropStateChanged(m)) return;
-    if (STRIP && m && m.type === 'result' && getStatesIds.has(m.id) && Array.isArray(m.result)) {
-      const before = m.result.length;
-      m.result = m.result.filter((e) => allow.has(e.entity_id));
-      getStatesIds.delete(m.id);
-      s = JSON.stringify(m);
-      cat = 'states';
-      if (before > INSTANCE_ENTITIES) INSTANCE_ENTITIES = before;
-      log(`get_states trimmed ${before} -> ${m.result.length}${dash ? ` (${dash})` : ''}`);
-    }
-    // Registry trimming. The entity registry is one row per entity for the WHOLE instance —
-    // on a 9,553-entity install that is megabytes of JSON the kiosk parses on every load,
-    // dwarfing the states we just trimmed to a few hundred. Cut it to the entities this
-    // connection can actually see, plus the devices/areas those rows still reference so
-    // names and area assignments keep resolving.
-    // Note the guard is on `m.result` being an object of ANY shape, not on it being an
-    // array: `list_for_display` answers with `{entity_categories, entities}`, and an
-    // Array.isArray() guard here silently skipped the largest payload of the lot.
-    if (STRIP && TRIM_REGISTRIES && m && m.type === 'result' && registryIds.has(m.id) && m.result && typeof m.result === 'object') {
-      const kind = registryIds.get(m.id);
-      registryIds.delete(m.id);
+    if (STRIP && TRIM_REGISTRIES && msg && msg.type === 'result' && registryIds.has(msg.id) && msg.result && typeof msg.result === 'object') {
+      const kind = registryIds.get(msg.id);
+      registryIds.delete(msg.id);
       const rowsOf = (r) => (Array.isArray(r) ? r.length : (Array.isArray(r?.entities) ? r.entities.length : -1));
-      const before = rowsOf(m.result);
-      m.result = trimRegistry(kind, m.result, allow);
-      const after = rowsOf(m.result);
+      const before = rowsOf(msg.result);
+      msg.result = trimRegistry(kind, msg.result, allow);
+      const after = rowsOf(msg.result);
       if (after !== before) {
-        s = JSON.stringify(m);
+        changed = true;
         logThrottled(`reg:${kind}`, `${kind} registry trimmed ${before} -> ${after}${dash ? ` (${dash})` : ''}`);
       }
       cat = `registry:${kind}`;
       // Keep the trimmed rows for the next connection on this allowlist. Stored as a JSON
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
-      REG_RESPONSE_CACHE.set(regCacheKey(kind, dash), JSON.stringify(m.result));
+      REG_RESPONSE_CACHE.set(regCacheKey(kind, dash), JSON.stringify(msg.result));
     }
-    // get_services, cut to the domains this connection can actually see.
-    //
-    // `homeassistant` is always kept: it carries the generic services (turn_on, toggle,
-    // reload) that apply across domains, so dropping it breaks far more than it saves.
-    if (STRIP && TRIM_SERVICES && m && m.type === 'result' && serviceIds.has(m.id)
-        && m.result && typeof m.result === 'object' && !Array.isArray(m.result)) {
-      serviceIds.delete(m.id);
+    if (STRIP && TRIM_SERVICES && msg && msg.type === 'result' && serviceIds.has(msg.id)
+        && msg.result && typeof msg.result === 'object' && !Array.isArray(msg.result)) {
+      serviceIds.delete(msg.id);
       const keep = new Set(['homeassistant']);
       for (const id of allow) keep.add(String(id).split('.')[0]);
-      const before = Object.keys(m.result).length;
+      const before = Object.keys(msg.result).length;
       const next = {};
-      for (const [domain, svcs] of Object.entries(m.result)) if (keep.has(domain)) next[domain] = svcs;
+      for (const [domain, svcs] of Object.entries(msg.result)) if (keep.has(domain)) next[domain] = svcs;
       const after = Object.keys(next).length;
       if (after && after !== before) {
-        m.result = next;
-        s = JSON.stringify(m);
+        msg.result = next;
+        changed = true;
         logThrottled('services', `get_services trimmed ${before} -> ${after} domains${dash ? ` (${dash})` : ''}`);
       }
       cat = 'services';
     }
-    // Lovelace resources, trimmed to the ones this dashboard actually needs. Only ever for a
-    // connection we attributed to a dashboard: an unattributed connection gets the union of
-    // entities, and must likewise get every resource — guessing wrong here renders a card as
-    // "Custom element doesn't exist", which is far worse than sending bytes it won't use.
-    if (STRIP && TRIM_RESOURCES && m && m.type === 'result' && resourceIds.has(m.id) && Array.isArray(m.result)) {
-      resourceIds.delete(m.id);
+    if (STRIP && TRIM_RESOURCES && msg && msg.type === 'result' && resourceIds.has(msg.id) && Array.isArray(msg.result)) {
+      resourceIds.delete(msg.id);
       const keep = dash ? RESOURCES_BY_DASH.get(dash) : null;
       if (keep?.size) {
-        const before = m.result.length;
-        m.result = m.result.filter((r) => keep.has(r?.url));
-        if (m.result.length !== before) {
-          s = JSON.stringify(m);
-          logThrottled('resources', `lovelace resources trimmed ${before} -> ${m.result.length} (${dash})`);
+        const before = msg.result.length;
+        msg.result = msg.result.filter((r) => keep.has(r?.url));
+        if (msg.result.length !== before) {
+          changed = true;
+          logThrottled('resources', `lovelace resources trimmed ${before} -> ${msg.result.length} (${dash})`);
         }
         cat = 'resources';
       }
     }
-    // Defensive egress filter (belt-and-suspenders): HA already trims to the injected
-    // entity_ids, so this is normally a no-op. But if a future HA ever ignored that
-    // filter, re-filter the subscribe_entities event payload to the allowlist here so
-    // the full firehose can never leak to the browser. Compressed format: a=added,
-    // c=changed (both dicts keyed by entity_id), r=removed (list of entity_ids).
-    // (Adapted from PR #1 / DragonHunter274's homeassistant-entity-filter-proxy.)
-    if (STRIP && m && m.type === 'event' && subEntityIds.has(m.id) && m.event) {
-      const ev = m.event; let changed = false;
+    if (STRIP && msg && msg.type === 'event' && subEntityIds.has(msg.id) && msg.event) {
+      // NB: sets the OUTER `changed`. A local one here would shadow it, the frame would
+      // never be re-serialised, and this filter would silently do nothing.
+      const ev = msg.event;
       for (const k of ['a', 'c']) {
         if (ev[k]) for (const eid of Object.keys(ev[k])) {
           if (!allow.has(eid)) { delete ev[k][eid]; changed = true; }
@@ -1301,10 +1303,33 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
         ev.r = ev.r.filter((eid) => allow.has(eid));
         if (ev.r.length !== before) changed = true;
       }
-      if (changed) s = JSON.stringify(m);
-      stats.recordEvent(Buffer.byteLength(s));
+      stats.recordEvent(Buffer.byteLength(JSON.stringify(msg)));
       isEvent = true;
     }
+      return msg;
+    };
+
+    if (Array.isArray(m)) {
+      const kinds = [...new Set(m.map((x) => (x?.type === 'event'
+        ? `event:${x.event?.event_type ?? 'entity-diff'}`
+        : (x?.type ?? '?'))))].sort().join('+');
+      const before = m.length;
+      const kept = [];
+      for (const x of m) { const t = transform(x); if (t !== null) kept.push(t); }
+      stats.recordTraffic(`batched ${kinds}`, inBytes);
+      if (!kept.length) return;                        // nothing survived: forward nothing
+      if (changed || kept.length !== before) {
+        s = JSON.stringify(kept);
+        cat = cat ?? 'batched';
+        logThrottled('batch-trim', `batched frame: ${before} -> ${kept.length} msgs, `
+          + `${inBytes} -> ${Buffer.byteLength(s)} bytes${dash ? ` (${dash})` : ''}`);
+      }
+      return done();
+    }
+
+    const single = transform(m);
+    if (single === null) return;
+    if (changed) s = JSON.stringify(single);
     return done();
   });
 

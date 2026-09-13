@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026.09.13.01 — 2026-09-13
+
+**Per-dashboard `always_forward` / `never_forward`,** via a new `dashboard_overrides` option.
+
+`always_forward` is global, which is the right shape for something every dashboard needs — a
+clock, an Assist pipeline — and the wrong shape for something one dashboard needs. Forcing
+`update.*` in globally so an admin dashboard could show a pending-updates count added **252
+entities to a wall panel showing four lights**, giving back most of the trimming.
+
+Per-dashboard rules layer on top of the global ones. The global `never` list still wins last:
+it is a statement about the whole instance, so a per-dashboard `always` must not override it.
+
+## 2026.09.12.22 — 2026-09-12
+
+**Fixed: every trim was bypassed for batched frames.** Home Assistant packs several messages
+into a single JSON array, and all the trimming was written against the top-level object — so a
+batched frame skipped `get_states`, all four registries, `get_services`, resources and the
+egress event filter alike.
+
+Measured: **13.5MB of untrimmed registry on every connection** to a panel trimmed to 104
+entities, while `trim_registries` was on and logging success for the unbatched ones. The logs
+said it was working because, for the messages it could see, it was.
+
+The trims now run per message. Batched frames are rebuilt from the surviving, trimmed messages.
+
 ## 2026.09.12.21 — 2026-09-12
 
 Removes the investigation-time logging added while tracking the `subscribe_events` leak: it
