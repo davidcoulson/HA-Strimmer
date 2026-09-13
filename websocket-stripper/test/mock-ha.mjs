@@ -52,6 +52,10 @@ const DEFAULT_RESOURCES = [
 const DEFAULT_RESOURCE_BODIES = {
   '/res/provider.js': 'window.customIconsets["cbi"]={getIcon:n=>n};',
   '/res/icon-pack.js': 'const sample="cbi:bulb";',
+  // Mirrors how Mushroom really ships: element names are built from template literals, so the
+  // string "mushroom-cover-card" appears NOWHERE in the bundle, and the only usable clue is
+  // the near-unique word "mushroom". The generic halves ("cover", "card") are absent too.
+  '/res/mushroom.js': 'const P="mushroom";for(const t of TYPES)customElements.define(`${P}-${t}-card`,C);',
 };
 
 const DEFAULT_REGISTRIES = {

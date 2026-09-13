@@ -195,7 +195,8 @@ describe('per-user always_forward', () => {
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, token);
     await c.authed;
     c.send({ type: 'subscribe_entities' });
-    await new Promise((r) => setTimeout(r, 400));
+    // The first lookup for a token opens a fresh websocket to HA; later calls hit the cache.
+    await new Promise((r) => setTimeout(r, 1200));
     const got = mock.lastSubscribeEntities();
     c.close();
     return new Set(got ?? []);
@@ -535,6 +536,49 @@ describe('resource trimming', () => {
 // get_services carries every service of every integration and is sent on every page load —
 // 193KB across 115 domains on the instance this was built against, where only 45 domains had
 // any entity at all.
+describe('resource matching: a bundle that never names its own cards', () => {
+  let mock, proxy, port;
+  before(async () => {
+    // Its own mock: this needs a specific resource set, and mutating the shared fixtures
+    // changes counts that other tests assert exactly.
+    mock = await startMockHa({
+      configs: { 'mush-dash': { views: [{ cards: [
+        { type: 'custom:mushroom-cover-card', entity: 'cover.shade_left' },
+      ] }] } },
+      resources: [
+        { id: 'm1', type: 'module', url: '/res/mushroom.js' },
+        { id: 'm2', type: 'module', url: '/res/unrelated.js' },
+      ],
+      resourceBodies: {
+        // Exactly how Mushroom ships: names built from template literals, so the string
+        // "mushroom-cover-card" is absent, and so are the generic halves "cover" and "card".
+        '/res/mushroom.js': 'const P="mushroom";for(const t of TYPES)customElements.define(`${P}-${t}-card`,C);',
+        '/res/unrelated.js': 'export const widget = 1;',
+      },
+    });
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'mush-dash', port, extraEnv: { TRIM_RESOURCES: '1' } });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  // Regression: Mushroom builds element names from template literals, so "mushroom-cover-card"
+  // appears nowhere in mushroom.js. The old matcher required every fragment to be present AND
+  // two distinctive ones, which no `<oneword>-<generic>-card` name can satisfy — so it silently
+  // dropped the whole Mushroom family and every card using it rendered as an error.
+  it('keeps a bundle identified only by one rare fragment', async () => {
+    await httpGet(`http://127.0.0.1:${port}/mush-dash`);
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    const kept = (await c.rpc({ type: 'lovelace/resources' })).result.map((r) => r.url);
+    c.close();
+    assert.ok(kept.includes('/res/mushroom.js'),
+      `mushroom.js must survive trimming; kept: ${JSON.stringify(kept)}`);
+    assert.ok(!kept.includes('/res/unrelated.js'),
+      `trimming should drop the unused bundle; kept=${JSON.stringify(kept)}`);
+  });
+});
+
 describe('get_services trimming', () => {
   let mock, proxy, port;
   before(async () => {
