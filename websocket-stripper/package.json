@@ -17,5 +17,8 @@
     "mqtt": "^5.15.2",
     "multicast-dns": "^7.2.5",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.10.0"
   }
 }
