@@ -96,6 +96,10 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     state.lastXFF = req.headers['x-forwarded-for'] ?? null;
     state.httpHits.push({ url: req.url, xff: state.lastXFF });
     res.setHeader('x-echo-xff', state.lastXFF ?? '');
+    // Echoed so a test can assert the invariant Home Assistant actually enforces: the
+    // X-Forwarded-For and X-Forwarded-Proto chains must agree in length (or proto must be a
+    // single value). A mismatch is what makes HA answer 400.
+    res.setHeader('x-echo-xfproto', req.headers['x-forwarded-proto'] ?? '');
     // A resource with an explicit body, for tests that need real content rather than the
     // echoed URL — quotes and colons do not survive a round trip through a URL.
     const path = req.url.split('?')[0];
