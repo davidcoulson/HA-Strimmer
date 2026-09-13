@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.08';
+const VERSION = '2026.09.13.09';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1507,6 +1507,28 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       && x.event && x.event.a && Object.keys(x.event.a).length,
     );
     const carriesInitialState = (msg) => (Array.isArray(msg) ? msg.some(isInitialState) : isInitialState(msg));
+    // Measure the `a` BLOCK, not the frame it arrived in.
+    //
+    // This used to be `Buffer.byteLength(s)` — the whole frame. HA batches messages into an
+    // array, so that number silently included whatever else was bundled alongside: sometimes
+    // lovelace/config and the registries, sometimes nothing. Measured live it varied by 164x
+    // between two clients on the SAME dashboard with the SAME 149-entity allowlist (246KB vs
+    // 1.5KB), which makes it useless as a payload figure and actively misleading next to a
+    // column header that says "Payload".
+    //
+    // The entity count is reported beside it deliberately. Bytes alone cannot be sanity-checked
+    // by a reader, but "447 bytes / 3 entities" against a 104-entity allowlist is visibly a
+    // partial first block rather than a mystery, and the panel stops being able to imply a
+    // cold-start payload it did not actually observe.
+    const initialStateSize = (msg) => {
+      let bytes = 0, entities = 0;
+      for (const x of (Array.isArray(msg) ? msg : [msg])) {
+        if (!isInitialState(x)) continue;
+        bytes += Buffer.byteLength(JSON.stringify(x.event.a));
+        entities += Object.keys(x.event.a).length;
+      }
+      return { bytes, entities };
+    };
 
     let s = raw.toString(); let m;
     // Sizes are measured on the decoded JSON, i.e. what the browser has to parse. The wire is
@@ -1543,17 +1565,18 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       if (!timedInitial && carriesInitialState(m)) {
         timedInitial = true;
         const queuedAt = Date.now();
-        const bytes = Buffer.byteLength(s);
+        const { bytes, entities } = initialStateSize(m);
         return safeSend(s, () => {
           const sentAt = Date.now();
           stats.connTiming(connId, {
             msToEntityData: sentAt - tOpen,
             initialPayloadBytes: bytes,
+            initialEntityCount: entities,
             initialDrainMs: sentAt - queuedAt,
           });
           log(`entity payload delivered to ${meta.ip ?? '?'}${dash ? ` (${dash})` : ''}: `
-            + `${(bytes / 1024).toFixed(0)}KB in ${sentAt - tOpen}ms from connect `
-            + `(${sentAt - queuedAt}ms on the wire)`);
+            + `${(bytes / 1024).toFixed(1)}KB / ${entities} entities in ${sentAt - tOpen}ms from connect `
+            + `(${sentAt - queuedAt}ms to the network stack)`);
         });
       }
       return safeSend(s);

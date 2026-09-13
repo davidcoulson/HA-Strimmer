@@ -224,6 +224,37 @@ describe('stats API over HTTP', () => {
     c.close();
   });
 
+  it('sizes the entity block, not the frame HA batched it into', async () => {
+    // Regression: this measured `Buffer.byteLength(s)` — the whole frame. HA batches messages
+    // into an array, so the number silently absorbed whatever was bundled alongside. On a live
+    // instance two clients on the SAME dashboard with the SAME 149-entity allowlist reported
+    // 246KB and 1.5KB, a 164x spread, because one had the registries batched in and the other
+    // did not. A "Payload" column that varies 164x for identical payloads is worse than absent.
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    c.send({ type: 'subscribe_entities', id: 92 });
+    await new Promise((r) => setTimeout(r, 200));
+
+    // A small `a` block, batched with ~200KB of unrelated filler — an oversized result of the
+    // kind HA really does pack alongside it.
+    const a = { 'light.living_room': { s: 'on' }, 'sensor.temperature': { s: '21' } };
+    const aBytes = Buffer.byteLength(JSON.stringify(a));
+    const filler = { id: 999, type: 'result', success: true, result: { pad: 'x'.repeat(200000) } };
+    mock.pushEntityEventBatched({ a }, filler);
+    await new Promise((r) => setTimeout(r, 500));
+
+    const s = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body);
+    const me = s.clients.list.find((x) => x.initialPayloadBytes != null && x.initialEntityCount === 2);
+    assert.ok(me, `no connection reported the batched initial state; got ${JSON.stringify(s.clients.list.map((x) => [x.id, x.initialPayloadBytes, x.initialEntityCount]))}`);
+    assert.equal(me.initialPayloadBytes, aBytes,
+      'the reported payload must be exactly the `a` block, excluding the batched filler');
+    assert.ok(me.initialPayloadBytes < 1000,
+      `200KB of batched filler must not be counted as entity payload (got ${me.initialPayloadBytes})`);
+    assert.equal(me.initialEntityCount, 2,
+      'the entity count is reported so the byte figure can be sanity-checked');
+    c.close();
+  });
+
   it('reports the cold-start payload only, not every later diff', async () => {
     // A re-subscribe or a later `a` block is a different event. Averaging them into the same
     // field would quietly destroy the cold-start number this exists to report — which is the

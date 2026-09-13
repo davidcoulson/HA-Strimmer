@@ -241,6 +241,17 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
         }
       }
     },
+    // Push the initial `a` block BATCHED into an array alongside unrelated messages, which is
+    // what HA actually does. The proxy must size the `a` block, not the frame — measuring the
+    // frame is how a 149-entity dashboard reported a 246KB "payload" on one client and 1.5KB
+    // on another.
+    pushEntityEventBatched(payload, ...alongside) {
+      for (const c of state.conns) {
+        for (const id of c.entitySubIds) {
+          c.ws.send(JSON.stringify([{ id, type: 'event', event: payload }, ...alongside]));
+        }
+      }
+    },
     // Fire an HA event on every connection subscribed to it.
     fireEvent(event_type, data = {}) {
       for (const c of state.conns) {

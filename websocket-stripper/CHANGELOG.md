@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026.09.13.09 — 2026-09-13
+
+**Fixed: the connection-timing panel was reporting a payload size it had not measured.**
+
+`initialPayloadBytes` sized the whole websocket *frame* the initial entity block arrived in.
+Home Assistant batches messages into a JSON array, so that number silently absorbed whatever
+else was bundled alongside — sometimes `lovelace/config` and the registries, sometimes nothing
+at all.
+
+Caught by reading the live panel rather than the code: two clients on the **same dashboard**
+with the **same 149-entity allowlist** reported **246 KB** and **1.5 KB**, a 164× spread. A
+third reported a 447-byte "full entity payload" for a 104-entity dashboard, which is not
+physically possible. The measurement now sizes the `a` block itself and ignores the batch.
+
+**`initialEntityCount` is new, and is reported beside the bytes on purpose.** A byte count on
+its own cannot be checked by the person reading it. "447 B / 3 entities" next to a 104-entity
+allowlist is visibly a partial first block; "447 B" alone just looks like a very fast dashboard.
+
+**The panel also stops overstating what these numbers mean.** It previously called *Ready in*
+"most of what a person experiences as the dashboard coming up" and *On the wire* "the dominant
+term on a phone over cellular". Neither survives measurement:
+
+- *Ready in* is dominated by how long the **frontend** takes to get around to subscribing — auth
+  handshake, JavaScript parse — not by moving the payload. A LAN wall panel took **671 ms for
+  1.5 KB** while a phone on 5G took **207 ms for 215 KB**.
+- *On the wire* measures handoff to the kernel socket buffer, not receipt by the device. A
+  215 KB payload "drained" in **6 ms** over cellular — far quicker than that link can physically
+  carry it. The buffer simply swallowed it.
+
+Both are now labelled as diagnostics, in the panel and in the code, with the caution that
+neither should be quoted as a speed. They are still worth having: they are the only view of a
+native companion-app socket, which no browser tooling can see at all. They are just not a
+benchmark, and the panel no longer implies they are.
+
 ## 2026.09.13.08 — 2026-09-13
 
 **Fixed: an infinite redirect loop behind your own HTTPS reverse proxy.**

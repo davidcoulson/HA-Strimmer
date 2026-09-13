@@ -92,7 +92,7 @@ export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, ho
     user: null,
     // How long this connection took to become useful, and how much of that was the link.
     // Null until the first full entity payload has actually gone out; see connTiming.
-    msToEntityData: null, initialPayloadBytes: null, initialDrainMs: null,
+    msToEntityData: null, initialPayloadBytes: null, initialEntityCount: null, initialDrainMs: null,
     since: Date.now(), fromHA: 0, toBrowser: 0, eventBytes: 0, msgs: 0,
   });
   return id;
@@ -116,21 +116,34 @@ export function connIdentity(id, { allowSize, user } = {}) {
 // This is the add-on's own answer to "is it actually snappier", measured for EVERY client
 // including native apps that cannot be instrumented from outside. Three numbers:
 //
-//   msToEntityData      websocket upgrade -> the first full entity payload written to the
-//                       socket. Most of what a user experiences as the dashboard "coming up".
-//   initialPayloadBytes how big that payload was, which is the part this add-on shrinks.
-//   initialDrainMs      how long that write took to leave the machine. On a fast LAN this is
-//                       ~0; on a phone over cellular it is the link, and it is the difference
-//                       between the two that the trimming buys.
+//   msToEntityData      websocket upgrade -> the first entity payload written to the socket.
+//   initialPayloadBytes how big the `a` block itself was — NOT the frame it arrived in, which
+//                       is batched with unrelated replies and varied 164x between two clients
+//                       on the same dashboard before this was fixed.
+//   initialEntityCount  how many entities that block carried. Reported so the bytes can be
+//                       sanity-checked: a byte count alone cannot tell a reader that a "cold
+//                       start payload" actually held three entities out of a 104-entity
+//                       allowlist, and a panel that cannot be checked is a panel that can lie.
+//   initialDrainMs      how long that write took to be accepted by the network stack.
+//
+// Read these as diagnostics, not as a benchmark, and do not build a performance claim on them:
+//
+//   - msToEntityData is dominated by how long the FRONTEND takes to get around to subscribing
+//     (auth handshake, JS parse), not by moving the payload. Measured live, a LAN wall panel
+//     took 671ms for 1.5KB while a phone on 5G took 207ms for 215KB.
+//   - initialDrainMs measures handoff to the kernel socket buffer, not receipt by the device.
+//     A 215KB payload "drained" in 6ms over cellular, which is physically impossible as a
+//     transfer time — the buffer simply swallowed it.
 //
 // Recorded once per connection — the FIRST payload only. A later re-subscribe is a different
 // event, and averaging them together would quietly hide the cold-start number this exists to
 // report.
-export function connTiming(id, { msToEntityData, initialPayloadBytes, initialDrainMs } = {}) {
+export function connTiming(id, { msToEntityData, initialPayloadBytes, initialEntityCount, initialDrainMs } = {}) {
   const c = conns.get(id);
   if (!c || c.msToEntityData !== null) return;
   if (Number.isFinite(msToEntityData)) c.msToEntityData = msToEntityData;
   if (Number.isFinite(initialPayloadBytes)) c.initialPayloadBytes = initialPayloadBytes;
+  if (Number.isFinite(initialEntityCount)) c.initialEntityCount = initialEntityCount;
   if (Number.isFinite(initialDrainMs)) c.initialDrainMs = initialDrainMs;
 }
 
@@ -168,6 +181,7 @@ export function snapshot(extra = {}) {
       origin: c.origin, route: c.route, host: c.host, hop: c.hop, hops: c.hops,
       msToEntityData: c.msToEntityData,
       initialPayloadBytes: c.initialPayloadBytes,
+      initialEntityCount: c.initialEntityCount,
       initialDrainMs: c.initialDrainMs,
       connectedSec: Math.round((now - c.since) / 1000), messages: c.msgs,
       fromHA: c.fromHA, toBrowser: c.toBrowser,

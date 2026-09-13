@@ -109,14 +109,20 @@
     <div class="scroll"><table id="cl"><thead>
       <tr><th>Client</th><th>From</th><th>Front door</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
     </thead><tbody></tbody></table></div>
-    <div class="note"><b>Payload</b> is the first full entity dump this connection received — the
-      one a dashboard cannot render without, and the part this add-on shrinks. <b>Ready in</b> is
-      from the websocket opening to that payload being written out, which is most of what a
-      person experiences as the dashboard coming up. <b>On the wire</b> is how much of that was
-      the link itself: near zero on a LAN, and the dominant term on a phone over cellular.
-      Compare a run with <code>strip_entities</code> off to see what the trimming is worth on a
-      slow connection. (On-the-wire means handed to the network, not acknowledged by the
-      device — a good proxy for link speed, not a round-trip measurement.)</div>
+    <div class="note"><b>Payload</b> is the first entity block this connection received, with the
+      number of entities in it — the dump a dashboard cannot render without, and the part this
+      add-on shrinks. The entity count is shown so the byte figure can be checked: a small
+      payload against a large <b>Entities</b> allowlist means a partial first block, not a tiny
+      dashboard. <b>Ready in</b> is from the websocket opening to that block being written out.
+      <b>On the wire</b> is how long that write took to be accepted by the network stack.
+      <br><br>
+      <b>Read these as diagnostics, not as a benchmark.</b> <i>Ready in</i> is dominated by how
+      long the frontend takes to get around to subscribing — auth handshake, JavaScript parse —
+      rather than by moving the payload; a LAN wall panel here took 671&nbsp;ms for 1.5&nbsp;KB
+      while a phone on 5G took 207&nbsp;ms for 215&nbsp;KB. <i>On the wire</i> means handed to
+      the kernel socket buffer, not received by the device: a 215&nbsp;KB payload "drained" in
+      6&nbsp;ms over cellular, which is far faster than any real transfer. Neither number is a
+      round trip, and neither should be quoted as a speed.</div>
     <div class="note">Live update traffic is throughput, not a saving: Home Assistant filters the
       event stream server-side from the entity list this add-on injects, so the untrimmed volume
       never exists and cannot honestly be measured. Compare it against a run with
@@ -234,7 +240,9 @@ async function tick() {
     c.host || '—',
     c.user || '—', c.dashboard || '(union — not attributed)', c.attributedVia || '—',
     c.allowSize,
-    c.initialPayloadBytes != null ? kb(c.initialPayloadBytes) : '—',
+    c.initialPayloadBytes != null
+      ? kb(c.initialPayloadBytes) + (c.initialEntityCount != null ? ` / ${c.initialEntityCount}` : '')
+      : '—',
     c.msToEntityData != null ? ms(c.msToEntityData) : '—',
     c.initialDrainMs != null ? ms(c.initialDrainMs) : '—',
     dur(c.connectedSec), c.messages, kb(c.eventBytesPerMin),
