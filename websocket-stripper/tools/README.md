@@ -51,10 +51,18 @@ reported distinctly from a slow render so the two are never confused.
 | `HA_HOST` | `127.0.0.1` | Host running both the stripper and HA |
 | `DASH` | `dashboard-test` | Dashboard `url_path` to load |
 | `RUNS` | `3` | Runs per profile per side; the **median** is reported |
-| `PROFILES` | `4G,3G (slow),no limit` | Which throttle profiles to run |
+| `PROFILES` | `4G,weak cell,no limit` | Which throttle profiles to run |
 | `CHROME` | macOS Chrome path | Edit the constant for other platforms |
 
 Ports are the two constants in the script's run loop (`9123` trimmed, `8123` untrimmed).
+
+### A note on profiles
+
+Chrome's own "Slow 3G" preset (400 kbps) is **not** useful here and is deliberately not offered.
+Home Assistant's frontend bundle is ~2.3 MB on its own, so at 400 kbps every run spends ~46
+seconds before a single entity moves, and the untrimmed side times out before it can be compared.
+That measures the profile, not the add-on. `weak cell` (1.5 Mbps / 150 ms) is a slow link that
+still completes.
 
 ### Reading the output
 

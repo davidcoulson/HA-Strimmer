@@ -23,7 +23,10 @@ if (!TOKEN) { console.error('HA_TOKEN is required'); process.exit(1); }
 // trust. Chrome DevTools' own presets, plus a 5G figure from a real measurement.
 const PROFILES = {
   '4G':        { downloadThroughput: 9000e3 / 8, uploadThroughput: 9000e3 / 8, latency: 40 },
-  '3G (slow)': { downloadThroughput: 400e3 / 8,  uploadThroughput: 400e3 / 8,  latency: 400 },
+  // A weak-but-real cellular link. NOT Chrome's "Slow 3G" (400kbps): the frontend bundle alone
+  // is ~2.3MB, so at 400kbps every run spends ~46s before an entity moves and the untrimmed side
+  // times out before it can be compared. That measures the profile, not the add-on.
+  'weak cell': { downloadThroughput: 1500e3 / 8, uploadThroughput: 750e3 / 8,  latency: 150 },
   'no limit':  { downloadThroughput: -1,         uploadThroughput: -1,         latency: 0 },
 };
 
@@ -33,7 +36,7 @@ const PROFILES = {
 const WAIT_FOR_CARD = `
   new Promise((resolve) => {
     const t0 = performance.now();
-    const deadline = t0 + 60000;
+    const deadline = t0 + 180000;
     const find = (root) => {
       if (!root) return null;
       if (root.querySelector && root.querySelector('ha-card')) return root.querySelector('ha-card');
@@ -85,15 +88,18 @@ async function once(profileName, port, label) {
     });
 
     const t0 = Date.now();
-    await page.goto(`${base}/${DASH}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await page.goto(`${base}/${DASH}`, { waitUntil: 'domcontentloaded', timeout: 180000 });
     // HA bounces through /auth/authorize if the seeded token is not accepted, which destroys
     // the execution context mid-evaluate. Retry once so a genuine redirect is measured rather
     // than reported as a crash; a second failure means we never got logged in at all.
+    // HA can bounce through more than one navigation on a slow link (auth, a reload after a
+    // websocket give-up), and each one destroys the execution context mid-evaluate. Retry a few
+    // times rather than reporting the browser's own redirect as a failed measurement.
     let cardAt = null;
-    for (let attempt = 0; attempt < 2 && cardAt == null; attempt++) {
+    for (let attempt = 0; attempt < 4 && cardAt == null; attempt++) {
       try { cardAt = await page.evaluate(WAIT_FOR_CARD); }
       catch (e) {
-        if (!/context was destroyed|Target closed/i.test(e.message) || attempt) throw e;
+        if (!/context was destroyed|Target closed/i.test(e.message) || attempt === 3) throw e;
         await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
       }
     }
@@ -113,7 +119,7 @@ async function once(profileName, port, label) {
 }
 
 const results = [];
-for (const profile of (process.env.PROFILES || '4G,3G (slow),no limit').split(',')) {
+for (const profile of (process.env.PROFILES || '4G,weak cell,no limit').split(',')) {
   for (const [label, port] of [['trimmed (stripper)', 9123], ['untrimmed (HA direct)', 8123]]) {
     for (let i = 0; i < RUNS; i++) {
       try {
