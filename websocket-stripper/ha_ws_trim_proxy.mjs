@@ -31,6 +31,7 @@ import httpProxy from 'http-proxy';
 import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
+import * as history from './history.mjs';
 
 // ---- config (add-on options.json or env) ----
 function loadOptions() {
@@ -43,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.13';
+const VERSION = '2026.09.12.14';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1273,6 +1274,11 @@ function statsExtras() {
 const statsServer = http.createServer((req, res) => {
   // Ingress rewrites the path prefix, so match on the tail rather than the whole URL.
   const path = String(req.url || '/').split('?')[0].replace(/\/+$/, '') || '/';
+  if (path.endsWith('/history.json')) {
+    const body = JSON.stringify(history.history());
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(body);
+  }
   if (path.endsWith('/stats.json')) {
     const body = JSON.stringify(stats.snapshot(statsExtras()), null, 2);
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -1290,6 +1296,13 @@ const statsServer = http.createServer((req, res) => {
 // with it — the add-on's actual job is unaffected. Log it and carry on, unlike PORT below.
 statsServer.on('error', (e) => logThrottled(`stats:${e.code || e.message}`, `stats server unavailable (${e.message}) — proxying is unaffected`));
 statsServer.listen(STATS_PORT, () => log(`stats panel on :${STATS_PORT} (ingress) — JSON at :${STATS_PORT}/stats.json`));
+
+// 24h history. /data is the add-on's persistent volume, so a restart costs one 5-minute
+// bucket rather than the whole day — which matters because the counters themselves reset.
+// In dev there is no /data; the sampler still runs, it just keeps the window in memory.
+const HISTORY_DIR = fs.existsSync('/data') ? '/data' : (process.env.HISTORY_DIR || null);
+history.start(() => stats.snapshot(statsExtras()), HISTORY_DIR);
+log(`history: sampling every ${history.INTERVAL_MS / 60000}min, keeping ${history.KEEP} buckets${HISTORY_DIR ? ` in ${HISTORY_DIR}` : ' (memory only)'}`);
 
 // ---- boot ----
 log(`ha-ws-trim-proxy v${VERSION} starting`);

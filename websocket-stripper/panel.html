@@ -39,6 +39,8 @@
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .err { color: var(--warn); }
   a { color: var(--accent); }
+  .chart { margin-bottom: 14px; }
+  .chart svg { width: 100%; height: 110px; display: block; margin-top: 4px; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; vertical-align: middle; }
 </style>
 </head>
@@ -63,6 +65,24 @@
     <div class="note">Measured before/after on real answers. Sizes are uncompressed payload — the
       bytes the browser has to parse. With <code>compress_websocket</code> on, fewer bytes than
       this actually cross the wire.</div>
+  </div>
+
+  <div class="card">
+    <h2>Last 24 hours <span id="histSpan" class="label" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div id="histEmpty" class="note">Collecting — the first sample lands within five minutes of startup.</div>
+    <div id="histBody" hidden>
+      <div class="grid" style="margin-bottom:14px">
+        <div><div class="label">Not sent, this window</div><div class="big good" id="hSaved">—</div><div class="label" id="hSavedPct">&nbsp;</div></div>
+        <div><div class="label">Update traffic</div><div class="big" id="hEvents">—</div><div class="label">total, this window</div></div>
+        <div><div class="label">Peak clients</div><div class="big" id="hPeak">—</div><div class="label" id="hNow">&nbsp;</div></div>
+      </div>
+      <div class="chart"><div class="label">Data not sent, per 5 min</div><svg id="cSaved" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="label">Clients connected</div><svg id="cClients" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="label">Update traffic, per 5 min</div><svg id="cEvents" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
+    </div>
+    <div class="note">Sampled every five minutes and kept on the add-on's own storage, so a
+      restart costs one bucket rather than the whole day. Gaps are periods the add-on was not
+      running.</div>
   </div>
 
   <div class="card">
@@ -173,6 +193,76 @@ async function tick() {
 }
 tick();
 setInterval(tick, 5000);
+
+// ---- 24h charts -------------------------------------------------------------------------
+// Inline SVG rather than a charting library: the page must stay self-contained, and three
+// sparklines do not justify a dependency.
+const W = 600, H = 120, PAD = 6;
+
+function drawChart(id, vals, times, colour, fmt, stepped) {
+  const el = $(id);
+  const max = Math.max(1, ...vals);
+  const n = vals.length;
+  const x = (i) => (n <= 1 ? 0 : (i / (n - 1)) * W);
+  const y = (v) => H - PAD - (v / max) * (H - PAD * 2);
+
+  let d = '';
+  vals.forEach((v, i) => {
+    if (i === 0) d += `M ${x(i).toFixed(1)} ${y(v).toFixed(1)}`;
+    else if (stepped) d += ` L ${x(i).toFixed(1)} ${y(vals[i - 1]).toFixed(1)} L ${x(i).toFixed(1)} ${y(v).toFixed(1)}`;
+    else d += ` L ${x(i).toFixed(1)} ${y(v).toFixed(1)}`;
+  });
+  const area = n ? `${d} L ${W} ${H - PAD} L 0 ${H - PAD} Z` : '';
+
+  // A baseline, the series, and one label for the peak — enough to read a shape without
+  // pretending to be a full chart with axes.
+  el.innerHTML = `
+    <line x1="0" y1="${H - PAD}" x2="${W}" y2="${H - PAD}" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    <path d="${area}" fill="${colour}" fill-opacity="0.16"/>
+    <path d="${d}" fill="none" stroke="${colour}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <text x="4" y="14" font-size="11" fill="var(--muted)">${fmt(max)}</text>`;
+  el.setAttribute('aria-label', `peak ${fmt(max)}`);
+  if (times.length) el.setAttribute('title', `${new Date(times[0]).toLocaleString()} to ${new Date(times[times.length - 1]).toLocaleString()}`);
+}
+
+async function tickHistory() {
+  let h;
+  try {
+    const r = await fetch('./history.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    h = await r.json();
+  } catch { return; }
+
+  const s = h.samples || [];
+  // Two samples is the minimum that can draw a line; below that, say so rather than
+  // rendering a single point as if it were a trend.
+  $('histEmpty').hidden = s.length >= 2;
+  $('histBody').hidden = s.length < 2;
+  if (s.length < 2) return;
+
+  const hours = (h.totals.spanMs / 3600000);
+  $('histSpan').textContent = hours >= 23.5
+    ? '· full day'
+    : `· ${hours < 1 ? Math.round(hours * 60) + ' min' : hours.toFixed(1) + ' h'} so far`;
+
+  const t = h.totals;
+  $('hSaved').textContent = kb(t.saved);
+  $('hSavedPct').textContent = t.before ? Math.round(((t.saved) / t.before) * 100) + '% of what HA offered' : '\u00a0';
+  $('hEvents').textContent = kb(t.events);
+  const peak = Math.max(...s.map((p) => p.clients));
+  $('hPeak').textContent = peak;
+  $('hNow').textContent = s[s.length - 1].clients + ' now';
+
+  const times = s.map((p) => p.t);
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#03a9f4';
+  const good = getComputedStyle(document.documentElement).getPropertyValue('--good').trim() || '#2e7d32';
+  drawChart('cSaved', s.map((p) => p.saved), times, good, kb, false);
+  drawChart('cClients', s.map((p) => p.clients), times, accent, (v) => String(v), true);
+  drawChart('cEvents', s.map((p) => p.events), times, accent, kb, false);
+}
+tickHistory();
+setInterval(tickHistory, 60000);
+
 </script>
 </body>
 </html>

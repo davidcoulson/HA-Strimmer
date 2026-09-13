@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.09.12.14 — 2026-09-12
+
+**A 24-hour history behind the panel, with charts.** The counters were cumulative since
+process start, which answered "what has it done since I last restarted it" and nothing else —
+and a restart silently erased the evidence. The panel now shows data not sent, clients
+connected, and update traffic over the last day.
+
+Sampled every five minutes into 288 buckets and persisted to `/data`, so a restart costs one
+bucket rather than the whole day. Stored as per-bucket **deltas**: a cumulative series goes
+backwards across a restart, and a naive difference would emit a large negative bucket. A
+counter that decreased is treated as the first sample of a new process, where the reading is
+its own delta.
+
+Charts are inline SVG — three sparklines do not justify a dependency, and the page has to stay
+self-contained for Ingress. New endpoint: `/history.json`.
+
+The window total reports the span it actually covers, so a panel that has been up for twenty
+minutes says so instead of implying a full day.
+
 ## 2026.09.12.13 — 2026-09-12
 
 **Default listen port moves from 8099 to 9123** (upstream PR #17). 8099 is the Zigbee2MQTT
