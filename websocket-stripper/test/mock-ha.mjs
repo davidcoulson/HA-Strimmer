@@ -76,6 +76,13 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     httpHits: [],
     conns: new Set(),          // { ws, eventSubs:Map<event_type,id>, entitySubIds:Set }
     lastSubscribeEntities: null,
+    // Monotonic count of subscribe_entities received. `lastSubscribeEntities` alone cannot
+    // tell "the proxy has not answered yet" from "it answered with the same set as last
+    // time", so a test that sleeps and reads it races: under load it reads the PREVIOUS
+    // test's set and asserts against the wrong connection. Waiting for this to advance is
+    // the deterministic signal that a new subscription actually arrived.
+    subscribeEntitiesSeq: 0,
+    currentUserDelayMs: 0,       // see auth/current_user below
     rpcCounts: new Map(),       // message type -> how many times the proxy asked HA
     renderedTemplates: [],       // template sources the proxy asked HA to render
     unsubscribed: [],            // subscription ids the proxy released
@@ -140,7 +147,15 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
       }
       if (m.type) state.rpcCounts.set(m.type, (state.rpcCounts.get(m.type) || 0) + 1);
       const ok = (result) => ws.send(JSON.stringify({ id: m.id, type: 'result', success: true, result }));
-      if (m.type === 'auth/current_user') return ok(users[conn.token] ?? users.default ?? null);
+      if (m.type === 'auth/current_user') {
+        // Optionally answer slowly. The proxy holds a connection's messages until the user is
+        // known, so how long this takes decides whether the frontend's first
+        // subscribe_entities is queued or sails straight through — the race that made
+        // per-user rules apply intermittently. A test needs to be able to lose it on purpose.
+        const answer = () => ok(users[conn.token] ?? users.default ?? null);
+        if (state.currentUserDelayMs > 0) { setTimeout(answer, state.currentUserDelayMs); return; }
+        return answer();
+      }
       if (m.type in registries) return ok(registries[m.type]);   // config/*_registry/list
       switch (m.type) {
         case 'get_states': return ok(states);
@@ -163,6 +178,7 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
           return ok(null);
         case 'subscribe_entities':
           state.lastSubscribeEntities = m.entity_ids ?? null;
+          state.subscribeEntitiesSeq += 1;
           conn.entitySubIds.add(m.id);
           return ok(null);
         // Real HA answers render_template with an empty `result`, THEN pushes the rendered
@@ -199,10 +215,24 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     wsUrl: `ws://127.0.0.1:${port}/api/websocket`,
     state,
     lastSubscribeEntities: () => state.lastSubscribeEntities,
+    subscribeEntitiesSeq: () => state.subscribeEntitiesSeq,
+    // Resolve once a subscribe_entities arrives after `seq`. Callers snapshot the sequence
+    // BEFORE opening their socket, so no subscription can slip through between the two.
+    async waitForSubscribeEntities(seq, ms = 8000) {
+      const deadline = Date.now() + ms;
+      while (state.subscribeEntitiesSeq <= seq) {
+        if (Date.now() > deadline) {
+          throw new Error(`timeout waiting for subscribe_entities past seq ${seq}`);
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      return state.lastSubscribeEntities;
+    },
     lastXFF: () => state.lastXFF,
     renderedTemplates: () => state.renderedTemplates,
     unsubscribed: () => state.unsubscribed,
     setHangTemplates(v) { state.hangTemplates = v; },
+    setCurrentUserDelay(ms) { state.currentUserDelayMs = ms; },
     // Push an entity event on every active subscribe_entities subscription.
     pushEntityEvent(payload) {
       for (const c of state.conns) {

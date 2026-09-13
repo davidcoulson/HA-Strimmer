@@ -107,12 +107,29 @@
   <div class="card">
     <h2>Connected now</h2>
     <div class="scroll"><table id="cl"><thead>
-      <tr><th>Client</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
+      <tr><th>Client</th><th>From</th><th>Front door</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
     </thead><tbody></tbody></table></div>
     <div class="note">Live update traffic is throughput, not a saving: Home Assistant filters the
       event stream server-side from the entity list this add-on injects, so the untrimmed volume
       never exists and cannot honestly be measured. Compare it against a run with
       <code>strip_entities</code> off if you want the A/B.</div>
+  </div>
+
+  <div class="card">
+    <h2>How clients reach this</h2>
+    <div class="scroll"><table id="paths"><thead>
+      <tr><th>Category</th><th>Value</th><th>Connections</th><th>Share</th></tr>
+    </thead><tbody></tbody></table></div>
+    <div class="note">Counted for every connection since start, including ones that have since
+      closed — unlike the live list above. <b>Origin</b> is whether the client's address is
+      inside RFC1918 or outside it; a device on your own LAN that connects through an external
+      hostname leaves the network and comes back, so it correctly reads as
+      <code>internet</code>. <b>Route</b> is how the request arrived —
+      <code>direct</code> to the port, through a reverse <code>proxy</code>, through
+      <code>cloudflare</code>, or over Supervisor <code>ingress</code>. <b>Hostname</b> is the
+      name the client dialled, which is usually the clearest statement of which front door it
+      used. This is reporting only: every signal except the peer address is a request header,
+      so none of it is trustworthy enough to make access decisions with.</div>
   </div>
 
   <div class="sub">Raw JSON: <a href="./stats.json" target="_blank">stats.json</a> — point a Home
@@ -203,9 +220,22 @@ async function tick() {
   });
 
   rows('cl', s.clients.list, (c) => [
-    c.ip || '?', c.user || '—', c.dashboard || '(union — not attributed)', c.attributedVia || '—',
+    c.ip || '?',
+    c.origin && c.route ? c.origin + ' · ' + c.route : c.origin || c.route || '—',
+    c.host || '—',
+    c.user || '—', c.dashboard || '(union — not attributed)', c.attributedVia || '—',
     c.allowSize, dur(c.connectedSec), c.messages, kb(c.eventBytesPerMin),
   ]);
+
+  // Flattened to one table so a single glance answers "inside or outside, and through what".
+  const paths = s.paths || {};
+  const pathRows = [
+    ...Object.entries(paths.byOrigin || {}).map(([k, v]) => ['Origin', k, v]),
+    ...Object.entries(paths.byRoute || {}).map(([k, v]) => ['Route', k, v]),
+    ...Object.entries(paths.byHost || {}).map(([k, v]) => ['Hostname', k, v]),
+  ];
+  const pathTotal = s.clients.total || 1;
+  rows('paths', pathRows, ([cat, k, v]) => [cat, k, v, ((v / pathTotal) * 100).toFixed(0) + '%']);
 }
 tick();
 setInterval(tick, 5000);

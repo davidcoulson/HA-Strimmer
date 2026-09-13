@@ -33,6 +33,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
+import { classify } from './route.mjs';
 
 // ---- config (add-on options.json or env) ----
 function loadOptions() {
@@ -45,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.05';
+const VERSION = '2026.09.13.06';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1107,9 +1108,9 @@ function applyUserRules(set, extra) {
 const CLIENT_DASH_TTL_MS = 10 * 60 * 1000;
 const clientDash = new Map();                 // ip -> { path, at }
 
-const clientIp = (req) => String(
-  req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || ''
-).trim().replace(/^::ffff:/, '');
+// One implementation of "who is this", shared with the route classifier, so the IP a client
+// is attributed by and the IP the panel reports about it can never disagree.
+const clientIp = (req) => classify(req).ip;
 
 // A dashboard URL is `/<url_path>` or `/<url_path>/<view>`. Match only configured
 // dashboards, so ordinary frontend traffic (/api/…, /static/…, /hacsfiles/…) is ignored.
@@ -1233,8 +1234,14 @@ server.on('upgrade', (req, socket, head) => {
       return;
     }
     const { set, dash, via } = allowFor(req);
-    if (dash) log(`/api/websocket for ${clientIp(req)}: serving ${dash} via ${via} (${set.size} entities, union is ${ALLOW.size})`);
-    wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, { ip: clientIp(req), via, ua: req.headers['user-agent'] }));
+    // Classified once here rather than per-field: the request object is gone by the time the
+    // bridge reports anything, so the path has to be captured at the only moment it exists.
+    const rt = classify(req);
+    if (dash) log(`/api/websocket for ${rt.ip} (${rt.origin}, via ${rt.route}${rt.host ? ` @ ${rt.host}` : ''}): serving ${dash} via ${via} (${set.size} entities, union is ${ALLOW.size})`);
+    wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
+      ip: rt.ip, via, ua: req.headers['user-agent'],
+      origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
+    }));
   } else {
     // Keyed on the path, not req.url: camera stream URLs carry a per-request signature, so
     // keying on the whole thing would defeat the throttle (and grow the map) during a retry storm.
@@ -1248,7 +1255,10 @@ server.on('upgrade', (req, socket, head) => {
 // kiosks on different dashboards get genuinely different subscriptions.
 function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0 });
-  const connId = stats.connOpen({ ip: meta.ip, dash, via: meta.via, allowSize: baseAllow.size, ua: meta.ua });
+  const connId = stats.connOpen({
+    ip: meta.ip, dash, via: meta.via, allowSize: baseAllow.size, ua: meta.ua,
+    origin: meta.origin, route: meta.route, host: meta.host, hop: meta.hop, hops: meta.hops,
+  });
   let userChecked = false;
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
@@ -1274,12 +1284,23 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // letting a later message overtake an earlier one while we wait would break the socket.
   // The gate opens after the auth message, which is the first thing the frontend sends, so in
   // practice it holds a handful of messages for one local round trip.
+  //
+  // Held messages are THUNKS, not finished strings. A message serialized at queue time
+  // carries the allowlist as it was when the gate CLOSED — but the gate exists precisely
+  // because user rules are about to change that allowlist. Stamping early therefore sent the
+  // pre-rules entity list and silently discarded the rule that was being waited for, so a
+  // per-user always_forward applied only when the lookup happened to win the race against the
+  // frontend's first subscribe_entities. It usually did, which is what made the failure
+  // intermittent: the same client, same config, and the extra entities present or missing
+  // depending on how fast HA answered. Resolving the payload at FLUSH time is what makes the
+  // rule apply to the first subscribe_entities, which is the only one that matters.
   let gateQueue = null;
-  const sendOrQueue = (str) => { if (gateQueue) gateQueue.push(str); else toHA(str); };
+  const flush = (thunk) => { const v = thunk(); if (v != null) toHA(v); };
+  const sendOrQueue = (thunk) => { if (gateQueue) gateQueue.push(thunk); else flush(thunk); };
   const openGate = () => {
     const held = gateQueue || [];
     gateQueue = null;
-    held.forEach(toHA);
+    held.forEach(flush);
   };
 
   haWs.on('open', () => { haOpen = true; queue.forEach((s) => haWs.send(s)); queue.length = 0; });
@@ -1344,17 +1365,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       stateChangedSubs.add(m.id);
       log(`subscribe_events(${m.event_type ?? 'ALL EVENTS'}) id=${m.id} from ${meta.ip ?? '?'} dash=${dash ?? '(union)'}`);
     }
+    // Deferred to send time rather than done here — see the gate note above for why stamping
+    // at this point silently dropped per-user rules.
+    let stampAllow = false;
     if (STRIP && m && m.type === 'subscribe_entities' && !m.entity_ids) {
-      // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
-      // nothing", it's "no filter" (HA: `set(msg["entity_ids"]) or None`). Sending one would
-      // invert the add-on's entire purpose, so drop the connection instead.
-      if (!allow.size) {
-        logThrottled('empty-allow', 'ERROR: refusing subscribe_entities — the allowlist is empty, and forwarding that would stream EVERY entity. Check the `dashboards` option.');
-        return close();
-      }
-      m.entity_ids = [...allow];           // HA now streams only this connection's allowlist
       subEntityIds.add(m.id);              // remember it, to defensively re-filter its events
-      s = JSON.stringify(m);
+      stampAllow = true;
     }
     // NB: `lovelace/config` is deliberately NOT used to re-attribute a live connection.
     //
@@ -1374,7 +1390,22 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       subEntityIds.delete(m.subscription);
       stateChangedSubs.delete(m.subscription);
     }
-    sendOrQueue(s);
+    sendOrQueue(stampAllow
+      ? () => {
+        // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
+        // nothing", it's "no filter" (HA: `set(msg["entity_ids"]) or None`). Sending one
+        // would invert the add-on's entire purpose, so drop the connection instead.
+        // Re-checked here rather than at queue time because a never_forward user rule can
+        // narrow the allowlist while this message is held.
+        if (!allow.size) {
+          logThrottled('empty-allow', 'ERROR: refusing subscribe_entities — the allowlist is empty, and forwarding that would stream EVERY entity. Check the `dashboards` option.');
+          close();
+          return null;
+        }
+        m.entity_ids = [...allow];         // HA now streams only this connection's allowlist
+        return JSON.stringify(m);
+      }
+      : () => s);
   });
 
   haWs.on('message', (raw, isBinary) => {

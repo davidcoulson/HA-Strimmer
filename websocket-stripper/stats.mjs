@@ -35,6 +35,19 @@ const conns = new Map();
 let nextConnId = 1;
 // Lifetime connection count, so the panel can show churn rather than just what's open now.
 let connTotal = 0;
+// Lifetime connections by network path, counted at open. Kept separately from `conns` because
+// the interesting question is "how does traffic reach this instance over a day", and `conns`
+// only ever holds what is connected right this second — a wall panel that reconnects hourly
+// and a laptop that visited once look identical there.
+const byRoute = new Map();      // direct | proxy | cloudflare | ingress -> count
+const byOrigin = new Map();     // lan | internet -> count
+const byHost = new Map();       // the hostname dialled -> count
+
+const bump = (map, key) => {
+  if (!key) return;
+  if (!map.has(key) && map.size >= MAX_CATS) return;    // same unbounded-keys guard as above
+  map.set(key, (map.get(key) || 0) + 1);
+};
 
 export function recordTrim(category, before, after) {
   let t = trims.get(category);
@@ -60,11 +73,18 @@ export function recordTraffic(kind, bytes) {
 
 export function recordCacheHit(bytes) { cache.hits += 1; cache.bytes += bytes; }
 
-export function connOpen({ ip, dash, via, allowSize, ua }) {
+export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, hop, hops }) {
   const id = nextConnId++;
   connTotal += 1;
+  bump(byRoute, route);
+  bump(byOrigin, origin);
+  bump(byHost, host);
   conns.set(id, {
     id, ip: ip || null, dash: dash || null, via: via || null, allowSize: allowSize || 0,
+    // How this connection reached the add-on. Observational only — see route.mjs on why none
+    // of this may be used to decide access.
+    origin: origin || null, route: route || null, host: host || null, hop: hop || null,
+    hops: Array.isArray(hops) && hops.length ? hops.slice(0, 8) : null,
     // Reported verbatim rather than bucketed into "kiosk/phone/desktop": the useful
     // distinctions live in vendor tokens that vary by app and firmware, so guessing a class
     // here would bake in an assumption nobody can see or correct.
@@ -119,6 +139,7 @@ export function snapshot(extra = {}) {
     return {
       id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize, ua: c.ua,
       user: c.user,
+      origin: c.origin, route: c.route, host: c.host, hop: c.hop, hops: c.hops,
       connectedSec: Math.round((now - c.since) / 1000), messages: c.msgs,
       fromHA: c.fromHA, toBrowser: c.toBrowser,
       eventBytes: c.eventBytes,
@@ -148,6 +169,14 @@ export function snapshot(extra = {}) {
       [...traffic.entries()].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 15),
     ),
     clients: { open: conns.size, total: connTotal, list: clients },
+    // Lifetime tallies of how connections arrived. Counted at open, so these keep counting
+    // devices that have since disconnected — which is the whole point of having them next to
+    // a list that only shows what is live.
+    paths: {
+      byRoute: Object.fromEntries([...byRoute].sort((a, b) => b[1] - a[1])),
+      byOrigin: Object.fromEntries([...byOrigin].sort((a, b) => b[1] - a[1])),
+      byHost: Object.fromEntries([...byHost].sort((a, b) => b[1] - a[1])),
+    },
   };
 }
 
@@ -158,5 +187,6 @@ export function reset() {
   cache.hits = 0; cache.bytes = 0;
   traffic.clear();
   conns.clear();
+  byRoute.clear(); byOrigin.clear(); byHost.clear();
   nextConnId = 1; connTotal = 0;
 }

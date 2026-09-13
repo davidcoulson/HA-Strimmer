@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026.09.13.06 — 2026-09-13
+
+**Fixed: a per-user rule was applied to an allowlist that was never sent.**
+
+The proxy holds a connection's messages until the user is resolved, so that per-user rules can
+widen the allowlist before the frontend subscribes. But `subscribe_entities` was rewritten
+with the allowlist at the moment it was *queued* and then flushed verbatim — so whenever the
+user lookup was slower than the frontend's first subscribe, Home Assistant received the
+**pre-rules** entity list and the rule was silently discarded. The gate preserved ordering and
+lost content.
+
+Nothing logged a problem: the add-on still reported `user rules applied`, because it had
+applied them — to an allowlist nobody used. From outside, a rule simply worked on some
+connections and not others, with no way to tell which. Entities granted by a per-user rule
+would be present after one reconnect and missing after the next.
+
+The held payload is now built when the message is sent rather than when it is queued. The
+empty-allowlist refusal moved with it, so a `never_forward` rule that narrows the list while
+the message is held is still caught.
+
+**New: connections record how they reached the add-on.** Each client now reports an `origin`
+(`lan` / `internet`), a `route` (`direct`, `proxy`, `cloudflare`, `ingress`), the hostname it
+dialled, and the immediate peer address — with lifetime tallies under `paths` in `stats.json`
+and a "How clients reach this" table on the panel. This answers "is anyone actually using the
+remote path, and through which front door" without touching a reverse-proxy log.
+
+It is **reporting only**. Every signal except the peer address is a request header, so none of
+it is trustworthy enough to make access decisions with; making it trustworthy would need a
+configured list of trusted hops, which does not exist here. See the header of `route.mjs`.
+
+Also fixed a latent attribution bug found on the way: a reverse proxy that sets only
+`X-Real-IP` and no `X-Forwarded-For` had all of its clients attributed to the proxy's own
+address — one bucket, every device — which silently degraded per-dashboard attribution to
+whichever client loaded last.
+
 ## 2026.09.13.02 — 2026-09-13
 
 **Per-user `always_forward` / `never_forward`,** via a new `user_overrides` option — the one

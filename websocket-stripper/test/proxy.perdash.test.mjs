@@ -67,11 +67,13 @@ const httpGet = (url) => new Promise((resolve, reject) => {
 // (or with no page fetch at all, when pageUrl is null).
 async function injectedFor(port, mock, pageUrl) {
   if (pageUrl) await httpGet(`http://127.0.0.1:${port}${pageUrl}`);
+  // Snapshot BEFORE the socket opens, so the wait below cannot be satisfied by a
+  // subscription that was already in flight from an earlier test.
+  const seq = mock.subscribeEntitiesSeq();
   const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
   await c.authed;
   c.send({ type: 'subscribe_entities' });
-  await new Promise((r) => setTimeout(r, 300));
-  const got = mock.lastSubscribeEntities();
+  const got = await mock.waitForSubscribeEntities(seq);
   c.close();
   return new Set(got ?? []);
 }
@@ -138,12 +140,12 @@ describe('User-Agent attribution fallback', () => {
 
   const injectedWithUA = async (ua, pageUrl = null) => {
     if (pageUrl) await httpGet(`http://127.0.0.1:${port}${pageUrl}`);
+    const seq = mock.subscribeEntitiesSeq();
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'test-token',
       ua ? { 'user-agent': ua } : undefined);
     await c.authed;
     c.send({ type: 'subscribe_entities' });
-    await new Promise((r) => setTimeout(r, 300));
-    const got = mock.lastSubscribeEntities();
+    const got = await mock.waitForSubscribeEntities(seq);
     c.close();
     return new Set(got ?? []);
   };
@@ -192,12 +194,15 @@ describe('per-user always_forward', () => {
 
   const injectedForToken = async (token) => {
     await httpGet(`http://127.0.0.1:${port}/test-dash/main`);   // so the rule's dashboard scope matches
+    const seq = mock.subscribeEntitiesSeq();
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, token);
     await c.authed;
     c.send({ type: 'subscribe_entities' });
-    // The first lookup for a token opens a fresh websocket to HA; later calls hit the cache.
-    await new Promise((r) => setTimeout(r, 1200));
-    const got = mock.lastSubscribeEntities();
+    // The proxy HOLDS everything after `auth` until the user is resolved, which means a
+    // fresh websocket to HA on the first lookup for a token. That took a fixed 1200ms sleep,
+    // which passed alone and lost the race whenever the suite ran the spawn-heavy files
+    // concurrently — reading the previous test's entity set and asserting on it.
+    const got = await mock.waitForSubscribeEntities(seq);
     c.close();
     return new Set(got ?? []);
   };
@@ -220,11 +225,11 @@ describe('per-user always_forward', () => {
     // Page GET FIRST: the websocket upgrade is what reads the attribution, so fetching the
     // page afterwards would leave this client on the previous test's hint.
     await httpGet(`http://127.0.0.1:${port}/auto-dash/main`);
+    const seq = mock.subscribeEntitiesSeq();
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'david-token');
     await c.authed;
     c.send({ type: 'subscribe_entities' });
-    await new Promise((r) => setTimeout(r, 400));
-    const got = new Set(mock.lastSubscribeEntities() ?? []);
+    const got = new Set((await mock.waitForSubscribeEntities(seq)) ?? []);
     c.close();
     assert.ok(!got.has('sensor.decoy_power'), 'a test-dash rule must not apply on auto-dash');
   });
@@ -233,6 +238,52 @@ describe('per-user always_forward', () => {
     const other = await injectedForToken('some-other-token');
     assert.ok(!other.has('sensor.decoy_power'));
     assert.ok(other.has('light.living_room'));
+  });
+});
+
+// REGRESSION, and the reason this needs its own proxy: the token cache. A user lookup happens
+// once per token, so a delay only bites on a COLD cache — reusing the suite above would have
+// tested nothing while looking like it tested everything.
+//
+// The bug: the proxy holds a connection's messages until the user is resolved, precisely so
+// per-user rules can widen the allowlist before the frontend subscribes. But
+// subscribe_entities was rewritten with the allowlist at the moment it was QUEUED and then
+// flushed verbatim — so whenever the lookup was slower than the frontend's first subscribe,
+// HA received the PRE-rules entity list and the rule was silently discarded. The gate kept
+// ordering and lost content.
+//
+// Nothing logged a problem. The proxy still reported "user rules applied", because it had
+// applied them — to an allowlist that was never sent. From outside, the rule simply worked on
+// some connections and not others.
+describe('per-user rules survive a slow user lookup', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash,auto-dash', port,
+      extraEnv: { USER_OVERRIDES: JSON.stringify([
+        { user: 'David', dashboard: 'test-dash', always_forward: ['/^sensor\\.decoy_/'] },
+      ]) },
+    });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  it('stamps the allowlist when the message is sent, not when it is queued', async () => {
+    // Make the lookup lose the race on purpose. Before the fix this fails every run; at the
+    // mock's natural speed it passed most runs, which is how it survived this long.
+    mock.setCurrentUserDelay(300);
+    await httpGet(`http://127.0.0.1:${port}/test-dash/main`);
+    const seq = mock.subscribeEntitiesSeq();
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'david-token');
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    const got = new Set((await mock.waitForSubscribeEntities(seq)) ?? []);
+    c.close();
+    assert.ok(got.has('sensor.decoy_power'),
+      'the rule must reach the FIRST subscribe_entities, which is the only one that matters');
+    assert.ok(got.has('light.living_room'), 'and the dashboard itself is still there');
   });
 });
 
@@ -291,11 +342,11 @@ describe('cookie attribution survives a shared IP', () => {
 
   // Same process, so the same source IP for both — exactly the NAT case.
   const withCookie = async (dash) => {
+    const seq = mock.subscribeEntitiesSeq();
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'test-token', dash ? { Cookie: `ws_dash=${dash}` } : undefined);
     await c.authed;
     c.send({ type: 'subscribe_entities' });
-    await new Promise((r) => setTimeout(r, 300));
-    const got = mock.lastSubscribeEntities();
+    const got = await mock.waitForSubscribeEntities(seq);
     c.close();
     return new Set(got ?? []);
   };
