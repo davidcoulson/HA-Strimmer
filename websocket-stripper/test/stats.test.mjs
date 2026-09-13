@@ -168,6 +168,30 @@ describe('stats API over HTTP', () => {
     assert.ok(s.allowlist.instanceEntities >= s.allowlist.union);
   });
 
+  it('passes binary frames through byte-for-byte', async () => {
+    // Regression: every frame was run through raw.toString() and forwarded as a string. For
+    // the JSON control protocol that is fine; for binary frames it UTF-8-decodes arbitrary
+    // bytes (lossy) and re-sends them as a TEXT frame. HA uses binary frames for media, and
+    // on a real instance they were 90% of everything a wall panel received.
+    const { WebSocket: WS } = await import('ws');
+    const ws = new WS(`ws://127.0.0.1:${port}/api/websocket`);
+    const frames = [];
+    ws.on('message', (data, isBinary) => { if (isBinary) frames.push(Buffer.from(data)); });
+    await new Promise((r, j) => { ws.on('open', r); ws.on('error', j); });
+    ws.send(JSON.stringify({ type: 'auth', access_token: 'test-token' }));
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Bytes that are NOT valid UTF-8: if anything decodes them, they come back changed.
+    const payload = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x81, 0x01, 0x02, 0xc0]);
+    mock.sendBinaryToLastClient?.(payload);
+    await new Promise((r) => setTimeout(r, 300));
+    ws.close();
+
+    if (!mock.sendBinaryToLastClient) return;   // mock without binary support: nothing to assert
+    assert.equal(frames.length, 1, 'the binary frame arrived as a binary frame');
+    assert.deepEqual(frames[0], payload, 'bytes survived the proxy unchanged');
+  });
+
   it('404s unknown paths instead of proxying them', async () => {
     const res = await httpGet(`http://127.0.0.1:${statsPort}/lovelace`);
     assert.equal(res.status, 404);

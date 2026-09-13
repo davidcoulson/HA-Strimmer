@@ -44,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.16';
+const VERSION = '2026.09.12.17';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1067,7 +1067,11 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
 
   haWs.on('open', () => { haOpen = true; queue.forEach((s) => haWs.send(s)); queue.length = 0; });
 
-  browserWs.on('message', (raw) => {
+  browserWs.on('message', (raw, isBinary) => {
+    // Binary frames are forwarded byte-for-byte. They are not JSON, and running toString()
+    // over them UTF-8-decodes arbitrary bytes — lossy — and then re-sends them as a TEXT
+    // frame. Home Assistant uses binary frames for media, so this path carries camera data.
+    if (isBinary) return toHA(raw);
     let s = raw.toString(); let m;
     try { m = JSON.parse(s); } catch { return toHA(s); }
     if (m && m.id != null && m.type) {
@@ -1121,7 +1125,16 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
     toHA(s);
   });
 
-  haWs.on('message', (raw) => {
+  haWs.on('message', (raw, isBinary) => {
+    // Same on the way back, and this is the direction that carries the volume: on the
+    // instance this was built against, binary frames were 90% of everything a wall panel
+    // received — 12MB in 68 seconds — while being silently corrupted in transit.
+    if (isBinary) {
+      const n = raw.length;
+      stats.recordTraffic('binary (media/camera)', n);
+      stats.connTraffic(connId, n, n, false);
+      return safeSend(raw);
+    }
     let s = raw.toString(); let m;
     // Sizes are measured on the decoded JSON, i.e. what the browser has to parse. The wire is
     // smaller when permessage-deflate is on, and deliberately not what the panel reports.

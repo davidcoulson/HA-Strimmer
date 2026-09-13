@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.09.12.17 — 2026-09-12
+
+**Fixed: binary websocket frames were being corrupted.** Every frame from Home Assistant was
+run through `raw.toString()` and forwarded as a string. That is correct for the JSON control
+protocol and wrong for binary frames — it UTF-8-decodes arbitrary bytes, which is lossy, and
+then re-sends them as a TEXT frame rather than a binary one.
+
+Home Assistant uses binary frames for media. On the instance this was found on, they were
+**90% of everything a wall panel received** — 12MB in 68 seconds — passing through mangled.
+
+Binary frames now pass through byte-for-byte in both directions, and are labelled in the
+panel rather than falling into an "unparsed" bucket.
+
 ## 2026.09.12.16 — 2026-09-12
 
 **The panel now labels every message, not just the ones it trims.** A wall panel trimmed to 104

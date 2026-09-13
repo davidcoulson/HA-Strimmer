@@ -115,6 +115,7 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
   function haProtocol(ws) {
     const conn = { ws, eventSubs: new Map(), entitySubIds: new Set() };
     state.conns.add(conn);
+    state.lastSocket = ws;      // so a test can push a raw binary frame at the proxy
     ws.on('close', () => state.conns.delete(conn));
     ws.send(JSON.stringify({ type: 'auth_required', ha_version: '2026.7.0' }));
     ws.on('message', (raw) => {
@@ -170,6 +171,8 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
   await new Promise((res) => server.listen(port, '127.0.0.1', res));
 
   return {
+    // Push a raw binary frame at the most recent client, mimicking HA's media frames.
+    sendBinaryToLastClient: (buf) => { try { state.lastSocket?.send(buf, { binary: true }); } catch {} },
     rpcCount: (type) => state.rpcCounts.get(type) || 0,
     port,
     base: `http://127.0.0.1:${port}`,
