@@ -420,3 +420,37 @@ describe('resource pinning is Ingress-only', () => {
     assert.equal(res.status, 200, 'read access must not be affected by the write gate');
   });
 });
+
+describe('registry cache hit rate', () => {
+  it('is null before anything has been asked for, not zero', () => {
+    // A 0% hit rate on zero requests is a fiction. Publishing it would put a false trough in the
+    // long-term statistics every time the add-on restarted — the same class of bug as the
+    // retained-zero one the MQTT publisher had.
+    stats.reset();
+    assert.equal(stats.snapshot().registryCache.hitRatePct, null);
+  });
+
+  it('is a real ratio once there are hits and misses', () => {
+    stats.reset();
+    stats.recordCacheHit(100);
+    stats.recordCacheHit(100);
+    stats.recordCacheHit(100);
+    stats.recordCacheMiss();
+    const c = stats.snapshot().registryCache;
+    assert.equal(c.hits, 3);
+    assert.equal(c.misses, 1);
+    assert.equal(c.hitRatePct, 75, '3 of 4 is 75%');
+  });
+
+  it('reports 100 when nothing has missed', () => {
+    stats.reset();
+    stats.recordCacheHit(10);
+    assert.equal(stats.snapshot().registryCache.hitRatePct, 100);
+  });
+
+  it('reports 0 when everything has missed, which is different from null', () => {
+    stats.reset();
+    stats.recordCacheMiss();
+    assert.equal(stats.snapshot().registryCache.hitRatePct, 0);
+  });
+});

@@ -25,7 +25,10 @@ const trims = new Map();
 // Event stream, throughput only — see the note above about why this is not a saving.
 const events = { count: 0, bytes: 0 };
 // Registry answers served from the local cache without asking HA at all.
-const cache = { hits: 0, bytes: 0 };
+// Hits alone cannot produce a rate. The miss count is the denominator, and the ratio is the
+// interesting number: it falls when the allowlist keeps changing, because a recompute retires the
+// cache — so a sagging hit rate is the signature of churn rather than of a caching problem.
+const cache = { hits: 0, misses: 0, bytes: 0 };
 // What is actually coming down the socket, keyed by message kind. The trim categories only
 // cover payloads this add-on knows how to shrink; everything else was invisible, which is how
 // a 98MB/h stream sat unexplained next to a panel claiming 0.5MB/h.
@@ -72,6 +75,7 @@ export function recordTraffic(kind, bytes) {
 }
 
 export function recordCacheHit(bytes) { cache.hits += 1; cache.bytes += bytes; }
+export function recordCacheMiss() { cache.misses += 1; }
 
 export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, hop, hops, device }) {
   const id = nextConnId++;
@@ -217,7 +221,17 @@ export function snapshot(extra = {}) {
       bytes: events.bytes,
       bytesPerMin: Math.round(events.bytes / Math.max((now - startedAt) / 60000, 1 / 60)),
     },
-    registryCache: { hits: cache.hits, bytesServed: cache.bytes },
+    registryCache: {
+      hits: cache.hits,
+      misses: cache.misses,
+      bytesServed: cache.bytes,
+      // null, not 0, until something has actually been asked for: a 0% hit rate on zero
+      // requests is a fiction, and publishing it would put a false trough in the statistics
+      // every time the add-on restarts.
+      hitRatePct: (cache.hits + cache.misses) === 0
+        ? null
+        : Math.round((cache.hits / (cache.hits + cache.misses)) * 1000) / 10,
+    },
     // Biggest first: the point of this list is to make an unexplained stream obvious.
     byMessage: Object.fromEntries(
       [...traffic.entries()].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 15),
@@ -238,7 +252,7 @@ export function snapshot(extra = {}) {
 export function reset() {
   trims.clear();
   events.count = 0; events.bytes = 0;
-  cache.hits = 0; cache.bytes = 0;
+  cache.hits = 0; cache.misses = 0; cache.bytes = 0;
   traffic.clear();
   conns.clear();
   byRoute.clear(); byOrigin.clear(); byHost.clear();

@@ -54,6 +54,11 @@ const SENSORS = [
   { id: 'rebuilds_total',     name: 'Allowlist rebuilds',     unit: 'rebuilds', icon: 'mdi:refresh', sc: 'total_increasing' },
   { id: 'cache_hits_total',   name: 'Registry cache hits',    unit: 'hits',     icon: 'mdi:lightning-bolt', sc: 'total_increasing' },
 
+  // A rate rather than a count, because the count only ever rises and says nothing on its own.
+  // This one falls when the allowlist keeps changing — a recompute retires the cache — so it is
+  // the long-term signature of churn.
+  { id: 'cache_hit_rate',     name: 'Registry cache hit rate', unit: '%',       icon: 'mdi:speedometer', sc: 'measurement' },
+
   // --- the one that is about the deployment rather than the traffic ----------------------
   { id: 'cert_days_left',     name: 'Certificate days left',  unit: 'd',        icon: 'mdi:certificate', sc: 'measurement' },
 ];
@@ -117,6 +122,7 @@ export function buildPayload(snap, extra = {}) {
     connections_total: snap?.clients?.total ?? 0,
     rebuilds_total: extra.rebuilds ?? 0,
     cache_hits_total: snap?.registryCache?.hits ?? 0,
+    cache_hit_rate: snap?.registryCache?.hitRatePct ?? null,
 
     cert_days_left: extra.certDaysLeft ?? null,
   };

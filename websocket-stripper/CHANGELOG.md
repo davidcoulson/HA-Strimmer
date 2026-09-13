@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026.09.13.28 — 2026-09-13
+
+**New sensor: registry cache hit rate.**
+
+The cache-hits counter only ever rises, which makes it useless on its own — a big number could be
+a healthy cache or simply a long uptime. A *rate* needs a denominator, so registry cache misses
+are now counted too.
+
+The ratio is the interesting number because of what makes it fall: an allowlist recompute retires
+the cached registry answers, so a sagging hit rate is the long-term signature of **churn** — the
+same condition that produced 24 no-op rebuilds in 14 minutes before that was fixed. A counter
+cannot show that; a rate can.
+
+Reported as `null` rather than `0` until something has actually been asked for. A 0% hit rate on
+zero requests is a fiction, and publishing it would put a false trough in the statistics on every
+restart — the same class of bug as the retained zero the MQTT publisher shipped with earlier
+today.
+
+
+## 2026.09.13.27 — 2026-09-13
+
+**A voice satellite announcing itself is now logged even when it changes nothing.**
+
+`.18` taught the add-on to learn a panel's identity from the panel's own traffic. But the log line
+only fired when the announcement *added* entities — so on an instance where a `client_overrides`
+rule already supplies them, the mechanism was completely invisible. There was no way to tell
+"working, nothing to do" apart from "not working".
+
+It now logs the announcement itself, throttled because a satellite re-announces every 30 seconds:
+
+```
+10.2.4.109 announces assist_satellite.basement_stairs_panel
+```
+
+That matters for deciding whether a manual rule is still needed. A satellite only announces while
+it is **running** — so a panel whose satellite is `unavailable` says nothing, and its
+`client_overrides` entry is what keeps its entities flowing until it comes back. The two
+mechanisms are complementary rather than redundant, and this makes which one is carrying the load
+visible.
+
 ## 2026.09.13.26 — 2026-09-13
 
 **New: HTTP access and error logs, kept apart from the service log.**

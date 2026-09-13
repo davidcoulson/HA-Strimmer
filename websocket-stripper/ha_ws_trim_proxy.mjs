@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.26';
+const VERSION = '2026.09.13.28';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1814,6 +1814,8 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
         return;
       }
+      // A miss: this goes to HA to be built. Counted so the hit RATE has a denominator.
+      stats.recordCacheMiss();
       registryIds.set(m.id, kind);
     }
     if (STRIP && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
@@ -1833,6 +1835,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (STRIP && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
         && typeof m.entity_id === 'string' && m.entity_id.startsWith('assist_satellite.')) {
       const added = learnClientEntity(meta.ip, m.entity_id);
+      // Log the announcement itself, not only the case where it changed something. A panel whose
+      // entities are already supplied by a client_overrides rule adds nothing — so without this
+      // the mechanism is invisible, and there is no way to tell "working, nothing to do" apart
+      // from "not working". Throttled: the satellite re-announces every 30 seconds.
+      logThrottled(`selfid:${meta.ip}`, `${meta.ip ?? '?'} announces ${m.entity_id}`
+        + `${added ? '' : ' (already covered)'}`);
       if (added && !added.every((id) => allow.has(id))) {
         log(`${meta.ip ?? '?'} identified itself as ${m.entity_id}: +${added.length} entities on its next connection`);
         // The allowlist for THIS connection was already sent; the frontend has to re-subscribe
