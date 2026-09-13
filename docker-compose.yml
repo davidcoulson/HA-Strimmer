@@ -1,0 +1,68 @@
+# WebSocket Stripper — standalone (Home Assistant Container / Core).
+#
+# You do not need this file if you run Home Assistant OS or Supervised: install it as an
+# add-on instead and configure it in the UI. This is for installs that have no Supervisor and
+# therefore cannot use add-ons at all.
+#
+#   1. Create a long-lived access token in HA: click your user (bottom left) → Security →
+#      "Create token". The add-on gets one for free from Supervisor; standalone cannot.
+#   2. Fill in HA_BASE and HA_TOKEN below, and list your dashboards.
+#   3. docker compose up -d
+#   4. Point your kiosks/browsers at http://<this-host>:9123 instead of your HA URL.
+#
+# Home Assistant itself stays reachable on its own port. This proxies to it; it does not
+# replace it, and nothing about your HA install changes.
+
+services:
+  websocket-stripper:
+    image: ghcr.io/davidcoulson/ha-websocket-stripper:latest
+    container_name: websocket-stripper
+    restart: unless-stopped
+
+    ports:
+      - "9123:9123"     # what browsers and kiosks connect to
+      - "8100:8100"     # stats panel + JSON API (optional; drop this line to keep it internal)
+
+    volumes:
+      # Keeps the 24h statistics history across restarts. Without it the add-on still works
+      # and still samples — the window just starts empty on every restart.
+      - stripper-data:/data
+
+    environment:
+      # ---- required ----
+      HA_BASE: "http://homeassistant:8123"       # your HA, reachable from THIS container
+      HA_TOKEN: "paste-your-long-lived-token"
+      # url_path of each dashboard to serve, comma-separated. Settings → Dashboards shows
+      # these. Anything not listed is served whole, untrimmed.
+      DASH_PATHS: "lovelace,kitchen-kiosk"
+
+      # ---- ports (must match the `ports:` mapping above) ----
+      PORT: "9123"
+      STATS_PORT: "8100"
+
+      # ---- entity scoping ----
+      # Entities to forward even when no card names them. Literal ids or /regex/, comma
+      # separated. Assist pipeline and wake-word entities behind a Voice Satellite card live
+      # here, as does anything panel-side JavaScript READS.
+      ALWAYS_FORWARD: "/^assist_satellite\\./,/^conversation\\./,/^sensor\\.(date|time)($|_)/"
+      NEVER_FORWARD: ""
+
+      # ---- features (all default on except the two noted) ----
+      STRIP_ENTITIES: "1"      # the core feature; 0 = plain passthrough, for an A/B comparison
+      PER_DASHBOARD: "1"       # each connection gets only its own dashboard's entities
+      TRIM_REGISTRIES: "1"     # entity/device/area registries, the biggest payload after states
+      COMPRESS_WS: "1"         # leave on: HA's own websocket compresses too
+      TRIM_RESOURCES: "0"      # custom cards. OFF by default — read the README before enabling
+      TRIM_SERVICES: "0"       # get_services. OFF by default — visibly lossy in the admin UI
+
+      # ---- structured rules (JSON, all optional) ----
+      # Resources to always/never send, by URL fragment. kiosk-mode and icon packs belong here
+      # if you turn TRIM_RESOURCES on.
+      RESOURCES_ALWAYS_FORWARD: "kiosk-mode"
+      # Per-dashboard and per-user entity rules, and dashboard-by-client-app attribution.
+      # DASHBOARD_OVERRIDES: '[{"dashboard":"lovelace","always_forward":["/^update\\./"]}]'
+      # USER_OVERRIDES: '[{"user":"Your Name","dashboard":"lovelace","always_forward":["/^update\\./"]}]'
+      # UA_DASHBOARDS: '[{"match":"io.robbie.HomeAssistant","dashboard":"lovelace"}]'
+
+volumes:
+  stripper-data:

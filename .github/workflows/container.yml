@@ -1,0 +1,135 @@
+# Build the add-on as an ordinary container and publish it to GHCR.
+#
+# Why this exists: Home Assistant add-ons require Supervisor, so everyone running HA Container
+# or HA Core is locked out of this project entirely. The image is already a plain Node image
+# with no HA base layer, and standalone mode is what the test suite exercises on every run —
+# so serving those users costs a workflow rather than a port.
+name: container
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+    # Don't rebuild the image for documentation-only changes.
+    paths-ignore: ['**/*.md', 'assets/**', 'tools/**']
+  workflow_dispatch:
+
+env:
+  # GHCR requires a lowercase path, and the repository name is not.
+  IMAGE: ghcr.io/${{ github.repository_owner }}/ha-websocket-stripper
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The add-on version is the source of truth for the image tag, so a published image can
+      # always be traced back to the add-on release it came from.
+      - name: Read the add-on version
+        id: version
+        run: |
+          v=$(grep -E '^version:' websocket-stripper/config.yaml | sed -E 's/^version:[[:space:]]*"?([^"]+)"?/\1/')
+          [ -n "$v" ] || { echo "no version in config.yaml"; exit 1; }
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+          echo "Add-on version: $v"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Build one native amd64 image FIRST and prove it actually starts, before anything is
+      # pushed. A multi-arch build cannot be loaded into the local daemon, so smoke testing has
+      # to happen on a single-arch build; the layers are cached and reused by the push below.
+      - name: Build amd64 image for testing
+        uses: docker/build-push-action@v6
+        with:
+          context: ./websocket-stripper
+          platforms: linux/amd64
+          load: true
+          tags: stripper:smoketest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # This catches the failure mode that shipped once already: a module added to the source
+      # but not to the Dockerfile's COPY list builds perfectly and then dies at startup with
+      # ERR_MODULE_NOT_FOUND. A unit test cannot see it, because the file exists in the tree.
+      #
+      # Home Assistant is deliberately unreachable here. The proxy is supposed to serve its
+      # stats endpoint and retry the control connection rather than exit, so this asserts both
+      # that the image boots and that it degrades the way it claims to.
+      - name: Smoke test the image
+        run: |
+          docker run -d --name smoketest \
+            -e HA_TOKEN=dummy \
+            -e HA_BASE=http://127.0.0.1:9 \
+            -e ALLOW_WS_URL=ws://127.0.0.1:9/api/websocket \
+            -e DASH_PATHS=demo \
+            -p 18100:8100 \
+            stripper:smoketest
+
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18100/stats.json >/tmp/stats.json 2>/dev/null; then
+              ok=1; break
+            fi
+            sleep 1
+          done
+
+          if [ "${ok:-0}" != "1" ]; then
+            echo "::error::the container never served /stats.json"
+            docker logs smoketest || true
+            exit 1
+          fi
+
+          got=$(jq -r .version /tmp/stats.json)
+          want='${{ steps.version.outputs.value }}'
+          echo "stats.json reports version: $got (config.yaml says $want)"
+          [ "$got" = "$want" ] || { echo "::error::image reports $got, expected $want"; exit 1; }
+
+          # Still running a few seconds later, i.e. it did not boot and then crash on the
+          # first failed HA connection.
+          sleep 5
+          [ "$(docker inspect -f '{{.State.Running}}' smoketest)" = "true" ] \
+            || { echo "::error::container exited after startup"; docker logs smoketest; exit 1; }
+
+          docker logs smoketest
+          docker rm -f smoketest
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # amd64 and arm64 only. Those cover x86 boxes and 64-bit Raspberry Pi OS, which is now
+      # the default and what HA's own documentation recommends; armv7 is omitted rather than
+      # shipped slowly and untested under QEMU. Say the word and it is one line.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./websocket-stripper
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.version.outputs.value }}
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            echo "docker pull ${{ env.IMAGE }}:${{ steps.version.outputs.value }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

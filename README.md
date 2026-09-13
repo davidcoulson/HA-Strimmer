@@ -264,6 +264,121 @@ Measured per page load on the instance this was built against (9,751 entities):
 No long-lived token needed in the add-on — it uses the add-on's `SUPERVISOR_TOKEN` to
 read the dashboard configs.
 
+## 🐳 No Supervisor? Run it on plain Docker
+
+Add-ons need Supervisor, so if you run **Home Assistant Container** or **Core** you can't
+install one. Same program, same features — just a container:
+
+```
+ghcr.io/davidcoulson/ha-websocket-stripper:latest
+```
+
+You need **one thing the add-on gets for free**: a long-lived access token. In HA, click your
+user (bottom left) → **Security** → **Create token**.
+
+### Quickest possible start
+
+```bash
+docker run -d --name websocket-stripper --restart unless-stopped \
+  -p 9123:9123 -p 8100:8100 \
+  -v stripper-data:/data \
+  -e HA_BASE="http://homeassistant:8123" \
+  -e HA_TOKEN="<your-long-lived-token>" \
+  -e DASH_PATHS="kitchen-panel,hallway-kiosk" \
+  ghcr.io/davidcoulson/ha-websocket-stripper:latest
+```
+
+Then point your kiosks at **`http://<this-host>:9123`** instead of your HA URL, and open
+**`http://<this-host>:8100`** for the stats panel. Home Assistant stays on its own port and
+nothing about your HA install changes — this sits in front of it.
+
+Check it came up:
+
+```bash
+curl -s http://localhost:8100/stats.json | head -20
+```
+
+### docker compose
+
+A ready-to-edit [`docker-compose.yml`](docker-compose.yml) is in the repo root, with every
+option commented. The short version:
+
+```yaml
+services:
+  websocket-stripper:
+    image: ghcr.io/davidcoulson/ha-websocket-stripper:latest
+    restart: unless-stopped
+    ports:
+      - "9123:9123"     # what your browsers and kiosks connect to
+      - "8100:8100"     # stats panel + JSON API
+    volumes:
+      - stripper-data:/data       # keeps the 24h stats across restarts
+    environment:
+      HA_BASE: "http://homeassistant:8123"
+      HA_TOKEN: "<your-long-lived-token>"
+      DASH_PATHS: "kitchen-panel,hallway-kiosk"
+
+volumes:
+  stripper-data:
+```
+
+```bash
+docker compose up -d
+docker compose logs -f      # the log names every dashboard and what it trimmed to
+```
+
+If HA runs in Docker too, put both on the same network and `HA_BASE` can use the container
+name (`http://homeassistant:8123`). Otherwise use the host's IP — `localhost` inside a
+container is the container, not your HA.
+
+### Every option, as an environment variable
+
+The container takes the same settings as the add-on. Lists are comma-separated; the last three
+are JSON.
+
+| Env var | Add-on option | Notes |
+|---|---|---|
+| `HA_BASE` | — | Your HA, reachable **from the container**. |
+| `HA_TOKEN` | — | Long-lived access token. Required; the add-on uses `SUPERVISOR_TOKEN` instead. |
+| `DASH_PATHS` | `dashboards` | `url_path` of each dashboard to serve. **Required** — empty means the proxy refuses websockets rather than serving the untrimmed firehose. |
+| `PORT` | `port` | Listen port (default `9123`). |
+| `STATS_PORT` | — | Stats panel + JSON API (default `8100`). Served over Ingress in the add-on; a plain port here. |
+| `ALWAYS_FORWARD` | `always_forward` | Literal ids or `/regex/`. |
+| `NEVER_FORWARD` | `never_forward` | Wins over everything. |
+| `STRIP_ENTITIES` | `strip_entities` | `0` = plain passthrough, for an A/B comparison. |
+| `PER_DASHBOARD` | `per_dashboard` | Each connection gets only its own dashboard's entities. |
+| `TRIM_REGISTRIES` | `trim_registries` | Entity/device/area registries. |
+| `COMPRESS_WS` | `compress_websocket` | Leave on. |
+| `TRIM_RESOURCES` | `trim_resources` | **Off by default** — read the tuning notes before enabling. |
+| `TRIM_SERVICES` | `trim_services` | **Off by default** — visibly lossy in the admin UI. |
+| `RESOURCES_ALWAYS_FORWARD` | `resources_always_forward` | URL fragments, e.g. `kiosk-mode`. |
+| `RESOURCES_NEVER_FORWARD` | `resources_never_forward` | |
+| `DASHBOARD_OVERRIDES` | `dashboard_overrides` | JSON array. |
+| `USER_OVERRIDES` | `user_overrides` | JSON array. |
+| `UA_DASHBOARDS` | `user_agent_dashboards` | JSON array. |
+| `HISTORY_DIR` | — | Where to keep the 24h stats. Defaults to `/data` when that exists. |
+
+### One thing that catches people
+
+Home Assistant only trusts a proxy it has been told about. Because the stripper forwards the
+real client IP, HA needs to be told to believe it — otherwise every client appears to come
+from the container, which breaks `trusted_networks` logins and IP bans. In `configuration.yaml`:
+
+```yaml
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.16.0.0/12        # the Docker network the stripper runs on
+```
+
+Use the container's actual subnet, and keep it as narrow as you can — anything in
+`trusted_proxies` is trusted to *claim* a client IP.
+
+### Which architectures
+
+`linux/amd64` and `linux/arm64` — x86 boxes and 64-bit Raspberry Pi OS, which is what HA's own
+documentation recommends. 32-bit `armv7` isn't published; open an issue if you need it.
+
 ## 🔓 Skip the login screen on a wall panel
 
 For a wall panel / fridge kiosk you usually don't want a password prompt. HA's
