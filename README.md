@@ -34,35 +34,47 @@ with **9,751 entities**:
 
 **≈ 4× faster**, and the panel stops thrashing.
 
-### 📱 And on a phone, where it matters most
+### 📱 Where it helps, and where it does not
 
-The table above is a wall panel on gigabit ethernet — the add-on's *worst* case, because a fast
-link hides a fat payload. Cellular is where payload size turns into waiting.
+The table above is a wall panel — a slow client, where the cost is *parsing* 5.8 MB of JSON, not
+moving it. The picture changes with the link, and it is worth being blunt about the case where
+this add-on makes things **worse**.
 
-Measured with headless Chrome throttled to a **4G profile (9 Mbps, 40 ms RTT)**, loading the same
-dashboard twice: once through the add-on, once straight at Home Assistant. Median of three runs
-each, timed to the first `<ha-card>` actually rendered:
+Headless Chrome on a desktop, loading the same dashboard twice — once through the add-on, once
+straight at Home Assistant. Median of three runs, timed to the first `<ha-card>` actually
+rendered:
 
-| 4G, same dashboard | 😴 Untrimmed | 🚀 Trimmed | 📉 |
+| Link | 😴 Untrimmed | 🚀 Trimmed | |
 |---|---|---|---|
-| **Dashboard appears in** | 8.6 s | **3.3 s** | **2.6× faster** |
-| WebSocket payload | 5,865 KB | **863 KB** | **85%** |
-| HTTP payload (frontend bundle) | 2,367 KB | 2,353 KB | *unchanged* |
+| **4G** (9 Mbps, 40 ms) | 8.6 s | **3.3 s** | **2.6× faster** |
+| **Unthrottled LAN** | **0.9 s** | 2.0 s | **2.2× slower** |
 
-The HTTP row is the control: the add-on doesn't touch the frontend bundle, and it stays put. Only
-the websocket moved — and it took **5.4 seconds** off the load with it.
+| | Untrimmed | Trimmed |
+|---|---|---|
+| WebSocket payload | 5,865 KB | **863 KB** (85% less) |
+| HTTP payload (frontend bundle) | 2,367 KB | 2,353 KB (unchanged) |
 
-It is also worth being honest about where this ends. Once the entities are trimmed, about **2 of
-the remaining 3.3 seconds is the frontend bundle** — Home Assistant's own JavaScript, which this
-add-on cannot help with. The websocket goes from being the dominant cost to the smaller half.
+**On a slow link it is a large win.** 5.4 seconds off a phone load, because 5 MB of entity data
+has to cross the link before anything renders, and this deletes most of it.
 
-Reproduce it yourself with
-[`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs); it needs no
-configuration change, because it compares the add-on's port against Home Assistant's own.
+**On a fast link to a fast client it is a net loss**, and the three runs did not overlap — the
+fastest trimmed run was still slower than the slowest untrimmed one. The reason is structural:
+the add-on is a reverse proxy, so **every HTTP byte goes through it**, including the ~2.3 MB
+frontend bundle it does not trim. At 9 Mbps the link dominates and that hop is invisible. On
+gigabit it *is* the bottleneck, and saving 5 MB of websocket no longer pays for it. Per-user rules
+add a further round trip, since a connection is held until the user is resolved.
 
-The surprise for most people is the catalogue row: on a large install the *catalogue* — the
-names and areas, not the values — is the biggest thing a dashboard downloads. It is sent in
-full, for the whole house, on every single page load.
+So the rule of thumb is: **point the add-on at clients that are slow, or on slow links.** Wall
+panels, tablets, phones away from home, anything on cellular. For a desktop browser on the same
+LAN, go straight to Home Assistant — it is already faster, and a direct hostname alongside the
+proxied one costs nothing to set up.
+
+The HTTP row is the control throughout: the add-on does not touch the frontend bundle, and it
+stays put across every run. Only the websocket moved.
+
+Reproduce any of it with
+[`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs) — it needs
+no configuration change, because it compares the add-on's port against Home Assistant's own.
 
 ### 📅 Now scale that to a day
 
