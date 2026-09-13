@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.09.13.13 — 2026-09-13
+
+Version bump only, to force Supervisor to re-read `config.yaml`.
+
+Supervisor caches an add-on's **options schema** separately from its code. A `rebuild` picks up
+new code but leaves the cached schema in place, so a newly added option is silently dropped from
+any write — `ignored_fields` in the response, no error. A version transition is what makes it
+re-read the schema, so `exclude_device_categories` (added in `.12`) needs this to be settable.
+
+No functional change.
+
+
 ## 2026.09.13.12 — 2026-09-13
 
 **New: `exclude_device_categories`, and every device expansion now reports its own split.**
