@@ -123,6 +123,17 @@
       the kernel socket buffer, not received by the device: a 215&nbsp;KB payload "drained" in
       6&nbsp;ms over cellular, which is far faster than any real transfer. Neither number is a
       round trip, and neither should be quoted as a speed.</div>
+    <h2 id="http-h">HTTP requests</h2>
+    <div class="note">Kept apart from the add-on log on purpose. A busy panel makes hundreds of
+      requests a minute, and mixing those into the service log buries the one line that explains
+      why a dashboard is behaving oddly. <b>Errors are held in their own ring</b>, so a failure
+      this morning is still here this evening rather than having scrolled away behind a thousand
+      successful asset fetches. Full detail at <code>access.json</code>.</div>
+    <div id="http-sum" class="note" style="display:none"></div>
+    <div id="http-wrap" class="tblwrap"><table id="httptbl"><thead>
+      <tr><th>When</th><th>Status</th><th>Method</th><th>Path</th><th>Time</th><th>Client</th></tr>
+    </thead><tbody></tbody></table></div>
+
     <h2 id="tuning-h">Resource tuning</h2>
     <div class="note">Every resource below is installed in Home Assistant and referenced by
       <b>no dashboard this add-on serves</b> — so no panel is receiving it. That means one of two
@@ -263,6 +274,44 @@ function renderTuning(s) {
   }
 }
 
+async function renderHttp() {
+  let h;
+  try {
+    const r = await fetch('./access.json?limit=40', { cache: 'no-store' });
+    if (!r.ok) return;
+    h = await r.json();
+  } catch { return; }
+
+  const show = h.errors.length ? h.errors : h.access;
+  $('http-h').style.display = h.total ? '' : 'none';
+  $('http-wrap').style.display = h.total ? '' : 'none';
+
+  const sum = $('http-sum');
+  if (h.total) {
+    sum.style.display = '';
+    const cls = Object.entries(h.byStatusClass).map(([k, v]) => k + ' ' + v.toLocaleString()).join(' · ');
+    const slow = h.slowest[0];
+    sum.innerHTML = '<b>' + h.total.toLocaleString() + '</b> requests — ' + cls
+      + (slow ? ' · slowest <code>' + slow.path + '</code> at ' + slow.ms + 'ms' : '')
+      + (h.errors.length ? ' — <b>showing the ' + h.errors.length + ' most recent error'
+          + (h.errors.length === 1 ? '' : 's') + '</b>' : ' — no errors, showing recent traffic');
+  }
+
+  const tb = document.querySelector('#httptbl tbody');
+  tb.innerHTML = '';
+  for (const r of show.slice(0, 40)) {
+    const tr = document.createElement('tr');
+    const bad = r.status >= 400;
+    tr.innerHTML = '<td>' + new Date(r.at).toLocaleTimeString() + '</td>'
+      + '<td' + (bad ? ' class="err"' : '') + '>' + r.status + '</td>'
+      + '<td>' + r.method + '</td>'
+      + '<td style="word-break:break-all">' + r.path + '</td>'
+      + '<td>' + r.ms + ' ms</td>'
+      + '<td>' + (r.ip || '—') + '</td>';
+    tb.appendChild(tr);
+  }
+}
+
 async function tick() {
   let s;
   try {
@@ -275,6 +324,7 @@ async function tick() {
   }
 
   renderTuning(s);
+  renderHttp();
 
   const opts = s.options || {};
   const pills = Object.entries(opts)

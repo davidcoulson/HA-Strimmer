@@ -36,6 +36,7 @@ import * as history from './history.mjs';
 import { classify, normalizeIp } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
+import * as httpLog from './http_log.mjs';
 
 // ---- config (add-on options.json or env) ----
 function loadOptions() {
@@ -48,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.25';
+const VERSION = '2026.09.13.26';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1606,7 +1607,13 @@ function ipHint(req) {
   return hit.path;
 }
 
-const server = http.createServer((req, res) => { noteClientDash(req); proxy.web(req, res); });
+const server = http.createServer((req, res) => {
+  // Request logging goes to its own ring, not to stdout — see http_log.mjs on why a request log
+  // and a service log do not belong in the same stream.
+  httpLog.observe(req, res, clientIp);
+  noteClientDash(req);
+  proxy.web(req, res);
+});
 
 // ---- websocket upgrades ----
 // We intercept ONLY /api/websocket (the entity firehose) to trim it. EVERY other ws
@@ -2164,6 +2171,7 @@ function statsExtras() {
       version: ALLOW_VERSION,
       byDashboard: Object.fromEntries([...ALLOW_BY_DASH].map(([d, s]) => [d, s.size])),
     },
+    http: (() => { const h = httpLog.snapshot({ limit: 0 }); return { total: h.total, byStatusClass: h.byStatusClass, slowest: h.slowest.slice(0, 5) }; })(),
     resources: {
       byDashboard: Object.fromEntries(RESOURCE_STATS),
       // Dropped by EVERY dashboard: either genuinely unused (uninstall it) or a resident module
@@ -2243,6 +2251,12 @@ const statsServer = http.createServer((req, res) => {
       }
     });
     return;
+  }
+  if (path.endsWith('/access.json')) {
+    const limit = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('limit')) || 100, 500);
+    const body = JSON.stringify(httpLog.snapshot({ limit }), null, 2);
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(body);
   }
   if (path.endsWith('/history.json')) {
     const body = JSON.stringify(history.history());

@@ -20,7 +20,7 @@ RUN npm install --omit=dev --no-audit --no-fund
 
 # App code. This list is explicit, so a new module that is not added here builds fine and then
 # dies at startup with ERR_MODULE_NOT_FOUND — add every .mjs the proxy imports.
-COPY ha_ws_trim_proxy.mjs lovelace_extract.mjs stats.mjs history.mjs route.mjs mdns.mjs mqtt_sensors.mjs panel.html ./
+COPY ha_ws_trim_proxy.mjs lovelace_extract.mjs stats.mjs history.mjs route.mjs mdns.mjs mqtt_sensors.mjs http_log.mjs panel.html ./
 
 # The stats endpoint is the honest liveness probe: it is served by the same process that
 # proxies, and it answers even while Home Assistant is still down (the proxy retries the

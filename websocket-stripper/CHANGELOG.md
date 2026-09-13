@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026.09.13.26 — 2026-09-13
+
+**New: HTTP access and error logs, kept apart from the service log.**
+
+The add-on stdout is a *service* log — what it decided, what it trimmed, why an allowlist moved.
+That is the right stream for those and the wrong one for a request log: a busy panel makes
+hundreds of requests a minute, and mixing them in buries the one line that explains why a
+dashboard is behaving oddly.
+
+Requests now go to their own ring buffers, readable at `access.json` and shown in the panel.
+**No files** — an add-on writes to a container filesystem a rebuild discards, and rotation, size
+caps and disk-full handling are a lot of moving parts for a log most people read twice.
+
+**Two rings, deliberately.** A single combined log cannot serve both readers: size it to keep an
+error from this morning and it holds twenty minutes of traffic; size it for traffic and the error
+is gone before anyone looks.
+
+- **access** — everything, so *what happened just now* is answerable
+- **errors** — 4xx and 5xx only, so a failure at 09:14 is still there at 17:00
+
+Counts are rolled up separately from the rings, because a total derived from a ring silently falls
+as rows age out — which would make the numbers lie the longer the add-on ran. The slowest requests
+are kept for the whole uptime for the same reason: a p99 from an hour ago is exactly what a
+rolling window loses and a person wants.
+
+The panel polling its own JSON is excluded from the access ring — otherwise reading the ring fills
+the ring — but still counts toward the total, and a **failure** on one of those paths is always
+kept, since a 500 on `stats.json` is the most interesting thing that could happen to it.
+
+
 ## 2026.09.13.25 — 2026-09-13
 
 **The stats panel now helps you tune `trim_resources`, instead of only reporting on it.**
