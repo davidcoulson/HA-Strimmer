@@ -44,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.17';
+const VERSION = '2026.09.12.18';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1162,7 +1162,16 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       }
       return safeSend(s);
     };
-    try { m = JSON.parse(s); } catch { return done(); }
+    try { m = JSON.parse(s); } catch (e) {
+      // Diagnostic: something is sending frames that are neither binary nor JSON, and
+      // guessing what they are has now failed twice. Dump one, throttled, with enough
+      // detail to identify it: the ws binary flag, the buffer type, and the actual bytes.
+      logThrottled('unparsed-frame', `unparsed frame: isBinary=${isBinary} isBuffer=${Buffer.isBuffer(raw)} `
+        + `len=${raw?.length ?? '?'} parse=${e.message} `
+        + `hex=${Buffer.from(raw).subarray(0, 32).toString('hex')} `
+        + `text=${JSON.stringify(s.slice(0, 120))}`);
+      return done();
+    }
     if (STRIP && m && m.type === 'result' && getStatesIds.has(m.id) && Array.isArray(m.result)) {
       const before = m.result.length;
       m.result = m.result.filter((e) => allow.has(e.entity_id));

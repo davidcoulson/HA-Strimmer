@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.09.12.18 — 2026-09-12
+
+Diagnostic: log one sample of any frame that is neither binary nor parseable JSON, throttled,
+with its ws binary flag and leading bytes. Such frames are 89% of what a wall panel receives
+here and two hypotheses about their origin have already been wrong.
+
 ## 2026.09.12.17 — 2026-09-12
 
 **Fixed: binary websocket frames were being corrupted.** Every frame from Home Assistant was
