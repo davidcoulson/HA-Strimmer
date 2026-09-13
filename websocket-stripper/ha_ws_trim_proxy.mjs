@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.15';
+const VERSION = '2026.09.13.16';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1543,7 +1543,13 @@ server.on('upgrade', (req, socket, head) => {
   } else {
     // Keyed on the path, not req.url: camera stream URLs carry a per-request signature, so
     // keying on the whole thing would defeat the throttle (and grow the map) during a retry storm.
-    logThrottled(`passthrough:${req.url.split('?')[0]}`, `ws upgrade passthrough -> HA: ${req.url}`);
+    // Name the client. Without this a passthrough that repeats forever — an add-on ingress
+    // panel reconnecting on a timer, say — is unattributable: you can see it happening and
+    // have no way to tell which device is doing it.
+    const pt = classify(req);
+    logThrottled(`passthrough:${req.url.split('?')[0]}`,
+      `ws upgrade passthrough -> HA: ${req.url} (from ${pt.ip ?? '?'}${pt.origin ? `, ${pt.origin}` : ''}`
+      + `${pt.route ? ` via ${pt.route}` : ''})`);
     proxy.ws(req, socket, head);
   }
 });

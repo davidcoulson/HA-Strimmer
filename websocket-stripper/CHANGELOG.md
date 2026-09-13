@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.09.13.16 — 2026-09-13
+
+**The websocket passthrough log now names the client.**
+
+Non-`/api/websocket` upgrades are proxied straight through and logged, but the line carried only
+the URL:
+
+```
+ws upgrade passthrough -> HA: /api/hassio_ingress/LyiEpUdy.../ws
+```
+
+Which is useless the moment it repeats. A live instance showed that exact line every ~31 seconds,
+248 times — an add-on's Ingress panel reconnecting on a timer — and there was no way to tell which
+device was doing it. The line now carries the client, its origin and its route, the same way the
+`/api/websocket` line already did:
+
+```
+ws upgrade passthrough -> HA: /api/hassio_ingress/... (from 10.2.3.42, lan via proxy)
+```
+
+
 ## 2026.09.13.15 — 2026-09-13
 
 **Fixed: the add-on rebuilt its entire allowlist for registry changes that could not possibly
