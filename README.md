@@ -109,32 +109,56 @@ Being straight with you, because measuring this took a while:
 
 ### 🧠 Wait — what's an entity vs a registry vs a resource?
 
-Fair question. Home Assistant sends a dashboard four completely different kinds of thing, and
-each switch trims a different one.
+Fair question — and the names don't help, because two of them sound like the same thing and
+aren't. Home Assistant sends a dashboard four completely different kinds of thing, and each
+switch trims a different one.
 
-#### 🔌 Entities — your actual stuff, and what it's doing right now
+The one worth getting straight first: **the states and the registries are separate payloads.**
+The states say what your lights are *doing*; the registries say what they're *called* and
+where they live. Both are sent, in full, on every page load.
+
+#### 🔌 Entity states — one switch, two payloads
+
+Your actual stuff, and what it's doing. This arrives as **two different things**, which is
+worth separating because only one of them ever stops:
+
+**1. The snapshot** — *what is everything doing right now*, sent once when the page loads.
 
 > `light.kitchen_ceiling` → *on, 60% brightness*
 > `sensor.outdoor_temperature` → *12.4 °C*
 > `binary_sensor.front_door` → *closed*
 
-One per light, sensor, switch, button, plug and thermostat you own. This is the part that
-never stops: Home Assistant streams **every change to every one of them**, forever, to every
-open dashboard — including the 9,000 your wall panel will never show.
+**2. The stream** — *what just changed*, sent forever after that.
 
-*Trimmed by `strip_entities`.*
+> …four minutes later: `binary_sensor.front_door` → *open*
 
-#### 📇 Registries — Home Assistant's address book
+Modern Home Assistant delivers both down **one subscription**: the first message is the whole
+snapshot, everything after it is a diff. (There's an older, separate call for the snapshot
+alone — `get_states` — but the current frontend doesn't use it. On the instance this was built
+against it is never called once.)
 
-Three separate lists: one of every **entity**, one of every **device**, one of every **area**.
-They record names and what belongs to what.
+*Trimmed by `strip_entities`* — by telling Home Assistant, at subscribe time, the only entities
+this dashboard cares about. Which is why **this is the one saving the stats panel can't show
+you**: HA filters server-side, so the untrimmed version is never built and there's nothing to
+measure against. Sized once by running with `strip_entities: false` and comparing: **2.5 MB**
+of snapshot per page load and roughly **17 MB per hour** of stream, versus 112 KB and 0.5 MB/h
+with it on.
+
+#### 📇 Registries — the catalogue, not the values
+
+Here's the bit that trips people up: the registries are a **completely separate** set of lists
+from the states above. They hold no values at all. They're the phone book — what exists, what
+it's called, what it belongs to.
 
 > The entity registry row for `light.kitchen_ceiling` says it's called "Ceiling" and belongs
 > to device *Hue Lamp 3*. The device registry says *Hue Lamp 3* lives in the **Kitchen** area.
 
-That's the machinery that lets a card show **"Kitchen · Ceiling"** instead of
-`light.kitchen_ceiling`. Useful — but it's one row per entity **for your entire house**, sent
-on every single page load, even for a dashboard showing four lights.
+That's what lets a card show **"Kitchen · Ceiling"** instead of `light.kitchen_ceiling`. It
+changes only when you add, rename or move something — and yet it's one row per entity **for
+your entire house**, re-sent on every single page load.
+
+If you take one thing from this section: on a large install **the phone book is far bigger
+than the states**. It's the single largest thing your dashboard downloads.
 
 *Trimmed by `trim_registries`.*
 
@@ -164,14 +188,14 @@ dead weight on a panel that just shows the temperature.
 
 ---
 
-Rough sizes on the instance this was built against (9,751 entities), **per page load**:
+Measured per page load on the instance this was built against (9,751 entities):
 
-| | Size | |
-|---|---|---|
-| 📇 Registries | **12.7 MB** | the largest download by a distance |
-| 🎨 Resources | **21 MB** | of custom-card JavaScript |
-| 🔌 Entities | **2.5 MB** | plus a permanent stream of updates |
-| ⚙️ Services | **196 KB** | across 115 integrations |
+| | Before | After | |
+|---|---|---|---|
+| 📇 Registries | **12.7 MB** | ~200 KB | the largest download, by a distance |
+| 🎨 Resources | **21 MB** | ~3 MB | of custom-card JavaScript |
+| 🔌 Entity states | **2.5 MB** | 112 KB | plus ~17 MB/h of stream → ~0.5 MB/h |
+| ⚙️ Services | **196 KB** | ~43 KB | across 115 integrations |
 
 ### Which are safe to leave on?
 
