@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026.09.13.30 — 2026-09-13
+
+**`get_services` is now served from the same cache the registries use — and that cache stopped
+being wrong for widened connections.**
+
+`get_services` is every service of every integration, and the frontend asks for it on every page
+load. Like the registries beside it, the answer is identical for every client on a given
+allowlist — but it was the last of the big instance-wide payloads still being rebuilt by Home
+Assistant and re-parsed here once per connection, while the registries were being answered from
+memory. A kiosk load opens several websockets, and a handful of panels multiplied that into real
+CPU on the HA host for no new information.
+
+Fixing that first required fixing the cache it joins.
+
+**The shared response cache was unsound for any connection wider than its dashboard.** It is
+keyed by `(kind, dashboard, allowlist version)` — which is exactly what makes it shareable, and
+exactly what makes it wrong when a single connection carries more than its dashboard does. Three
+things do that: a `client_overrides` pin, entities a voice satellite self-identified, and
+`user_overrides` applied once the user is known.
+
+Both directions were broken:
+
+- a widened connection could **read** an entry built from the narrow set, missing precisely the
+  rows its extra entities needed — under-inclusion, which is the direction that actually breaks
+  cards, leaving names and areas unresolved
+- a widened connection could **write** its entry back, handing every ordinary connection on that
+  dashboard another client's rows
+
+Widened connections now skip the cache in both directions. They are the minority — a few pinned
+panels — so the win is kept intact for the common case and correctness costs nothing. The
+`user_overrides` flag is set before the gate that releases held requests, so it is always in
+place before the first registry or `get_services` message is examined.
+
+Two tests cover it: an ordinary second connection is served from cache without HA being asked
+again, and a client-pinned connection goes to HA every time. Both were checked against
+deliberately reintroduced regressions rather than merely passing.
+
+**`url` in `config.yaml` now points at this fork.** It is what the Apps UI links to from the
+app's page, so it has to point at the code actually installed — the version, changelog and docs
+shown there should describe what is running. Upstream is credited in the README, which is the
+right place for attribution and the wrong place for a "what am I running?" link.
+
 ## 2026.09.13.29 — 2026-09-13
 
 **Replaced `http-proxy` with `httpxy`, and moved to Node 24.**

@@ -674,6 +674,78 @@ describe('get_services trimming', () => {
   });
 });
 
+// get_services is instance-wide and sent on every page load, exactly like the registries
+// beside it — but it was the one big payload still being rebuilt by HA and re-parsed here once
+// per connection, while the registries were served from memory.
+describe('get_services caching', () => {
+  const ask = async (p) => {
+    const c = haClient(`ws://127.0.0.1:${p}/api/websocket`);
+    await c.authed;
+    const r = (await c.rpc({ type: 'get_services' })).result;
+    c.close();
+    return r;
+  };
+
+  // Its own proxy and mock, because "the first connection fetches it" is only observable on a
+  // COLD cache — reuse a warm one and the test passes without proving anything.
+  it('serves the second connection from cache without asking HA again', async () => {
+    const m2 = await startMockHa();
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port: p2, extraEnv: { TRIM_SERVICES: '1' } });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const before = m2.rpcCount('get_services');
+      const first = await ask(p2);
+      const mid = m2.rpcCount('get_services');
+      const second = await ask(p2);
+      const after = m2.rpcCount('get_services');
+
+      assert.equal(mid - before, 1, 'the first connection must fetch it from HA');
+      assert.equal(after - mid, 0, 'the second must not — that is the whole point');
+      assert.deepEqual(second, first, 'and must still get an identical answer');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // The cache is keyed by (kind, dashboard, allowlist version), which is what makes it
+  // shareable — and also what makes it wrong for a connection whose allowlist is WIDER than its
+  // dashboard's. Such a connection must not read the shared entry (it would be missing its
+  // extra entities) and must not write one (every ordinary connection on that dashboard would
+  // inherit another client's rows). A `client_overrides` pin is the reachable case in a test,
+  // since every loopback client presents as 127.0.0.1; `user_overrides` and a self-identified
+  // satellite widen a connection the same way and take the same path.
+  it('a client-pinned connection neither reads nor writes the shared cache', async () => {
+    const m2 = await startMockHa();
+    const p2 = await getFreePort();
+    const px = spawnProxy({
+      mock: m2, dashPaths: 'test-dash', port: p2,
+      extraEnv: {
+        TRIM_SERVICES: '1',
+        // sensor.decoy_power exists on the instance and is on no dashboard, so this genuinely
+        // widens the set rather than being a no-op the pinning check would ignore.
+        CLIENT_OVERRIDES: JSON.stringify([
+          { client: '127.0.0.1', devices: [], always_forward: ['sensor.decoy_power'] },
+        ]),
+      },
+    });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const before = m2.rpcCount('get_services');
+      await ask(p2);
+      await ask(p2);
+      assert.equal(m2.rpcCount('get_services') - before, 2,
+        'a widened connection must go to HA every time rather than share a per-dashboard entry');
+
+      // And the widening is real: the pinned entity reaches this connection, which is what a
+      // stale narrow cache would have silently withheld.
+      const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`);
+      await c.authed;
+      const ids = (await c.rpc({ type: 'get_states' })).result.map((e) => e.entity_id);
+      c.close();
+      assert.ok(ids.includes('sensor.decoy_power'), 'the client_overrides entity must be present');
+    } finally { px.kill(); await m2.close(); }
+  });
+});
+
 describe('registry trimming', () => {
   let mock, proxy, port;
   before(async () => {

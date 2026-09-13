@@ -1,9 +1,13 @@
 name: WebSocket Stripper
-version: "2026.09.13.29"
+version: "2026.09.13.30"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
-url: https://github.com/GabrielGoldsteinAnidea/HA-Websocket-Stripper
+# This fork, not upstream. `url` is what the Apps UI links to from the app's page, so it has to
+# point at the code that is actually installed — the version, changelog and docs shown there
+# should describe what is running. Upstream is credited in the README instead, which is the
+# right place for attribution and the wrong place for a "what am I running?" link.
+url: https://github.com/davidcoulson/HA-Websocket-Stripper
 arch:
   - amd64
   - aarch64

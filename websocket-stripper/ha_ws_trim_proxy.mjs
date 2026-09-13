@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.29';
+const VERSION = '2026.09.13.30';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1689,6 +1689,10 @@ server.on('upgrade', (req, socket, head) => {
     const device = discovery.lookup(rt.ip);
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
       ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned,
+      // Whether this connection's allowlist is WIDER than the dashboard's own. The shared
+      // response cache is keyed by dashboard, so a connection that carries extra entities must
+      // not read from it or write to it — see allowDiverged in bridge().
+      selfIdentified: selfIdentified > 0,
       device: device ? { kind: device[0].kind, name: device[0].name, version: device[0].version } : null,
       origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
     }));
@@ -1724,6 +1728,19 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   });
   let userChecked = false;
   let learnedKick = false;   // only ever drop a connection once for a newly-learned identity
+  // Does this connection's allowlist still equal the one its DASHBOARD resolves to?
+  //
+  // REG_RESPONSE_CACHE is keyed by (kind, dashboard, allowlist version) — deliberately, since
+  // that is what makes it shareable. But three things widen a single connection beyond its
+  // dashboard: a `client_overrides` pin, entities a satellite self-identified, and
+  // `user_overrides` applied once the user is known. A widened connection must neither READ
+  // the shared entry (it would be missing that connection's extra rows — under-inclusion is
+  // the direction that actually breaks cards, leaving names and areas unresolved) nor WRITE
+  // one (poisoning every ordinary connection on that dashboard with another user's rows).
+  //
+  // Widened connections are the minority — a few pinned panels — so skipping the cache for
+  // them keeps the whole win for the common case and costs correctness nothing.
+  let allowDiverged = !!(meta.clientPinned || meta.selfIdentified);
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
   const registryIds = new Map();    // request id -> which registry, to trim its result
@@ -1793,6 +1810,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         }
         if (extra) {
           allow = applyUserRules(allow, extra);
+          // This connection no longer matches its dashboard, so it stops sharing the response
+          // cache. Set before openGate() below, which is what releases the held registry and
+          // get_services requests — so the flag is always in place before they are examined.
+          allowDiverged = true;
           log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
             + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`);
         }
@@ -1809,7 +1830,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (STRIP && m && m.type === 'get_states') getStatesIds.add(m.id);
     if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) {
       const kind = REGISTRY_TYPES.get(m.type);
-      const hit = REG_RESPONSE_CACHE.get(regCacheKey(kind, dash));
+      const hit = allowDiverged ? undefined : REG_RESPONSE_CACHE.get(regCacheKey(kind, dash));
       if (hit !== undefined) {
         // Answer locally and never forward: HA is not asked to build the registry again.
         // Safe against HA's increasing-id rule because nothing is sent to HA at all, and
@@ -1824,7 +1845,21 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       registryIds.set(m.id, kind);
     }
     if (STRIP && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
-    if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') serviceIds.add(m.id);
+    // get_services is every service of every integration, sent on every page load, and — like
+    // the registries — identical for every client on a given allowlist. It was the last of the
+    // big instance-wide payloads still being rebuilt by HA and re-parsed here once per
+    // connection, while the registries beside it were being served from memory.
+    if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
+      const hit = allowDiverged ? undefined : REG_RESPONSE_CACHE.get(regCacheKey('services', dash));
+      if (hit !== undefined) {
+        logThrottled('regcache:services', `get_services served from cache${dash ? ` (${dash})` : ''}`);
+        stats.recordCacheHit(hit.length);
+        safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
+        return;
+      }
+      stats.recordCacheMiss();
+      serviceIds.add(m.id);
+    }
     // No event_type means "every event", which includes state_changed.
     if (STRIP && m && m.type === 'subscribe_events'
         && (!m.event_type || m.event_type === 'state_changed')) {
@@ -2054,7 +2089,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // Keep the trimmed rows for the next connection on this allowlist. Stored as a JSON
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
-      REG_RESPONSE_CACHE.set(regCacheKey(kind, dash), JSON.stringify(msg.result));
+      if (!allowDiverged) REG_RESPONSE_CACHE.set(regCacheKey(kind, dash), JSON.stringify(msg.result));
     }
     if (STRIP && TRIM_SERVICES && msg && msg.type === 'result' && serviceIds.has(msg.id)
         && msg.result && typeof msg.result === 'object' && !Array.isArray(msg.result)) {
@@ -2071,6 +2106,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         logThrottled('services', `get_services trimmed ${before} -> ${after} domains${dash ? ` (${dash})` : ''}`);
       }
       cat = 'services';
+      // Cache whatever is actually being SENT, not `next` — when the trim keeps nothing
+      // (`after === 0`) the block above deliberately forwards the untrimmed result rather than
+      // handing the frontend an empty service list, and the cache has to agree with that
+      // decision or the first connection would see the safe answer and every later one the
+      // empty one.
+      if (!allowDiverged) REG_RESPONSE_CACHE.set(regCacheKey('services', dash), JSON.stringify(msg.result));
     }
     if (STRIP && TRIM_RESOURCES && msg && msg.type === 'result' && resourceIds.has(msg.id) && Array.isArray(msg.result)) {
       resourceIds.delete(msg.id);
