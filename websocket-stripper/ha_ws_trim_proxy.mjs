@@ -982,7 +982,10 @@ async function buildResources(rpc, keysByDash) {
 // session's reconnects.
 const USER_CACHE = new Map();                 // sha256(token) -> { user, at }
 const USER_TTL_MS = 10 * 60 * 1000;
-const USER_LOOKUP_TIMEOUT_MS = 3000;
+// Generous, because the cost of timing out is silently serving the wrong allowlist, while the
+// cost of waiting is a one-off delay on a connection that is already waiting on Home Assistant
+// anyway. Only ever paid once per token per TTL, and never when HA is healthy.
+const USER_LOOKUP_TIMEOUT_MS = 8000;
 
 function tokenKey(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
@@ -998,7 +1001,10 @@ function resolveUser(token) {
     const finish = (user) => {
       if (settled) return;
       settled = true;
-      USER_CACHE.set(key, { user, at: Date.now() });
+      // Only cache a REAL answer. Caching a failure meant one slow moment from Home Assistant
+      // disabled a user's rules for the full TTL — the rules silently stopped applying long
+      // after HA recovered, which is exactly how "my updates disappeared" happened.
+      if (user) USER_CACHE.set(key, { user, at: Date.now() });
       if (USER_CACHE.size > 200) USER_CACHE.delete(USER_CACHE.keys().next().value);
       try { ws.close(); } catch {}
       resolve(user);
