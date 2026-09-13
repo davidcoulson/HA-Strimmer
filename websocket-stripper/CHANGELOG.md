@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026.09.13.14 — 2026-09-13
+
+**Fixed: the traffic panel double-counted every batched frame, and sized it wrong.**
+
+Home Assistant packs messages into a JSON array. `m.type` is `undefined` on an array, so a
+batched frame was labelled once in the array branch and then fell through **every** branch of the
+labelling chain into the catch-all `(no type field)` bucket — producing two rows for one frame.
+
+The live panel proved it arithmetically:
+
+```
+batched event:entity-diff+result   n=15
+batched event:entity-diff          n=140
+batched result                     n=10
+                                   ---
+                                   165
+(no type field)                    n=165     <- exact match
+```
+
+`(no type field)` was never unexplained traffic. It was the same 165 frames counted again,
+carrying **2.78MB** that was not a distinct payload. That bucket exists to surface genuinely
+typeless objects — the thing you actually want to know about — and it was drowned in phantoms.
+
+**Second defect in the same place:** the array branch recorded `inBytes` while every other path
+records `outBytes`. Batched frames were therefore reported at their **pre-trim** size, so the
+largest row in the table was measuring something different from every row beside it. On the live
+instance that read as **17.30MB across 15 messages** — 1.15MB per frame, against a measured
+cold-start entity payload of about 50KB.
+
+Both are fixed: a batched frame is now recorded exactly once, in `done()`, at the size that
+actually went to the browser. The regression test was verified to fail without the fix.
+
+Nothing about what the add-on *sends* changes — this is purely what it reports about itself. But
+a panel that exists to explain where the bytes go should not invent 2.78MB and misreport its
+biggest row by an order of magnitude.
+
+
 ## 2026.09.13.13 — 2026-09-13
 
 Version bump only, to force Supervisor to re-read `config.yaml`.

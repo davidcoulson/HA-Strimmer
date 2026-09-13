@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.13';
+const VERSION = '2026.09.13.14';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1711,6 +1711,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // smaller when permessage-deflate is on, and deliberately not what the panel reports.
     const inBytes = Buffer.byteLength(s);
     let cat = null;
+    // Set for a BATCHED (array) frame, so done() labels it once, after trimming. Home Assistant
+    // packs messages into arrays; `m.type` is undefined on those, so without this they fall
+    // through every branch in done() and land in the "(no type field)" bucket — on top of the
+    // label the array branch already recorded. Measured live: 165 batched frames produced 165
+    // phantom "(no type field)" entries carrying 2.78MB that was never a separate payload.
+    let batchedKinds = null;
     let isEvent = false;
     const done = () => {
       const outBytes = Buffer.byteLength(s);
@@ -1721,7 +1727,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       stats.connTraffic(connId, inBytes, outBytes, isEvent);
       // Label by kind so nothing can flow unexplained. Events carry their event_type;
       // results are attributed to the command that asked for them.
-      if (m && m.type === 'event') {
+      if (batchedKinds !== null) {
+        // One row per frame, sized like every other row: what actually went to the browser.
+        stats.recordTraffic(`batched ${batchedKinds}`, outBytes);
+      } else if (m && m.type === 'event') {
         stats.recordTraffic(`event:${m.event?.event_type ?? 'entity-diff'}`, outBytes);
       } else if (m && m.type === 'result') {
         stats.recordTraffic(`result:${pendingTypes.get(m.id) ?? 'unknown'}`, outBytes);
@@ -1866,7 +1875,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       const before = m.length;
       const kept = [];
       for (const x of m) { const t = transform(x); if (t !== null) kept.push(t); }
-      stats.recordTraffic(`batched ${kinds}`, inBytes);
+      // Recorded in done() instead, against the TRIMMED size. This used to record inBytes here,
+      // which reported batched frames at their pre-trim size while every other row reported what
+      // was actually sent — making the biggest row in the table both double-counted and inflated.
+      batchedKinds = kinds;
       if (!kept.length) return;                        // nothing survived: forward nothing
       if (changed || kept.length !== before) {
         s = JSON.stringify(kept);

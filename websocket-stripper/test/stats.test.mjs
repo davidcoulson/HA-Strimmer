@@ -283,3 +283,69 @@ describe('stats API over HTTP', () => {
     c.close();
   });
 });
+
+describe('batched frame accounting', () => {
+  let mock, proxy, port, statsPort, out = '';
+
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    statsPort = await getFreePort();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env,
+        HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(statsPort), STRIP_ENTITIES: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 8000;
+    while (!/stats panel on/.test(out) || !/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never started\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
+  after(() => { proxy?.kill(); mock?.close(); });
+
+  // Regression: Home Assistant batches messages into a JSON array, and `m.type` is undefined on
+  // an array. The batched frame was labelled in the array branch AND then fell through every
+  // branch of done() into the "(no type field)" bucket — so each frame produced two rows.
+  // Measured on a live instance: 165 batched frames, 165 phantom "(no type field)" entries
+  // carrying 2.78MB that was never a distinct payload. The array branch also recorded inBytes
+  // while every other path recorded outBytes, so the largest row in the table was reported at
+  // its PRE-TRIM size and could not be compared with any row beside it.
+  it('counts a batched frame once, at its trimmed size', async () => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    c.send({ type: 'subscribe_entities', id: 70 });
+    await new Promise((r) => setTimeout(r, 200));
+
+    const before = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body).byMessage;
+    const noTypeBefore = before['(no type field)']?.count ?? 0;
+
+    // A batch carrying an entity event plus an unrelated result — HA's real shape.
+    mock.pushEntityEventBatched(
+      { a: { 'light.living_room': { s: 'on' } } },
+      { id: 998, type: 'result', success: true, result: { pad: 'x'.repeat(5000) } },
+    );
+    await new Promise((r) => setTimeout(r, 400));
+
+    const after = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body).byMessage;
+    const batched = Object.entries(after).filter(([k]) => k.startsWith('batched '));
+    assert.ok(batched.length, `a batched row was recorded; got ${JSON.stringify(Object.keys(after))}`);
+
+    assert.equal(after['(no type field)']?.count ?? 0, noTypeBefore,
+      'a batched frame must NOT also be filed under "(no type field)" — that bucket is for '
+      + 'genuinely typeless objects, and double-counting made it the second-largest row on a live panel');
+
+    // The recorded size must be what went out, not what came in. The filler is ~5KB and survives
+    // trimming here, so this pins the units rather than the exact number.
+    const [, row] = batched[0];
+    assert.ok(row.bytes > 0, 'the batched row carries a size');
+    assert.ok(row.bytes < 1024 * 1024, `a single small batch must not report megabytes (got ${row.bytes})`);
+  });
+});
