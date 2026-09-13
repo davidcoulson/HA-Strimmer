@@ -68,11 +68,19 @@ Both cellular rows also land just above their theoretical transfer time at the s
 which is the sanity check that they are measuring the link rather than the harness.
 
 **On a fast link to a fast client it is a net loss**, and the three runs did not overlap — the
-fastest trimmed run was still slower than the slowest untrimmed one. The reason is structural:
-the add-on is a reverse proxy, so **every HTTP byte goes through it**, including the ~2.3 MB
-frontend bundle it does not trim. At 9 Mbps the link dominates and that hop is invisible. On
-gigabit it *is* the bottleneck, and saving 5 MB of websocket no longer pays for it. Per-user rules
-add a further round trip, since a connection is held until the user is resolved.
+fastest trimmed run was still slower than the slowest untrimmed one.
+
+The cause is **not** the extra HTTP hop, which is the intuitive explanation and is wrong. Measured
+directly against this instance, the add-on serves the frontend *faster* than Home Assistant does:
+0.029 s versus 0.043 s for the same 564 KB bundle, and 31 ms versus 75 ms per request across 40
+sequential requests. Proxying the bundle is a small net win, not a cost.
+
+What remains is the websocket path — the add-on receives Home Assistant's full answer and trims
+it, so the parsing that the browser used to do now happens in the middle, as a blocking step
+rather than in parallel with rendering. On a slow link that is an excellent trade, because the
+link is the bottleneck and the proxy is not. On gigabit to a fast browser there is no bottleneck
+left for it to remove. That explanation is consistent with the measurements but has not itself
+been isolated, and it is stated here as the open question it is.
 
 Between those extremes there is a crossover. The trimming saves ~5 MB while the proxy hop costs
 about a second, so the two cancel somewhere in the **tens of Mbps** — call it a fast home
