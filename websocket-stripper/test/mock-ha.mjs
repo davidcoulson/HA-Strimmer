@@ -18,6 +18,13 @@ export function getFreePort() {
   });
 }
 
+// token -> the user HA would report for it.
+const DEFAULT_USERS = {
+  'david-token': { id: 'u-david', name: 'David', is_admin: true },
+  'michelle-token': { id: 'u-michelle', name: 'Michelle', is_admin: false },
+  default: { id: 'u-default', name: 'Default', is_admin: false },
+};
+
 const DEFAULT_CONFIGS = { 'test-dash': DASH_TEST, 'auto-dash': DASH_AUTO };
 // render_template bodies, keyed by the template source the config asks for.
 const DEFAULT_TEMPLATES = { PV_TEMPLATE: "[{'entity': 'sensor.pv_roof_power'}, {'entity': 'sensor.pv_shed_power'}]" };
@@ -57,7 +64,7 @@ const DEFAULT_REGISTRIES = {
 
 // `port` pins the listen port so a test can take HA down and bring it back on the same
 // address — i.e. simulate an HA restart under a running proxy.
-export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, registries = DEFAULT_REGISTRIES, templates = DEFAULT_TEMPLATES, resources = DEFAULT_RESOURCES, resourceBodies = DEFAULT_RESOURCE_BODIES, port: fixedPort } = {}) {
+export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CONFIGS, states = STATES, registries = DEFAULT_REGISTRIES, templates = DEFAULT_TEMPLATES, resources = DEFAULT_RESOURCES, resourceBodies = DEFAULT_RESOURCE_BODIES, port: fixedPort } = {}) {
   const port = fixedPort ?? await getFreePort();
   configs = { ...configs };    // per-mock copy, so a setConfig() in one test can't leak into the next
   const state = {
@@ -120,9 +127,16 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
     ws.send(JSON.stringify({ type: 'auth_required', ha_version: '2026.7.0' }));
     ws.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
-      if (m.type === 'auth') { ws.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.7.0' })); return; }
+      if (m.type === 'auth') {
+        // Remember which token authenticated, so auth/current_user can answer per-token the
+        // way HA does — that is the whole mechanism the per-user rules rely on.
+        conn.token = m.access_token;
+        ws.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.7.0' }));
+        return;
+      }
       if (m.type) state.rpcCounts.set(m.type, (state.rpcCounts.get(m.type) || 0) + 1);
       const ok = (result) => ws.send(JSON.stringify({ id: m.id, type: 'result', success: true, result }));
+      if (m.type === 'auth/current_user') return ok(users[conn.token] ?? users.default ?? null);
       if (m.type in registries) return ok(registries[m.type]);   // config/*_registry/list
       switch (m.type) {
         case 'get_states': return ok(states);

@@ -58,6 +58,14 @@ configuration:
       every integration and is sent on every page load — 193KB across 115 domains on a large
       install. Off by default: the frontend uses it for service pickers and the automation
       editor, so this is fine for a kiosk and visibly lossy in the admin UI.
+  user_overrides:
+    name: Per-user entity rules
+    description: >-
+      Always/never lists that apply to one Home Assistant USER. This is the only way to express
+      "David sees update.* but Michelle does not" when both open the same dashboard. Give the
+      user's name as shown in Settings → People (or their user id), then their own
+      always_forward / never_forward patterns. Identity comes from the browser's own access
+      token, resolved once per session; leave this empty and no lookup is ever made.
   dashboard_overrides:
     name: Per-dashboard entity rules
     description: >-

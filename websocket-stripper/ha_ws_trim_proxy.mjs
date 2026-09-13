@@ -27,6 +27,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import httpProxy from 'http-proxy';
 import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers } from './lovelace_extract.mjs';
@@ -44,7 +45,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.01';
+const VERSION = '2026.09.13.03';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -115,6 +116,24 @@ const NEVER = parseRules(OPT.never_forward ?? process.env.NEVER_FORWARD);
 // Assist pipeline). They are the wrong shape for something ONE dashboard needs: forcing
 // `update.*` in globally to fix a sidebar counter on the admin dashboard added 252 entities
 // to a wall panel that shows four lights, which is most of the trimming given back.
+// user (lower-cased name, or id) -> { always: rules, never: rules }
+//
+// Per-USER rules, because per-dashboard cannot express "David sees update.* on lovelace but
+// Michelle does not" — they load the same dashboard. The identity comes from the browser's own
+// auth token, resolved once per session against HA's `auth/current_user`.
+const USER_RULES = new Map(
+  (() => {
+    const raw = OPT.user_overrides
+      ?? (process.env.USER_OVERRIDES ? JSON.parse(process.env.USER_OVERRIDES) : []);
+    return Array.isArray(raw) ? raw : [];
+  })()
+    .filter((o) => o && typeof o.user === 'string')
+    .map((o) => [o.user.toLowerCase(), {
+      always: parseRules(o.always_forward),
+      never: parseRules(o.never_forward),
+    }]),
+);
+
 // dash -> { always: rules, never: rules }
 const PER_DASH_RULES = new Map(
   (() => {
@@ -215,6 +234,9 @@ const openBridges = new Set();
 // an EMPTY allowlist would render every card "unavailable" until a manual reload — so until
 // this flips we refuse /api/websocket upgrades instead (the frontend just keeps retrying).
 let ALLOW_READY = false;
+// Every entity_id on the instance, from the last allowlist build. User rules are applied per
+// connection, long after buildAllow has returned, so a /regex/ needs something to expand over.
+let REAL_IDS = [];
 
 // HA events that can change the computed allowlist: a dashboard edit, or a registry change
 // that alters what an area/label/device/integration auto-entities filter resolves to.
@@ -312,6 +334,7 @@ function applyOverrides(set, realIds, dash = null) {
 async function buildAllow(rpc, renderTemplate) {
   const states = await rpc({ type: 'get_states' });
   const realIds = states.map((s) => s.entity_id);
+  REAL_IDS = realIds;
   // The control connection asks for every state by definition, so this is the instance size.
   // Do NOT learn it from a browser's get_states instead: the modern frontend subscribes
   // rather than polling, so that path can go a whole uptime without ever firing.
@@ -931,6 +954,81 @@ async function buildResources(rpc, keysByDash) {
   }
 }
 
+// ---- which USER is this connection? ----
+// The browser's first websocket message carries its access token, and that token IS the
+// identity — so the proxy can ask Home Assistant who it belongs to instead of guessing from
+// an address. Done on a SEPARATE short-lived connection on purpose: HA enforces strictly
+// increasing message ids per connection, so injecting a lookup into the browser's own socket
+// risks colliding with an id the frontend uses later.
+//
+// Cached by a hash of the token, never the token itself, and only long enough to cover a
+// session's reconnects.
+const USER_CACHE = new Map();                 // sha256(token) -> { user, at }
+const USER_TTL_MS = 10 * 60 * 1000;
+const USER_LOOKUP_TIMEOUT_MS = 3000;
+
+function tokenKey(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function resolveUser(token) {
+  const key = tokenKey(token);
+  const hit = USER_CACHE.get(key);
+  if (hit && Date.now() - hit.at < USER_TTL_MS) return Promise.resolve(hit.user);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (user) => {
+      if (settled) return;
+      settled = true;
+      USER_CACHE.set(key, { user, at: Date.now() });
+      if (USER_CACHE.size > 200) USER_CACHE.delete(USER_CACHE.keys().next().value);
+      try { ws.close(); } catch {}
+      resolve(user);
+    };
+    const timer = setTimeout(() => finish(null), USER_LOOKUP_TIMEOUT_MS);
+    if (typeof timer.unref === 'function') timer.unref();
+
+    let ws;
+    try { ws = new WebSocket(HA_WS, { perMessageDeflate: false }); }
+    catch { clearTimeout(timer); return resolve(null); }
+
+    ws.on('message', (raw) => {
+      let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+      if (m.type === 'auth_required') return ws.send(JSON.stringify({ type: 'auth', access_token: token }));
+      if (m.type === 'auth_ok') return ws.send(JSON.stringify({ id: 1, type: 'auth/current_user' }));
+      if (m.type === 'auth_invalid') { clearTimeout(timer); return finish(null); }
+      if (m.type === 'result' && m.id === 1) {
+        clearTimeout(timer);
+        return finish(m.success ? (m.result ?? null) : null);
+      }
+    });
+    // A failed lookup must never break the connection it was asked about: no user, no rules.
+    ws.on('error', () => { clearTimeout(timer); finish(null); });
+    ws.on('close', () => { clearTimeout(timer); finish(null); });
+  });
+}
+
+// The rules for a resolved user, matched on name (case-insensitive) or id.
+function rulesForUser(user) {
+  if (!user || !USER_RULES.size) return null;
+  return USER_RULES.get(String(user.name ?? '').toLowerCase())
+    ?? USER_RULES.get(String(user.id ?? '').toLowerCase())
+    ?? null;
+}
+
+// Widen (or narrow) one connection's allowlist by its user's rules. Never mutates the shared
+// set the dashboard build produced — that is reused by every other connection.
+function applyUserRules(set, extra) {
+  const out = new Set(set);
+  extra.always.forEach((r) => {
+    if (r.literal) out.add(r.literal);
+    else REAL_IDS.forEach((eid) => { if (r.re.test(eid)) out.add(eid); });
+  });
+  [...out].forEach((eid) => { if (matchesAny(extra.never, eid)) out.delete(eid); });
+  return out;
+}
+
 // ---- which dashboard is this client looking at? ----
 // The websocket upgrade itself carries nothing that identifies the dashboard: the frontend
 // opens ONE /api/websocket for the whole SPA and only asks for `lovelace/config` later —
@@ -1067,7 +1165,7 @@ server.on('upgrade', (req, socket, head) => {
     }
     const { set, dash, via } = allowFor(req);
     if (dash) log(`/api/websocket for ${clientIp(req)}: serving ${dash} via ${via} (${set.size} entities, union is ${ALLOW.size})`);
-    wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, { ip: clientIp(req), via }));
+    wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, { ip: clientIp(req), via, ua: req.headers['user-agent'] }));
   } else {
     // Keyed on the path, not req.url: camera stream URLs carry a per-request signature, so
     // keying on the whole thing would defeat the throttle (and grow the map) during a retry storm.
@@ -1079,9 +1177,10 @@ server.on('upgrade', (req, socket, head) => {
 // `allow` is THIS connection's allowlist — one dashboard's, or the union when the client
 // couldn't be attributed. Captured per bridge rather than read from the global, so two
 // kiosks on different dashboards get genuinely different subscriptions.
-function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
+function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0 });
-  const connId = stats.connOpen({ ip: meta.ip, dash, via: meta.via, allowSize: allow.size });
+  const connId = stats.connOpen({ ip: meta.ip, dash, via: meta.via, allowSize: baseAllow.size, ua: meta.ua });
+  let userChecked = false;
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
   const registryIds = new Map();    // request id -> which registry, to trim its result
@@ -1098,6 +1197,22 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
   const queue = []; let haOpen = false;
   const toHA = (s) => { if (haOpen) haWs.send(s); else queue.push(s); };
 
+  // This connection's allowlist. Starts as the dashboard's shared set and may be replaced once
+  // the user behind the token is known. Never mutated in place — other connections share it.
+  let allow = baseAllow;
+  // While a user lookup is in flight, browser->HA messages are held and flushed in order.
+  // Order matters: Home Assistant requires strictly increasing message ids per connection, so
+  // letting a later message overtake an earlier one while we wait would break the socket.
+  // The gate opens after the auth message, which is the first thing the frontend sends, so in
+  // practice it holds a handful of messages for one local round trip.
+  let gateQueue = null;
+  const sendOrQueue = (str) => { if (gateQueue) gateQueue.push(str); else toHA(str); };
+  const openGate = () => {
+    const held = gateQueue || [];
+    gateQueue = null;
+    held.forEach(toHA);
+  };
+
   haWs.on('open', () => { haOpen = true; queue.forEach((s) => haWs.send(s)); queue.length = 0; });
 
   browserWs.on('message', (raw, isBinary) => {
@@ -1107,6 +1222,22 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
     if (isBinary) return toHA(raw);
     let s = raw.toString(); let m;
     try { m = JSON.parse(s); } catch { return toHA(s); }
+    // The auth message carries the identity. Forward it immediately (HA is waiting for it),
+    // then hold everything after it until the user is known.
+    if (USER_RULES.size && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
+      userChecked = true;
+      toHA(s);
+      gateQueue = [];
+      resolveUser(m.access_token).then((user) => {
+        const extra = rulesForUser(user);
+        if (extra) {
+          allow = applyUserRules(allow, extra);
+          log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
+            + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`);
+        }
+      }).catch(() => {}).finally(openGate);
+      return;
+    }
     if (m && m.id != null && m.type) {
       if (pendingTypes.size > 500) pendingTypes.clear();
       pendingTypes.set(m.id, m.type);
@@ -1164,7 +1295,7 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       subEntityIds.delete(m.subscription);
       stateChangedSubs.delete(m.subscription);
     }
-    toHA(s);
+    sendOrQueue(s);
   });
 
   haWs.on('message', (raw, isBinary) => {

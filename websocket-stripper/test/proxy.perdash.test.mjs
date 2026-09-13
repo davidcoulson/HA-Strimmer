@@ -121,6 +121,52 @@ describe('per-dashboard allowlists', () => {
 // same WAN address overwrite each other. A cookie is per-browser, which is the granularity
 // actually wanted — and it is what makes remote access through a tunnel work, where every
 // client arrives from one address.
+describe('per-user always_forward', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash', port,
+      // The case per-dashboard rules cannot express: two people, one dashboard, different
+      // entities. David gets the decoys; Michelle opens the very same dashboard and does not.
+      extraEnv: { USER_OVERRIDES: JSON.stringify([
+        { user: 'David', always_forward: ['/^sensor\\.decoy_/'] },
+      ]) },
+    });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  const injectedForToken = async (token) => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, token);
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    await new Promise((r) => setTimeout(r, 400));
+    const got = mock.lastSubscribeEntities();
+    c.close();
+    return new Set(got ?? []);
+  };
+
+  it('widens the allowlist for the matching user', async () => {
+    const david = await injectedForToken('david-token');
+    assert.ok(david.has('sensor.decoy_power'), 'David gets his extra entities');
+    assert.ok(david.has('light.living_room'), 'and still gets the dashboard itself');
+  });
+
+  it('leaves a different user on the same dashboard untouched', async () => {
+    const michelle = await injectedForToken('michelle-token');
+    assert.ok(!michelle.has('sensor.decoy_power'), 'Michelle must not inherit David rules');
+    assert.ok(michelle.has('light.living_room'), 'but still gets the dashboard itself');
+  });
+
+  it('applies no rules when the user is unknown', async () => {
+    const other = await injectedForToken('some-other-token');
+    assert.ok(!other.has('sensor.decoy_power'));
+    assert.ok(other.has('light.living_room'));
+  });
+});
+
 describe('per-dashboard always_forward', () => {
   let mock, proxy, port;
   before(async () => {

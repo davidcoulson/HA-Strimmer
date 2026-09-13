@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026.09.13.02 — 2026-09-13
+
+**Per-user `always_forward` / `never_forward`,** via a new `user_overrides` option — the one
+thing per-dashboard rules cannot express: two people opening the *same* dashboard who should
+not be served the same entities.
+
+Identity comes from the browser's own access token, which is already the first thing it sends,
+resolved against HA's `auth/current_user`. The lookup runs on a separate short-lived
+connection because Home Assistant enforces strictly increasing message ids per connection, so
+injecting it into the browser's own socket could collide with an id the frontend uses later.
+Results are cached by a hash of the token — never the token — for ten minutes.
+
+Messages after `auth` are held in order until the lookup returns, because letting a later
+message overtake an earlier one would break that same id rule. A failed or slow lookup applies
+no rules rather than failing the connection, and with `user_overrides` empty no lookup is ever
+made.
+
 ## 2026.09.13.01 — 2026-09-13
 
 **Per-dashboard `always_forward` / `never_forward`,** via a new `dashboard_overrides` option.

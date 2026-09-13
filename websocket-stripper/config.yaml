@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.13.01"
+version: "2026.09.13.03"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -75,6 +75,11 @@ options:
   # because the cost lands on every panel. Example: the admin dashboard wants update.* for a
   # pending-updates counter, and a 4-card wall panel should not pay 252 entities for it.
   dashboard_overrides: []
+  # Per-USER always/never. The one thing per-dashboard rules cannot express: two people opening
+  # the SAME dashboard who should not be served the same entities. Identity comes from the
+  # browser's own auth token, resolved once per session against HA's auth/current_user, so it
+  # is the real HA user rather than an address. Empty = no lookup happens at all.
+  user_overrides: []
   resources_always_forward: []
   # URL patterns never sent to any dashboard. Wins over always.
   resources_never_forward: []
@@ -94,6 +99,12 @@ schema:
   compress_websocket: bool
   trim_resources: bool
   trim_services: bool
+  user_overrides:
+    - user: str
+      always_forward:
+        - str?
+      never_forward:
+        - str?
   dashboard_overrides:
     - dashboard: str
       always_forward:

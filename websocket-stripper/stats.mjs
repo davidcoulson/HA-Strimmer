@@ -60,11 +60,15 @@ export function recordTraffic(kind, bytes) {
 
 export function recordCacheHit(bytes) { cache.hits += 1; cache.bytes += bytes; }
 
-export function connOpen({ ip, dash, via, allowSize }) {
+export function connOpen({ ip, dash, via, allowSize, ua }) {
   const id = nextConnId++;
   connTotal += 1;
   conns.set(id, {
     id, ip: ip || null, dash: dash || null, via: via || null, allowSize: allowSize || 0,
+    // Reported verbatim rather than bucketed into "kiosk/phone/desktop": the useful
+    // distinctions live in vendor tokens that vary by app and firmware, so guessing a class
+    // here would bake in an assumption nobody can see or correct.
+    ua: typeof ua === 'string' ? ua.slice(0, 200) : null,
     since: Date.now(), fromHA: 0, toBrowser: 0, eventBytes: 0, msgs: 0,
   });
   return id;
@@ -101,7 +105,7 @@ export function snapshot(extra = {}) {
     const ageMs = now - c.since;
     const rate = ageMs >= 60000 ? Math.round(c.eventBytes / (ageMs / 60000)) : null;
     return {
-      id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize,
+      id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize, ua: c.ua,
       connectedSec: Math.round((now - c.since) / 1000), messages: c.msgs,
       fromHA: c.fromHA, toBrowser: c.toBrowser,
       eventBytes: c.eventBytes,
