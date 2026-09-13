@@ -108,7 +108,12 @@ jobs:
       # amd64 and arm64 only. Those cover x86 boxes and 64-bit Raspberry Pi OS, which is now
       # the default and what HA's own documentation recommends; armv7 is omitted rather than
       # shipped slowly and untested under QEMU. Say the word and it is one line.
+      # Only main and tags publish. workflow_dispatch exists so a BRANCH can be built and smoke
+      # tested before merging — and without this guard it published too, overwriting `latest` and
+      # the version tag with unmerged code. The smoke test above still runs on every dispatch,
+      # which is the part that made dispatch worth having.
       - name: Build and push
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         uses: docker/build-push-action@v6
         with:
           context: ./websocket-stripper
