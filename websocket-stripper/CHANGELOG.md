@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026.09.13.25 — 2026-09-13
+
+**The stats panel now helps you tune `trim_resources`, instead of only reporting on it.**
+
+The documented way to tune this option has been "turn it on, load each kiosk, read the add-on log,
+and see what looks wrong". That works, but it means SSH and a scroll — and the one failure the
+loop cannot catch is exactly the one the log was trying to warn about.
+
+The panel now shows the **dropped by ALL dashboards** list directly: every resource installed in
+Home Assistant that no served dashboard references, with its size, largest first. Each row has an
+**Always send** button that appends to `resources_always_forward`.
+
+The text beside it states the judgement the add-on cannot make. A resource nothing references is
+either **genuinely unused** — in which case the honest fix is to uninstall it rather than have a
+proxy hide it on every page load — or a **resident module** that registers no card and is named by
+no config but runs on load, where dropping it is invisible: the dashboard renders normally and
+only the behaviour stops.
+
+**The button pins a fragment, not a URL.** `resources_always_forward` matches substrings, and a
+HACS URL carries a version tag that changes on every update — pinning the whole URL would stop
+matching the next time the plugin updated. The panel derives the distinctive directory instead.
+
+### Writes are Ingress-only, and that is a security boundary
+
+The stats server binds every interface, which is how `http://<host>:8100/stats.json` works from a
+laptop. It has always been **read-only**, so an unauthenticated reader could learn only what the
+panel already shows. A configuration-write endpoint on that same server would let anyone on the
+LAN change this add-on's settings.
+
+So a write is accepted only when the request carries `X-Ingress-Path` **and** arrives from
+Supervisor's address — meaning Home Assistant authenticated the user before proxying it. A refused
+attempt is logged rather than silently dropped. Reads are unchanged.
+
+Configuration is read-modify-written through Supervisor, never blind-set: the options object holds
+every setting the user has, and writing one field alone would discard the rest.
+
+
 ## 2026.09.13.21 — 2026-09-13
 
 **New: fifteen long-term metrics, published as real Home Assistant sensors.**

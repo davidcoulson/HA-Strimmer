@@ -123,6 +123,25 @@
       the kernel socket buffer, not received by the device: a 215&nbsp;KB payload "drained" in
       6&nbsp;ms over cellular, which is far faster than any real transfer. Neither number is a
       round trip, and neither should be quoted as a speed.</div>
+    <h2 id="tuning-h">Resource tuning</h2>
+    <div class="note">Every resource below is installed in Home Assistant and referenced by
+      <b>no dashboard this add-on serves</b> — so no panel is receiving it. That means one of two
+      things, and the add-on cannot tell which:
+      <ul style="margin:.5rem 0 0 1rem;padding:0">
+        <li><b>Genuinely unused</b> — the honest fix is to uninstall it, not to have a proxy hide
+          it on every page load.</li>
+        <li><b>A resident module</b> that registers no card and is named by no config, but runs on
+          load: an idle timer, a camera pop-up, a heartbeat. Dropping one of those is
+          <b>invisible</b> — the dashboard renders normally and only the behaviour stops. Pin it.</li>
+      </ul>
+      <div style="margin-top:.5rem">Pinning writes to <code>resources_always_forward</code> and
+      needs an add-on restart to take effect.</div>
+    </div>
+    <div id="tuning-wrap" class="tblwrap"><table id="tuning"><thead>
+      <tr><th>Resource</th><th>Size</th><th></th></tr>
+    </thead><tbody></tbody></table></div>
+    <div id="tuning-msg" class="note" style="display:none"></div>
+
     <div class="note">Live update traffic is throughput, not a saving: Home Assistant filters the
       event stream server-side from the entity list this add-on injects, so the untrimmed volume
       never exists and cannot honestly be measured. Compare it against a run with
@@ -185,6 +204,65 @@ const NICE = {
   services: 'Service list (get_services)',
 };
 
+async function pinResource(fragment, btn) {
+  const msg = $('tuning-msg');
+  btn.disabled = true; btn.textContent = 'pinning…';
+  try {
+    const r = await fetch('./pin-resource', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fragment }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    btn.textContent = j.already ? 'already pinned' : 'pinned';
+    msg.style.display = '';
+    msg.innerHTML = j.already
+      ? '<b>' + fragment + '</b> was already in <code>resources_always_forward</code>.'
+      : '<b>' + fragment + '</b> added to <code>resources_always_forward</code>. '
+        + 'Restart the add-on to apply it.';
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Always send';
+    msg.style.display = '';
+    msg.innerHTML = '<span class="err">Could not pin ' + fragment + ': ' + e.message + '</span>';
+  }
+}
+
+// A resource URL is not a pattern. `resources_always_forward` matches substrings, so pin the
+// distinctive part of the path — the directory a HACS plugin installs into — rather than the
+// whole URL, which carries a version tag that changes on every update and would stop matching.
+function pinFragmentFor(url) {
+  const clean = String(url).split('?')[0];
+  const parts = clean.split('/').filter(Boolean);
+  const file = parts[parts.length - 1] || clean;
+  const dir = parts.length > 1 ? parts[parts.length - 2] : '';
+  return dir && dir !== 'local' && dir !== 'hacsfiles' ? dir : file.replace(/\.js$/, '');
+}
+
+function renderTuning(s) {
+  const rows = (s.resources && s.resources.droppedByAll) || [];
+  const pinned = new Set((s.resources && s.resources.alwaysForward) || []);
+  const tb = document.querySelector('#tuning tbody');
+  $('tuning-h').style.display = rows.length ? '' : 'none';
+  $('tuning-wrap').style.display = rows.length ? '' : 'none';
+  if (!rows.length) { tb.innerHTML = ''; return; }
+  tb.innerHTML = '';
+  for (const r of rows) {
+    const frag = pinFragmentFor(r.url);
+    const tr = document.createElement('tr');
+    const isPinned = pinned.has(frag);
+    tr.innerHTML = '<td style="word-break:break-all">' + r.url + '</td>'
+      + '<td>' + (r.kb >= 1024 ? (r.kb / 1024).toFixed(1) + ' MB' : r.kb + ' KB') + '</td>'
+      + '<td></td>';
+    const btn = document.createElement('button');
+    btn.textContent = isPinned ? 'already pinned' : 'Always send';
+    btn.disabled = isPinned;
+    btn.title = isPinned ? '' : 'Adds "' + frag + '" to resources_always_forward';
+    btn.onclick = () => pinResource(frag, btn);
+    tr.lastElementChild.appendChild(btn);
+    tb.appendChild(tr);
+  }
+}
+
 async function tick() {
   let s;
   try {
@@ -195,6 +273,8 @@ async function tick() {
     $('sub').innerHTML = '<span class="err">Cannot reach the add-on: ' + e.message + '</span>';
     return;
   }
+
+  renderTuning(s);
 
   const opts = s.options || {};
   const pills = Object.entries(opts)

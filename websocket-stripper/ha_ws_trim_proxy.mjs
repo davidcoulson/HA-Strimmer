@@ -48,7 +48,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.24';
+const VERSION = '2026.09.13.25';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -994,6 +994,11 @@ const RESOURCE_CACHE = new Map();     // url -> { tested:Set, present:Set|null, 
 let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
 // Per-dashboard resource figures for the stats panel. Populated by buildResources().
 let RESOURCE_STATS = new Map();       // dash -> { kept, dropped, keptKB, droppedKB }
+// The URLs behind those counts. Held so the panel can show WHICH resources were dropped and how
+// big they were — the log has always said this, but reading it means SSH and a scroll, which is
+// why the tuning loop is the part of this add-on people get wrong.
+let RESOURCE_DROPPED_ALL = [];        // [{ url, kb }] dropped by every dashboard
+let RESOURCE_DROPPED_BY_DASH = new Map();   // dash -> [{ url, kb }]
 // How big the instance actually is, taken from the control connection's own get_states —
 // which asks for everything by definition. Lets the panel say "104 of 9,751", not just "104".
 let INSTANCE_ENTITIES = 0;
@@ -1178,6 +1183,7 @@ async function buildResources(rpc, keysByDash) {
 
   const byDash = new Map();
   RESOURCE_STATS = new Map();
+  RESOURCE_DROPPED_BY_DASH = new Map();
   for (const [dash, keys] of keysByDash) {
     const keep = new Set();
     let keptB = 0, dropB = 0;
@@ -1187,6 +1193,10 @@ async function buildResources(rpc, keysByDash) {
       else dropB += bytes;
     }
     byDash.set(dash, keep);
+    RESOURCE_DROPPED_BY_DASH.set(dash, rows
+      .filter((r) => !keep.has(r.url))
+      .map((r) => ({ url: r.url.split('?')[0], kb: Math.round((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024) }))
+      .sort((a, b) => b.kb - a.kb));
     RESOURCE_STATS.set(dash, {
       kept: keep.size, dropped: rows.length - keep.size,
       keptKB: Math.round(keptB / 1024), droppedKB: Math.round(dropB / 1024),
@@ -1215,6 +1225,9 @@ async function buildResources(rpc, keysByDash) {
   const servedAnywhere = new Set();
   for (const keep of byDash.values()) for (const u of keep) servedAnywhere.add(u);
   const droppedByAll = rows.filter((r) => !servedAnywhere.has(r.url));
+  RESOURCE_DROPPED_ALL = droppedByAll
+    .map((r) => ({ url: r.url.split('?')[0], kb: Math.round((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024) }))
+    .sort((a, b) => b.kb - a.kb);
   if (droppedByAll.length) {
     const kb = droppedByAll.reduce((t, r) => t + (RESOURCE_CACHE.get(r.url)?.bytes || 0), 0) / 1024;
     log(`  resources: ${droppedByAll.length} dropped by ALL dashboards (no dashboard references them), ${kb.toFixed(0)}KB.`);
@@ -2151,13 +2164,86 @@ function statsExtras() {
       version: ALLOW_VERSION,
       byDashboard: Object.fromEntries([...ALLOW_BY_DASH].map(([d, s]) => [d, s.size])),
     },
-    resources: { byDashboard: Object.fromEntries(RESOURCE_STATS) },
+    resources: {
+      byDashboard: Object.fromEntries(RESOURCE_STATS),
+      // Dropped by EVERY dashboard: either genuinely unused (uninstall it) or a resident module
+      // about to go quietly inert (pin it). The add-on cannot tell those apart; a person can.
+      droppedByAll: RESOURCE_DROPPED_ALL,
+      droppedByDashboard: Object.fromEntries(RESOURCE_DROPPED_BY_DASH),
+      alwaysForward: RES_ALWAYS.map((r) => r.literal ?? String(r.re)),
+    },
   };
+}
+
+// Is this request arriving through Home Assistant's Ingress, rather than straight at the port?
+//
+// This is a security boundary, not a convenience. The stats server binds every interface — that is
+// how `http://<host>:8100/stats.json` works from a laptop — and it has always been READ-ONLY, so
+// an unauthenticated reader could learn only what the panel shows. A write endpoint on the same
+// server would let anyone on the LAN change this add-on's configuration.
+//
+// Ingress requests are proxied by Supervisor, which authenticates the Home Assistant user first
+// and stamps `X-Ingress-Path`. Requiring both that header and the Supervisor source address means
+// a write can only originate from someone Home Assistant already logged in.
+function viaIngress(req) {
+  if (!req.headers['x-ingress-path']) return false;
+  const peer = normalizeIp(req.socket?.remoteAddress) || '';
+  // Supervisor's own address on the hassio network. Also accept loopback for a local test.
+  return peer.startsWith('172.30.32.') || peer === '127.0.0.1' || peer === '::1';
+}
+
+// Append a URL fragment to `resources_always_forward` through Supervisor.
+//
+// Read-modify-write rather than a blind set: the options object holds every setting the user has,
+// and writing only this field would silently discard the rest.
+async function pinResource(fragment) {
+  if (!inAddon) throw new Error('not running as an add-on');
+  const headers = { Authorization: `Bearer ${process.env.SUPERVISOR_TOKEN}`, 'content-type': 'application/json' };
+  const cur = await (await fetch('http://supervisor/addons/self/info', { headers, signal: AbortSignal.timeout(8000) })).json();
+  const options = { ...(cur?.data?.options ?? {}) };
+  const list = Array.isArray(options.resources_always_forward) ? [...options.resources_always_forward] : [];
+  if (list.includes(fragment)) return { already: true, list };
+  list.push(fragment);
+  options.resources_always_forward = list;
+  const res = await fetch('http://supervisor/addons/self/options', {
+    method: 'POST', headers, body: JSON.stringify({ options }), signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`supervisor returned ${res.status}`);
+  return { already: false, list };
 }
 
 const statsServer = http.createServer((req, res) => {
   // Ingress rewrites the path prefix, so match on the tail rather than the whole URL.
   const path = String(req.url || '/').split('?')[0].replace(/\/+$/, '') || '/';
+  // Pin a resource so every dashboard receives it. Ingress only — see viaIngress().
+  if (path.endsWith('/pin-resource') && req.method === 'POST') {
+    if (!viaIngress(req)) {
+      logThrottled('pin-denied', `refused a resource pin from ${clientIp(req) ?? '?'} — writes are Ingress-only`);
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
+    }
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { fragment } = JSON.parse(body || '{}');
+        // A fragment is matched as a substring against resource URLs, so an empty or
+        // near-empty one would pin everything and quietly undo the whole feature.
+        if (typeof fragment !== 'string' || fragment.trim().length < 3) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'fragment must be at least 3 characters' }));
+        }
+        const out = await pinResource(fragment.trim());
+        log(`resource pinned via panel: ${fragment.trim()}${out.already ? ' (already present)' : ''} — restart to apply`);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ...out, restartRequired: !out.already }));
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
   if (path.endsWith('/history.json')) {
     const body = JSON.stringify(history.history());
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });

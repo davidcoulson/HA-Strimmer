@@ -349,3 +349,74 @@ describe('batched frame accounting', () => {
     assert.ok(row.bytes < 1024 * 1024, `a single small batch must not report megabytes (got ${row.bytes})`);
   });
 });
+
+// The write endpoint's security boundary.
+//
+// The stats server binds every interface — that is how http://<host>:8100/stats.json works from a
+// laptop — and it has always been READ-ONLY, so an unauthenticated reader learned only what the
+// panel shows. Adding a config-write endpoint to the same server would let anyone on the LAN
+// change this add-on's settings. Writes are therefore accepted only from Home Assistant Ingress,
+// which authenticates the user before proxying and stamps X-Ingress-Path.
+describe('resource pinning is Ingress-only', () => {
+  let mock, proxy, port, statsPort, out = '';
+
+  const post = (path, body, headers = {}) => new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = http.request({
+      host: '127.0.0.1', port: statsPort, path, method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), ...headers },
+    }, (res) => {
+      let b = ''; res.on('data', (c) => b += c);
+      res.on('end', () => resolve({ status: res.statusCode, body: b }));
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    statsPort = await getFreePort();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env, HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(statsPort), STRIP_ENTITIES: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 8000;
+    while (!/stats panel on/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never started\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
+  after(() => { proxy?.kill(); mock?.close(); });
+
+  it('refuses a write that did not come through Ingress', async () => {
+    const res = await post('/pin-resource', { fragment: 'kiosk-mode' });
+    assert.equal(res.status, 403,
+      'a direct request to the stats port must not be able to change add-on configuration');
+    assert.match(res.body, /Ingress/);
+  });
+
+  it('says so in the log, so an attempt is visible rather than silent', async () => {
+    assert.match(out, /refused a resource pin from .* writes are Ingress-only/);
+  });
+
+  it('rejects a fragment too short to mean anything, even via Ingress', async () => {
+    // A fragment is matched as a substring against resource URLs. An empty or one-character one
+    // would match every resource and silently undo the whole feature.
+    const res = await post('/pin-resource', { fragment: 'a' }, { 'x-ingress-path': '/api/hassio_ingress/x' });
+    assert.equal(res.status, 400);
+    assert.match(res.body, /at least 3 characters/);
+  });
+
+  it('still serves reads to anyone, which is unchanged behaviour', async () => {
+    const res = await httpGet(`http://127.0.0.1:${statsPort}/stats.json`);
+    assert.equal(res.status, 200, 'read access must not be affected by the write gate');
+  });
+});
