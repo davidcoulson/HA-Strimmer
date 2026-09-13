@@ -2,9 +2,9 @@ configuration:
   dashboards:
     name: Dashboards to serve
     description: >-
-      The url_path of each dashboard this add-on should serve, from Settings → Dashboards
+      The url_path of each dashboard this app should serve, from Settings → Dashboards
       (e.g. kitchen-kiosk). Only these are trimmed; anything not listed is served whole.
-      Leave empty and the add-on refuses websockets rather than relaying the full firehose.
+      Leave empty and the app refuses websockets rather than relaying the full firehose.
   always_forward:
     name: Always forward these entities
     description: >-
@@ -21,7 +21,7 @@ configuration:
   strip_entities:
     name: Strip the entity websocket
     description: >-
-      The core feature. Off turns the add-on into a plain pass-through proxy, which is
+      The core feature. Off turns the app into a plain pass-through proxy, which is
       useful for an A/B comparison when you want to measure what the trimming is worth.
   per_dashboard:
     name: Serve each connection only its own dashboard
@@ -41,7 +41,7 @@ configuration:
     name: Compress the websocket
     description: >-
       Negotiates permessage-deflate with the browser, which Home Assistant's own websocket
-      does. Leave this on: without it the add-on removes compression that HA would
+      does. Leave this on: without it the app removes compression that HA would
       otherwise have provided. Only worth turning off on very weak hardware, where the
       compression CPU costs more than the bytes it saves.
   trim_resources:
@@ -103,7 +103,7 @@ configuration:
     description: >-
       Publishes about fifteen high-level metrics as real Home Assistant sensors, so the recorder
       builds long-term statistics for them and you can graph months rather than minutes. Broker
-      credentials come from Supervisor automatically when the Mosquitto add-on is installed —
+      credentials come from Supervisor automatically when the Mosquitto app is installed —
       nothing to configure. The stats panel answers "what is happening right now"; these answer
       "what has been happening since June", which is a different question: a slowly climbing
       entity count means a dashboard picked up a broad filter, and a rebuild counter that never
@@ -128,7 +128,7 @@ configuration:
       rule use a `.local` hostname, which the container's own resolver cannot look up. Purely
       observational: it never decides what a client is served, because an mDNS name is a label a
       device chose for itself and matching it against Home Assistant device names would be
-      guesswork. Turn off if you do not want the add-on sending multicast queries.
+      guesswork. Turn off if you do not want the app sending multicast queries.
   mdns_services:
     name: mDNS service types to look for
     description: >-
@@ -145,7 +145,7 @@ configuration:
       (readings about its health: last seen, signal, status code). A litter robot carries 21
       entities and a card rendering a fill level needs a handful of them. EMPTY BY DEFAULT on
       purpose: whether a given card renders a diagnostic sensor is not knowable from here, and a
-      wrongly dropped entity blanks part of a card with no error anywhere. The add-on logs the
+      wrongly dropped entity blanks part of a card with no error anywhere. The app logs the
       split for every device it expands — "21 entities (12 primary, 6 config, 3 diagnostic)" —
       so look there first and decide with the real number in front of you.
   resources_always_forward:
@@ -164,13 +164,13 @@ configuration:
   port:
     name: Listen port
     description: >-
-      The port the add-on serves on (default 8099). Because it runs with host networking,
+      The port the app serves on (default 8099). Because it runs with host networking,
       this option is the only way to move it — the Network tab cannot remap a host-network
       port. Change it if something else already uses 8099.
   ha_base:
     name: Home Assistant URL (advanced)
     description: >-
-      Override the Home Assistant address the add-on proxies to. Only needed when the
+      Override the Home Assistant address the app proxies to. Only needed when the
       internal hostname does not resolve under host networking — then set something like
       http://192.168.1.10:8123.
   allow_ws_url:

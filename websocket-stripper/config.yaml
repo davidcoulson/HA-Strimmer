@@ -9,14 +9,14 @@ arch:
   - aarch64
   - armv7
 init: false
-# host_network: lets the add-on see the REAL browser IP (not the Docker gateway
+# host_network: lets the app see the REAL browser IP (not the Docker gateway
 # 172.30.32.1), so HA's trusted_networks auth provider can match the kiosk's LAN IP
 # via X-Forwarded-For. With a mapped port the client IP is rewritten by Docker before
-# the proxy sees it, breaking trusted login. Trade-off: the add-on binds :9123 directly
+# the proxy sees it, breaking trusted login. Trade-off: the app binds :9123 directly
 # on the host, and the internal `homeassistant`/`supervisor` DNS names may not resolve —
 # use the ha_base / allow_ws_url options below to pin them to IPs if startup fails.
 host_network: true
-# Ingress: puts the add-on's own statistics panel in the HA sidebar, with no configuration
+# Ingress: puts the app's own statistics panel in the HA sidebar, with no configuration
 # and no extra exposed port to reach it through. It serves on 8100 (see STATS_PORT in the
 # proxy), separate from the proxy port, so a dashboard url_path can never collide with a
 # stats path. Read-only — it reports, it cannot change anything.
@@ -28,18 +28,18 @@ panel_admin: false
 # SUPERVISOR_TOKEN + core API access (used only to precompute the dashboard allowlists).
 homeassistant_api: true
 hassio_api: true
-# Supervisor hands over broker credentials only to an add-on that declares it wants them.
-# `want`, not `need`: with no broker installed the add-on must still start and proxy.
+# Supervisor hands over broker credentials only to an app that declares it wants them.
+# `want`, not `need`: with no broker installed the app must still start and proxy.
 services:
   - mqtt:want
-# No `ports:` mapping: with host_network the add-on binds the host port directly, so a
+# No `ports:` mapping: with host_network the app binds the host port directly, so a
 # Docker port map is inert. The single source of truth for the listen port is the `port`
-# option below (default 9123). Reach the add-on at http://<host>:<port>.
+# option below (default 9123). Reach the app at http://<host>:<port>.
 options:
   # Empty on purpose. This used to default to the author's own dashboards, which on anyone
   # else's instance resolve to nothing — and an empty allowlist is not a harmless no-op: HA
   # reads `set(msg["entity_ids"]) or None`, so an empty entity_ids means NO filter, and the
-  # add-on would relay the full firehose it exists to prevent. Set this to your own
+  # app would relay the full firehose it exists to prevent. Set this to your own
   # dashboards' url_path values (Settings -> Dashboards).
   dashboards: []
   always_forward: []

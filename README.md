@@ -11,7 +11,7 @@ of it, forever. On a big install that is tens of megabytes before a single card 
 a wall panel or an old tablet, it is the difference between a dashboard and a loading
 screen.
 
-This add-on sits in front of Home Assistant and sends each dashboard **only what it
+This app sits in front of Home Assistant and sends each dashboard **only what it
 actually shows**. Same Home Assistant. Same dashboards. Same cards. Just not the other
 9,000 entities.
 
@@ -45,7 +45,7 @@ with **9,751 entities**:
 The table above is a wall panel — a slow client, where the cost is *parsing* 5.8 MB of JSON rather
 than moving it. Cellular is where payload size turns directly into waiting.
 
-Headless Chrome, same dashboard, loaded through the add-on and then straight at Home Assistant.
+Headless Chrome, same dashboard, loaded through the app and then straight at Home Assistant.
 Median of three runs (five on LAN), timed to the first `<ha-card>` actually rendered:
 
 | Link | 😴 Untrimmed | 🚀 Trimmed | | Time saved |
@@ -66,20 +66,20 @@ removed. Both cellular rows land just above their theoretical transfer time at t
 which is the check that they are measuring the link and not the harness.
 
 **On a fast LAN the margin narrows, as it must** — when the link is not the bottleneck, deleting
-5 MB from it buys less. The add-on is still ahead, and noticeably steadier: across five runs the
+5 MB from it buys less. The app is still ahead, and noticeably steadier: across five runs the
 trimmed loads sat between 412 and 630 ms while the untrimmed ones ranged from 474 to 2,028 ms.
 
 > **A cautionary tale, kept here because it cost a real second.** An earlier version of this table
-> showed the add-on **2.2× slower** on LAN. That was real, and the cause was a per-user rule scoped
-> to a dashboard the benchmark never opened: every connection was held while the add-on resolved
+> showed the app **2.2× slower** on LAN. That was real, and the cause was a per-user rule scoped
+> to a dashboard the benchmark never opened: every connection was held while the app resolved
 > the user, to reach a conclusion that could not change anything. Skipping that lookup when no rule
 > could match took the same load from **2,043 ms to 429 ms**. If you use `user_overrides`, scope
 > them to a dashboard — it is a correctness feature and a speed feature at once.
 
 Two things worth knowing if you are reasoning about where the time goes. Proxying the frontend is
-**not** a cost: measured against this instance the add-on serves it *faster* than Home Assistant
+**not** a cost: measured against this instance the app serves it *faster* than Home Assistant
 does — 0.029 s versus 0.043 s for the same 564 KB bundle, and 31 ms versus 75 ms per request over
-40 sequential requests. And the HTTP column is the control throughout: the add-on does not trim
+40 sequential requests. And the HTTP column is the control throughout: the app does not trim
 the frontend bundle, and it stays put.
 
 **[Full data and methodology → `docs/PERFORMANCE.md`](docs/PERFORMANCE.md)** — every run, the
@@ -88,7 +88,7 @@ discarded, and a measurement that was wrong for an hour before it was explained.
 
 Reproduce any of it with
 [`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs) — it needs no
-configuration change, because it compares the add-on's port against Home Assistant's own.
+configuration change, because it compares the app's port against Home Assistant's own.
 
 ### 📅 Now scale that to a day
 
@@ -136,7 +136,7 @@ the network, and parsed by a cheap wall tablet, so that it could be ignored.
   payload sizes, what each dashboard costs, and where every byte went
 - 🐳 **Runs on plain Docker too**, if you have no Supervisor
 - 🧱 **Running on a current, supported stack.** Node 24 LTS on Alpine — the same combination the
-  rest of the add-on ecosystem uses — with a maintained HTTP proxy library underneath. No
+  rest of the app ecosystem uses — with a maintained HTTP proxy library underneath. No
   end-of-life runtime quietly shipping without security patches, and nothing here compiles, so
   there are no native bindings to break on an upgrade
 - 🤖 **Built with AI assistance — and proven on real hardware.** Every number above was
@@ -168,7 +168,7 @@ It trims four separate payloads, and they are genuinely different things:
 - 🎨 **Custom cards** — so a panel stops parsing every card you ever installed
 - ⚙️ **The service list** — every action every integration can perform *(opt-in)*
 
-It also **turns compression back on**, which the add-on had previously been removing. Each
+It also **turns compression back on**, which the app had previously been removing. Each
 one is explained with examples further down.
 
 ---
@@ -178,7 +178,7 @@ one is explained with examples further down.
 Being straight with you, because measuring this took a while:
 
 - **It does not make Home Assistant's own frontend boot faster.** That is roughly 16
-  seconds on a slow panel and this add-on cannot touch it. A dashboard with *one* card
+  seconds on a slow panel and this app cannot touch it. A dashboard with *one* card
   was no quicker than a full one
 - **It is for kiosks and panels.** Send your admin browsing through it and
   Settings → Entities and Developer Tools will look oddly empty, because they genuinely
@@ -190,11 +190,11 @@ Being straight with you, because measuring this took a while:
 
 ## 🛠️ Set it up (about 5 minutes)
 
-1. HA → **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add:
+1. HA → **Settings → Apps → App store → ⋮ → Repositories**, add:
    `https://github.com/davidcoulson/HA-Websocket-Stripper`  <!-- fork -->
 2. Install **WebSocket Stripper**, open **Configuration**, and set `dashboards` to your own
    dashboards' `url_path` values (Settings → Dashboards). It ships **empty** — until you set
-   it, the add-on refuses `/api/websocket` and says so in the log, rather than silently
+   it, the app refuses `/api/websocket` and says so in the log, rather than silently
    serving the untrimmed firehose:
    ```yaml
    dashboards:
@@ -319,7 +319,7 @@ Measured per page load on the instance this was built against (9,751 entities):
   Home Assistant through the same URL. Keep a normal HA address for that.
 
 3. Start it. Browse `http://<ha-host>:9123/<your-dashboard>`. Point your kiosk browser
-   there. To move it off `9123`, set the `port` option — because the add-on runs
+   there. To move it off `9123`, set the `port` option — because the app runs
    `host_network: true`, the **Network** tab can't remap it.
 
 > **Tip — keep broad admin dashboards out of the `dashboards` list.** The allowlist is the
@@ -329,19 +329,19 @@ Measured per page load on the instance this was built against (9,751 entities):
 > dashboards you actually serve; the trim is dramatic for those (dozens of entities) and
 > pointless for a dashboard that shows most of the instance anyway.
 
-No long-lived token needed in the add-on — it uses the add-on's `SUPERVISOR_TOKEN` to
+No long-lived token needed in the app — it uses the app's `SUPERVISOR_TOKEN` to
 read the dashboard configs.
 
 ## 🐳 No Supervisor? Run it on plain Docker
 
-Add-ons need Supervisor, so if you run **Home Assistant Container** or **Core** you can't
+Apps need Supervisor, so if you run **Home Assistant Container** or **Core** you can't
 install one. Same program, same features — just a container:
 
 ```
 ghcr.io/davidcoulson/ha-websocket-stripper:latest
 ```
 
-You need **one thing the add-on gets for free**: a long-lived access token. In HA, click your
+You need **one thing the app gets for free**: a long-lived access token. In HA, click your
 user (bottom left) → **Security** → **Create token**.
 
 ### Quickest possible start
@@ -401,16 +401,16 @@ container is the container, not your HA.
 
 ### Every option, as an environment variable
 
-The container takes the same settings as the add-on. Lists are comma-separated; the last three
+The container takes the same settings as the app. Lists are comma-separated; the last three
 are JSON.
 
-| Env var | Add-on option | Notes |
+| Env var | App option | Notes |
 |---|---|---|
 | `HA_BASE` | — | Your HA, reachable **from the container**. |
-| `HA_TOKEN` | — | Long-lived access token. Required; the add-on uses `SUPERVISOR_TOKEN` instead. |
+| `HA_TOKEN` | — | Long-lived access token. Required; the app uses `SUPERVISOR_TOKEN` instead. |
 | `DASH_PATHS` | `dashboards` | `url_path` of each dashboard to serve. **Required** — empty means the proxy refuses websockets rather than serving the untrimmed firehose. |
 | `PORT` | `port` | Listen port (default `9123`). |
-| `STATS_PORT` | — | Stats panel + JSON API (default `8100`). Served over Ingress in the add-on; a plain port here. |
+| `STATS_PORT` | — | Stats panel + JSON API (default `8100`). Served over Ingress in the app; a plain port here. |
 | `ALWAYS_FORWARD` | `always_forward` | Literal ids or `/regex/`. |
 | `NEVER_FORWARD` | `never_forward` | Wins over everything. |
 | `STRIP_ENTITIES` | `strip_entities` | `0` = plain passthrough, for an A/B comparison. |
@@ -455,19 +455,19 @@ For a wall panel / fridge kiosk you usually don't want a password prompt. HA's
 [`trusted_networks`](https://www.home-assistant.io/docs/authentication/providers/#trusted-networks)
 auth provider shows a "pick a user" screen (or auto-selects one) for clients on trusted
 IPs. To make it work **through this proxy**, HA must see the real browser IP — and getting
-that right has two subtle requirements, both handled by this add-on out of the box:
+that right has two subtle requirements, both handled by this app out of the box:
 
-1. **The add-on runs with `host_network: true`** (built in). This is essential: with a
+1. **The app runs with `host_network: true`** (built in). This is essential: with a
    *mapped* port, Docker rewrites every client to the gateway `172.30.32.1` before the
    proxy ever sees it, so the kiosk's real IP is lost and trusted login can never match.
-   Host networking lets the add-on see the real browser IP.
-2. **The add-on forwards that IP via `X-Forwarded-For`, normalized to plain IPv4** (built
+   Host networking lets the app see the real browser IP.
+2. **The app forwards that IP via `X-Forwarded-For`, normalized to plain IPv4** (built
    in). Node reports dual-stack clients as IPv4-mapped IPv6 (`::ffff:192.168.1.50`), which
-   won't match an IPv4 `trusted_networks` subnet; the add-on strips that prefix for you, on
+   won't match an IPv4 `trusted_networks` subnet; the app strips that prefix for you, on
    both HTTP requests and websocket upgrades.
 
 Because of `host_network`, HA sees the proxied request coming from the **host itself**, so
-trust the host (not the add-on docker subnet) in your HA `configuration.yaml`:
+trust the host (not the app's Docker subnet) in your HA `configuration.yaml`:
 
 ```yaml
 http:
@@ -475,7 +475,7 @@ http:
   trusted_proxies:
     - 127.0.0.1
     - ::1
-    # - 192.168.1.2          # also add the host's own LAN IP if the add-on reaches HA via it
+    # - 192.168.1.2          # also add the host's own LAN IP if the app reaches HA via it
 
 homeassistant:
   auth_providers:
@@ -493,21 +493,21 @@ Then **restart HA Core** (`use_x_forwarded_for` and `auth_providers` are core-co
 changes, not a YAML quick-reload).
 
 > ℹ️ **Note:** because the proxy presents requests to HA from the host, anyone who can
-> reach the add-on's port effectively gets trusted-network login. That's the point for a
+> reach the app's port effectively gets trusted-network login. That's the point for a
 > kiosk on a trusted LAN, but it does mean the trimmed dashboards are reachable without a
 > password by anything on that network — size your `trusted_networks` accordingly.
 
-> 🛠️ **If `host_network` breaks startup** (the add-on can't resolve the internal
+> 🛠️ **If `host_network` breaks startup** (the app can't resolve the internal
 > `homeassistant`/`supervisor` hostnames), set the `ha_base` / `allow_ws_url` options to
 > pin them to IPs, e.g. `ha_base: http://192.168.1.2:8123`.
 
 ## 🌐 Behind your own reverse proxy (Caddy / nginx / Traefik, HTTPS)
 
-Putting your own reverse proxy in front of the add-on works — useful for TLS termination and
+Putting your own reverse proxy in front of the app works — useful for TLS termination and
 external access, and required for browser features that only work on a secure origin (mic
 input for Assist, for instance).
 
-The add-on **preserves the `X-Forwarded-For` chain** rather than replacing it, so HA sees the
+The app **preserves the `X-Forwarded-For` chain** rather than replacing it, so HA sees the
 real browser IP through both hops and `trusted_networks` still matches the kiosk, not your
 edge proxy. Make sure HA trusts every hop:
 
@@ -564,16 +564,16 @@ Set `STRIP_ENTITIES=0` to passthrough untrimmed for an A/B load comparison.
   can fail *silently*.
 - The allowlist **recomputes live** on dashboard edits and registry changes, and open kiosk
   pages reconnect themselves when it grows. Adding a whole new dashboard to the `dashboards`
-  option still needs an add-on restart (options are read at boot).
+  option still needs an app restart (options are read at boot).
 - Each recompute logs the exact `+added` / `-removed` entity diff, so you can see from the
-  add-on log what a dashboard edit changed.
-- **Restarting Home Assistant is safe.** The add-on stays up and waits: HTTP degrades to 502
+  app log what a dashboard edit changed.
+- **Restarting Home Assistant is safe.** The app stays up and waits: HTTP degrades to 502
   while core is down, then it reconnects, rebuilds, and open dashboards recover on their own.
-  Same at host boot, when the add-on starts before core is listening.
+  Same at host boot, when the app starts before core is listening.
 - Cards can still show "unavailable" if a filter type isn't supported yet — currently `not`,
   `and`, `or`, `floor`, `device_manufacturer`, `device_model`, `last_changed`. List those
   entities in `always_forward` and open an issue.
-- A **local** add-on bakes the code into its image at build time, so updates need a
+- A **local** app bakes the code into its image at build time, so updates need a
   **Rebuild**, not a Restart.
 - See `CLAUDE.md` for architecture/decisions and `websocket-stripper/DOCS.md` for option
   details.
@@ -605,7 +605,7 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
   that can fail quietly (`trim_resources`)
 - 🧠 **Repeat visits are cheaper.** Identical answers are remembered and served instantly
   instead of making Home Assistant build them all over again
-- 🏷️ **Every setting now explains itself** right in the add-on's Configuration tab
+- 🏷️ **Every setting now explains itself** right in the app's Configuration tab
 - 📊 **A stats panel in your HA sidebar.** See what it is actually saving you — connected panels, before/after sizes per dashboard, live traffic — instead of only finding out when something looks wrong. There is a `stats.json` behind it too, so you can graph any of it with a `rest` sensor
 - 🔁 **Your own HTTPS proxy works properly now.** Caddy, nginx or Traefik in front used to send
   pages into an endless redirect loop and break remote login. Fixed — including the
@@ -636,7 +636,7 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
 - **Group members are pulled in transitively**, so cards that expand a group client-side
   (`show_group_members`) stop showing their members as "unavailable".
 - **Fixed 400 Bad Request behind another reverse proxy** — the `X-Forwarded-For` chain is
-  preserved, so Caddy / nginx / Traefik in front of the add-on works.
+  preserved, so Caddy / nginx / Traefik in front of the app works.
 - **Open dashboards pick up new entities by themselves** — no more reloading every wall panel
   after a dashboard edit.
 
@@ -648,13 +648,13 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
   resolved nothing and relayed **every entity on the instance**, the exact opposite of the
   point. `dashboards` now defaults to `[]` and the websocket is refused (with the reason
   logged) rather than sending an empty filter.
-- **Surviving an HA restart** — the add-on no longer crash-loops when core goes away.
+- **Surviving an HA restart** — the app no longer crash-loops when core goes away.
 
 ### 0.2.0
 
 - **auto-entities `area` / `label` / `device` / `integration` filters resolve** against the
   registries, so you don't have to hand-list them in `always_forward`.
-- **Configurable `port` option** — coexist with other add-ons on busy hosts.
+- **Configurable `port` option** — coexist with other apps on busy hosts.
 - **Recompute logs the `+added` / `-removed` entity diff**, not just the total.
 - **Defensive egress filter** re-filters `subscribe_entities` event payloads to the
   allowlist on the way to the browser — a belt-and-suspenders guarantee the firehose can't

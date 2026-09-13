@@ -24,9 +24,9 @@ So the measurement is taken from outside, in a real browser, and the stopwatch s
 first `<ha-card>` actually exists in the page — the first moment a person would say the dashboard
 is up.
 
-### Why not the add-on's own timings
+### Why not the app's own timings
 
-The add-on records `msToEntityData` and `initialDrainMs` per connection, and those are **not** used
+The app records `msToEntityData` and `initialDrainMs` per connection, and those are **not** used
 here. They are useful diagnostics — they are the only view of a native companion-app socket, which
 no browser tooling can observe — but they are not a benchmark, for two reasons found by measuring
 them:
@@ -43,7 +43,7 @@ them:
 
 ### The A/B needs no configuration change
 
-The comparison is **the add-on's port against Home Assistant's own port** — `:9123` versus `:8123`
+The comparison is **the app's port against Home Assistant's own port** — `:9123` versus `:8123`
 — rather than toggling `strip_entities` on a running instance. Same dashboard, same browser, same
 throttle, same machine, one extra hop. This matters practically: toggling the option would degrade
 every panel in the house for the duration of the run.
@@ -114,7 +114,7 @@ All times in milliseconds.
 | LAN | untrimmed | 5,799–5,801 KB | 2,298–3,136 KB |
 
 **WebSocket payload falls by ~85%** — about 5.8 MB to 850 KB. **HTTP is unchanged**, which is the
-control: the add-on does not trim the frontend bundle.
+control: the app does not trim the frontend bundle.
 
 ### 3.4 The ratio is link-independent
 
@@ -127,7 +127,7 @@ ratio is worth: 5 on 4G, 29 on a weak cell.
 The intuitive objection is that a reverse proxy must slow HTTP down, since every byte passes
 through it. Measured directly with `curl` against the same host, it does the opposite:
 
-| Test | HA direct | Through the add-on |
+| Test | HA direct | Through the app |
 |---|---|---|
 | One 564 KB bundle, mean of 5 | 0.043 s | **0.029 s** |
 | 40 sequential requests | 74.7 ms each | **31.3 ms each** |
@@ -141,7 +141,7 @@ Assistant versus a fresh connection per request.
 
 Three independent checks, all of which the data passes.
 
-**The HTTP column is a control.** The add-on does not touch the frontend bundle, and it stays flat
+**The HTTP column is a control.** The app does not touch the frontend bundle, and it stays flat
 across every profile and both sides. A change there would mean the two arms differed in something
 other than the intended variable.
 
@@ -163,7 +163,7 @@ n=3, independent of the magnitude.
 
 ## 5. A measurement that was wrong
 
-An earlier version of the LAN result showed the add-on **2.2× slower** than not using it:
+An earlier version of the LAN result showed the app **2.2× slower** than not using it:
 
 | LAN, on `2026.09.13.16` | Untrimmed | Trimmed |
 |---|---|---|
@@ -171,13 +171,13 @@ An earlier version of the LAN result showed the add-on **2.2× slower** than not
 
 That was real, and two explanations were proposed and then **disproved by measurement**:
 
-1. *The extra HTTP hop.* Disproved by §3.5 — the add-on serves the frontend faster than Home
+1. *The extra HTTP hop.* Disproved by §3.5 — the app serves the frontend faster than Home
    Assistant does.
 2. *Parsing moved into the middle.* Plausible, never isolated, and unnecessary once the real cause
    was found.
 
 The actual cause was a **per-user rule scoped to a dashboard the benchmark never opened**. Every
-connection was held while the add-on resolved the connecting user — to reach a conclusion that
+connection was held while the app resolved the connecting user — to reach a conclusion that
 could not change anything. Skipping that lookup when no rule can match took the same load from
 **2,043 ms to 429 ms**, and flipped the verdict from 2.2× slower to 1.5× faster.
 
@@ -206,7 +206,7 @@ Two independent reasons to reject it:
   more. The run timed out and the page navigated, which is a harness failure and not a
   measurement.
 
-At that bitrate the profile measures the profile, not the add-on. It was replaced with **weak
+At that bitrate the profile measures the profile, not the app. It was replaced with **weak
 cell** (1.5 Mbps), which is a genuinely slow link that still completes.
 
 ---
@@ -247,12 +247,12 @@ Create the token under **Profile → Security → Long-lived access tokens**.
 | Variable | Default | Meaning |
 |---|---|---|
 | `HA_TOKEN` | *(required)* | Long-lived access token |
-| `HA_HOST` | `127.0.0.1` | Host running both the add-on and Home Assistant |
+| `HA_HOST` | `127.0.0.1` | Host running both the app and Home Assistant |
 | `DASH` | `dashboard-test` | Dashboard `url_path` to load |
 | `RUNS` | `3` | Runs per profile per side; the median is reported |
 | `PROFILES` | `4G,weak cell,no limit` | Which throttle profiles to run |
 
-Ports are the two constants in the script's run loop: `9123` (add-on) and `8123` (Home Assistant).
+Ports are the two constants in the script's run loop: `9123` (app) and `8123` (Home Assistant).
 
 The HTTP-hop test in §3.5 needs no token at all:
 

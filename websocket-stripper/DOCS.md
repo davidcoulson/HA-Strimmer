@@ -15,7 +15,7 @@ uses, so kiosk/wall-panel pages load fast on large instances — with no loss of
 | `per_dashboard` | bool | `true` (default) serves each connection only the dashboard it is actually viewing, instead of the union of every dashboard in `dashboards`. A panel showing one dashboard stops paying for the others. The dashboard is inferred from the page request that immediately precedes the websocket; a connection that can't be attributed falls back to the union, so nothing is ever served *less* than it was before this option existed. **Limit:** navigating to another dashboard *without* a page reload keeps the allowlist the connection opened with, so that dashboard's own entities show as unavailable until reload — see below. `false` = always serve the union (pre-2026.09 behaviour). |
 | `trim_registries` | bool | `true` (default) also trims the entity/device/area registries to what the connection can see, **including `config/entity_registry/list_for_display`**, which is typically the single largest payload the frontend fetches (1.44MB of a 2.46MB load on a 9,553-entity instance). Once states are trimmed this is the largest remaining payload on a big instance — it is one row per entity for the *whole* install. Devices and areas are kept wherever a surviving entity still reaches them, so names and area assignments keep resolving. Turn this **off first** if names, areas or device links render oddly. |
 | `trim_services` | bool | `false` (default). Cuts `get_services` to the domains the connection can see. It carries every service of every integration and is sent on every page load — **193KB across 115 domains** on the instance this was built against, where only **45 domains** had any entity. `homeassistant` is always kept, since its services are domain-agnostic. Off by default because the frontend uses this for service pickers and the automation editor. |
-| `compress_websocket` | bool | `true` (default) negotiates `permessage-deflate` with the browser, as HA's own websocket does. The `ws` library does not enable this server-side by default, so without it this add-on *removes* compression that HA would have provided — kiosks receive plaintext JSON. Deflate runs on libuv's threadpool, not the main loop. Set `false` only on very weak hardware where the CPU costs more than the bytes saved. |
+| `compress_websocket` | bool | `true` (default) negotiates `permessage-deflate` with the browser, as HA's own websocket does. The `ws` library does not enable this server-side by default, so without it this app *removes* compression that HA would have provided — kiosks receive plaintext JSON. Deflate runs on libuv's threadpool, not the main loop. Set `false` only on very weak hardware where the CPU costs more than the bytes saved. |
 | `trim_resources` | bool | `false` (default). Trims **Lovelace resources** (custom cards) per dashboard. Resources are instance-wide in HA, so every kiosk downloads and parses every custom card you have installed — 21MB of JavaScript for a 4-card wall panel on the instance this was built against. A resource is kept when the dashboard's card types (or non-builtin icon prefixes) appear in its file. **Off by default**, and see the tuning section below before turning it on — some resources fail *silently* when dropped. Every drop is logged with its size. |
 | `dashboard_overrides` | list | Per-**dashboard** always/never lists. The global lists above are right for something every dashboard needs and wrong for something only one needs, because every panel then pays for it. Each entry takes a `dashboard` (its `url_path`) plus its own `always_forward` / `never_forward`, same syntax as the global lists. The global `never_forward` still wins last. |
 | `user_overrides` | list | Per-**user** always/never lists — the one thing per-dashboard rules cannot express: two people opening the *same* dashboard who should not be served the same entities. Give the user's name as shown in Settings → People (or their user id). Add `dashboard` to scope a rule to one dashboard, so "David sees `update.*` on lovelace" does not follow him onto a wall panel. Identity comes from the browser's own access token, resolved once per session against `auth/current_user`. **Cost:** a connection that a rule *could* match is held until the user resolves. Connections whose dashboard no rule is scoped to skip the lookup entirely, so scoping your rules is also a speed optimisation. Leave this empty and no lookup ever happens. |
@@ -23,8 +23,8 @@ uses, so kiosk/wall-panel pages load fast on large instances — with no loss of
 | `exclude_device_categories` | list | Empty by default. When a **device** is expanded — by a card configured with a device rather than entities, or by a `client_overrides` rule — drop entities Home Assistant labels `config` (controls that configure the device: panel brightness, a reset button, a firmware update) or `diagnostic` (readings about its health: last seen, signal, status code). A litter robot carries 21 entities and a card rendering a fill level needs a handful. **Empty on purpose:** whether a given card renders a diagnostic sensor is not knowable from here, and a wrongly dropped entity blanks part of a card with no error anywhere. Every device expansion logs its split — `+21 entities (8 primary, 7 config, 6 diagnostic)` — so decide with the real numbers for *your* devices in front of you. Note a browser voice satellite measured 18 of 21 entities as `config`, because its pipeline and wake-word selects are configuration controls that the page's JavaScript nonetheless reads to work. |
 | `resources_always_forward` | list | URL patterns (literal substring, e.g. `kiosk-mode`, or `/regex/`) always sent. Needed for plugins that patch the frontend instead of registering a card — they contain none of the dashboard's card names, so the content match cannot tell they're used. In practice: `kiosk-mode`, icon packs, and anything that restyles core cards. |
 | `resources_never_forward` | list | URL patterns never sent to any dashboard. Wins over `resources_always_forward`. |
-| `port` | int | Port the add-on listens on (default `9123`). Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another add-on (e.g. Zigbee2MQTT). |
-| `ha_base` | string | Optional. Override the Home Assistant base URL the add-on proxies to (default `http://homeassistant:8123`). Set this if `host_network` is on and the internal `homeassistant` hostname doesn't resolve — e.g. `http://192.168.4.2:8123`. |
+| `port` | int | Port the app listens on (default `9123`). Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another app (e.g. Zigbee2MQTT). |
+| `ha_base` | string | Optional. Override the Home Assistant base URL the app proxies to (default `http://homeassistant:8123`). Set this if `host_network` is on and the internal `homeassistant` hostname doesn't resolve — e.g. `http://192.168.4.2:8123`. |
 | `allow_ws_url` | string | Optional. Override the websocket URL used once at startup to precompute the allowlist (default `ws://supervisor/core/websocket`). Set if `supervisor` doesn't resolve under `host_network` — e.g. `ws://192.168.4.2:8123/api/websocket` (also requires a token via `ALLOW_TOKEN`). |
 
 ### Example
@@ -76,17 +76,17 @@ the point of pinning to a device. A global `never_forward` still wins last over 
 After starting, browse to `http://<ha-host>:9123/<dashboard-url-path>`, e.g.
 `http://homeassistant.local:9123/fridge-status`. Point your kiosk browser at that URL.
 
-> **Port:** because this add-on runs with `host_network: true` (see the tradeoff below),
+> **Port:** because this app runs with `host_network: true` (see the tradeoff below),
 > it binds directly on the host and the **Network** tab cannot remap it. If `9123` collides
-> with another add-on (e.g. Zigbee2MQTT), set the `port` option instead.
+> with another app (e.g. Zigbee2MQTT), set the `port` option instead.
 
 The first visit prompts a normal HA login (it's a different origin); after that it's your
 real dashboard.
 
 ### Trusted-network (password-less) kiosk login
 
-To let a kiosk skip the password via HA's `trusted_networks` auth provider, the add-on
-must run with `host_network: true` (the default in this add-on). Without it, Docker
+To let a kiosk skip the password via HA's `trusted_networks` auth provider, the app
+must run with `host_network: true` (the default in this app). Without it, Docker
 rewrites every client to the gateway IP (`172.30.32.1`) before the proxy sees it, so the
 kiosk's real LAN IP never reaches HA and `trusted_networks` can't match it.
 
@@ -98,7 +98,7 @@ http:
   trusted_proxies:
     - 127.0.0.1
     - ::1
-    # add the host's own LAN IP too if the add-on reaches HA via it, e.g. 192.168.4.2
+    # add the host's own LAN IP too if the app reaches HA via it, e.g. 192.168.4.2
 homeassistant:
   auth_providers:
     - type: trusted_networks
@@ -112,10 +112,10 @@ Then `ha core restart` (a full restart — `http:` changes need it).
 
 ### Why `host_network` is on — and what it costs
 
-This add-on ships with `host_network: true` on purpose. That single flag is a tradeoff, so
+This app ships with `host_network: true` on purpose. That single flag is a tradeoff, so
 here is exactly what you get and what you give up.
 
-**What it buys you.** The add-on shares the host's network stack instead of Docker's
+**What it buys you.** The app shares the host's network stack instead of Docker's
 bridged network, so HA sees the **browser's real LAN IP**. That is the *only* clean way to
 make the trusted-network (password-less) kiosk login above work: in bridged mode Docker
 NATs every client to the gateway `172.30.32.1` before the proxy sees it, so the kiosk's
@@ -124,7 +124,7 @@ real IP never reaches HA and `trusted_networks` can't match it.
 **What it costs.**
 
 - **The port is rigid.** It binds `:9123` on the host directly; the **Network** tab can't
-  remap it, so a clash with another add-on on `9123` can't be fixed there (see #6 above).
+  remap it, so a clash with another app on `9123` can't be fixed there (see #6 above).
 - **Internal DNS can break.** The `homeassistant` and `supervisor` hostnames may not
   resolve in host-network mode. If startup fails, pin them to IPs with the `ha_base` and
   `allow_ws_url` options (e.g. `ha_base: http://192.168.4.2:8123`).
@@ -134,7 +134,7 @@ real IP never reaches HA and `trusted_networks` can't match it.
 **If you don't need password-less-by-IP login**, none of the above helps you and bridged
 mode is simpler (free port remapping, working DNS). Some users run a locally-modified copy
 with `host_network: false` for exactly that reason. It is not exposed as an option because
-`host_network` is a build-time add-on setting, not a runtime one — changing it means
+`host_network` is a build-time app setting, not a runtime one — changing it means
 editing `config.yaml` and rebuilding. If you log in normally (or with a token) and don't
 rely on trusted-network auto-login, that's a reasonable local change; you then trim the
 port via the Network tab as usual. The default stays `true` so the documented kiosk login
@@ -142,9 +142,9 @@ keeps working out of the box.
 
 ## Statistics panel
 
-The add-on registers an Ingress panel, so there is a **Stripper** entry in the Home Assistant
-sidebar. (If it is missing, turn on *Show in sidebar* on the add-on's own page — Supervisor
-stores that flag per install and leaves it off for add-ons that gained Ingress in an update.)
+The app registers an Ingress panel, so there is a **Stripper** entry in the Home Assistant
+sidebar. (If it is missing, turn on *Show in sidebar* on the app's own page — Supervisor
+stores that flag per install and leaves it off for apps that gained Ingress in an update.)
 
 It shows:
 
@@ -177,16 +177,16 @@ sensor:
 
 ### How the 24h history works
 
-Sampled every five minutes into 288 buckets and persisted to `/data`, so an add-on restart
+Sampled every five minutes into 288 buckets and persisted to `/data`, so an app restart
 costs one bucket rather than the whole day.
 
 Buckets hold **deltas**, not cumulative counters. The counters themselves reset when the
 process restarts, so a cumulative series goes backwards and a naive difference would emit a
 large negative bucket. A counter that decreased is treated as the first sample of a new
-process, where the reading is its own delta. Gaps in the charts are periods the add-on was not
+process, where the reading is its own delta. Gaps in the charts are periods the app was not
 running.
 
-The window total reports the span it actually covers, so an add-on that has been up for twenty
+The window total reports the span it actually covers, so an app that has been up for twenty
 minutes says twenty minutes rather than implying a full day.
 
 ### What the numbers mean
@@ -199,7 +199,7 @@ answer and its own trimmed answer in the same function, so the saving is a subtr
 than an estimate.
 
 **Live update traffic is throughput, not a saving.** Home Assistant filters the event stream
-server-side from the `entity_ids` this add-on injects, so the untrimmed volume never exists
+server-side from the `entity_ids` this app injects, so the untrimmed volume never exists
 anywhere and cannot be measured. Reporting a saving there would mean inventing a
 counterfactual. For that comparison, run once with `strip_entities: false` and compare the two
 throughput figures.
@@ -245,16 +245,16 @@ they appear nowhere in the dashboard config.
 Still unsupported, and treated as matching nothing: `not`, `and`, `or`, `floor`,
 `device_manufacturer`, `device_model`, `last_changed`. If you rely on one of these, list the
 entities in `always_forward` and open an issue.
-- **Restarting Home Assistant is safe.** The add-on keeps running and waits: HTTP returns
+- **Restarting Home Assistant is safe.** The app keeps running and waits: HTTP returns
   502 and `/api/websocket` is refused while core is down, then it reconnects, rebuilds the
   allowlist, and open dashboards recover on their own. The same applies at host boot, when
-  the add-on starts before core is listening.
+  the app starts before core is listening.
 - Navigating (via the HA sidebar) to a dashboard **not** in `dashboards` will show its
   entities as unavailable; add it to the list if you want it served too.
 
 ### Tuning `trim_resources`
 
-Turn it on, load each kiosk once, and read the add-on log — it prints what each dashboard
+Turn it on, load each kiosk once, and read the app log — it prints what each dashboard
 needs and every resource it dropped, with sizes:
 
 ```

@@ -1,6 +1,6 @@
 # tools/
 
-Development utilities. None of these ship in the add-on image — the Dockerfile copies an
+Development utilities. None of these ship in the app image — the Dockerfile copies an
 explicit file list, and nothing here is on it.
 
 ## `bench-dashboard-load.mjs`
@@ -8,7 +8,7 @@ explicit file list, and nothing here is on it.
 Measures how long a dashboard actually takes to become usable, trimmed versus untrimmed, at a
 throttled connection speed.
 
-**Why this exists rather than the add-on's own timings.** The stats panel reports
+**Why this exists rather than the app's own timings.** The stats panel reports
 `msToEntityData` and `initialDrainMs` per connection. Those are useful diagnostics — they are
 the only view of a native companion-app socket — but they are *not* a benchmark, and the panel
 says so:
@@ -61,7 +61,7 @@ Ports are the two constants in the script's run loop (`9123` trimmed, `8123` unt
 Chrome's own "Slow 3G" preset (400 kbps) is **not** useful here and is deliberately not offered.
 Home Assistant's frontend bundle is ~2.3 MB on its own, so at 400 kbps every run spends ~46
 seconds before a single entity moves, and the untrimmed side times out before it can be compared.
-That measures the profile, not the add-on. `weak cell` (1.5 Mbps / 150 ms) is a slow link that
+That measures the profile, not the app. `weak cell` (1.5 Mbps / 150 ms) is a slow link that
 still completes.
 
 ### Reading the output

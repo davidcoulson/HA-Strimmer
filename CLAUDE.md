@@ -81,14 +81,14 @@ unsubscribes. Don't route it through `rpc()`, which resolves on `result`.
 
 - `websocket-stripper/ha_ws_trim_proxy.mjs` — the proxy (HTTP passthrough + ws intercept + allowlist precompute).
 - `websocket-stripper/lovelace_extract.mjs` — the card-tree entity extractor.
-- `websocket-stripper/config.yaml` / `Dockerfile` / `package.json` — HA add-on packaging.
-- `websocket-stripper/DOCS.md` — add-on Documentation tab (option reference).
-- `repository.yaml` — lets HA add this GitHub URL as an add-on repository.
+- `websocket-stripper/config.yaml` / `Dockerfile` / `package.json` — HA app packaging.
+- `websocket-stripper/DOCS.md` — app Documentation tab (option reference).
+- `repository.yaml` — lets HA add this GitHub URL as an app repository.
 - `README.md` — install + dev-run.
 
 ## Run modes (auto-detected)
 
-- **Add-on** (`SUPERVISOR_TOKEN` present): reads `/data/options.json`; precomputes the
+- **App** (`SUPERVISOR_TOKEN` present): reads `/data/options.json`; precomputes the
   allowlist via the supervisor proxy `ws://supervisor/core/websocket` using
   `SUPERVISOR_TOKEN` (no long-lived token needed); proxies to `http://homeassistant:8123`.
 - **Dev/CLI**: reads env (`HA_TOKEN`, `HA_BASE`, `DASH_PATHS`, `ALWAYS_FORWARD`,
@@ -105,9 +105,9 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
 ## Environment specifics
 
 - HA instance: `http://homeassistant.mgmt:8123` (also `192.168.4.2` = the HA host itself).
-  The HA host is the only always-on machine, so production = this add-on running on it.
-- This ships as its **own standalone add-on with its own port** (8099), independent of any
-  other add-on on the host.
+  The HA host is the only always-on machine, so production = this app running on it.
+- This ships as its **own standalone app with its own port** (8099), independent of any
+  other app on the host.
 - Target dashboards (storage mode): `fridge-status` (views: fridge-main, weather, audio),
   `home-status` (views: Home, Home Std, Front Door Camera, Kids Cam — note: its Home view
   has malformed `auto-entities` keys like `"domain 1"` from the visual editor),
@@ -122,7 +122,7 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
 - **Allowlist recomputes live on dashboard edits.** A persistent control ws (`startController`
   in `ha_ws_trim_proxy.mjs`) builds the allowlist at boot, then subscribes to HA's
   `lovelace_updated` event and rebuilds (debounced 1.5 s) on every dashboard save, with
-  reconnect-on-drop. So editing a dashboard's cards no longer needs an add-on restart. A
+  reconnect-on-drop. So editing a dashboard's cards no longer needs an app restart. A
   recompute still only affects **new** ws connections (HA can't amend a live
   `subscribe_entities`), so since 0.2.3 a rebuild that **adds** entities drops the open
   bridges — the frontend reconnects itself and re-subscribes, no manual kiosk reload.
@@ -131,7 +131,7 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   can't reconnect, the proxy keeps serving the last-known allowlist.
 - **Registries (entity/device/area) are not trimmed** yet — they pass through full. If
   load is still heavy after entity trimming, trimming/caching these is the next lever.
-- **Reachability:** the add-on must resolve `http://homeassistant:8123`. `host_network: true`
+- **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
   is now set (for trusted-network login, below), which can break the internal
   `homeassistant`/`supervisor` DNS names — the `ha_base` / `allow_ws_url` options pin them
   to IPs if startup fails (e.g. `ha_base: http://192.168.4.2:8123`).
@@ -139,9 +139,9 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   arch; drop `armv7` from `config.yaml` `arch` if it doesn't build.
 - **Auth through the proxy:** first load does a normal HA login against the proxy origin.
   If login loops/400s, the HA `http:` integration may need `use_x_forwarded_for` +
-  `trusted_proxies` for the add-on's IP.
+  `trusted_proxies` for the app's IP.
 - **Trusted-network (password-less) kiosk login — CONFIRMED 2026-06-18:** for HA's
-  `trusted_networks` provider to match the kiosk's real LAN IP, the add-on must run with
+  `trusted_networks` provider to match the kiosk's real LAN IP, the app must run with
   `host_network: true`. Diagnosed live: with a *mapped* port, Docker rewrites every client
   to the gateway `172.30.32.1` before the proxy sees it, so `X-Forwarded-For` carries the
   gateway, not the browser. Proven by injecting XFF through `:8099` — only a hand-fed
@@ -159,8 +159,8 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   network, so it silently fell through to the password prompt. The proxy now normalizes
   `X-Forwarded-For` to bare IPv4 in a `proxyReq` handler (strips the `::ffff:` prefix) in
   `ha_ws_trim_proxy.mjs`. Diagnosed with a temporary `/__whoami` echo endpoint, since
-  add-on logs aren't readable with a long-lived token (Supervisor returns 401). NOTE: a
-  local add-on bakes code into the image at build time (`COPY` in the Dockerfile), so code
+  app logs aren't readable with a long-lived token (Supervisor returns 401). NOTE: a
+  local app bakes code into the image at build time (`COPY` in the Dockerfile), so code
   changes need a **Rebuild**, not a Restart; config.yaml `host_network` also needs Rebuild,
   and `http:`/`auth_providers` need a full **Core restart** (not a YAML quick-reload).
 - **Never flatten the X-Forwarded-For chain — CONFIRMED FIXED 0.2.3, verified live by a user
@@ -176,5 +176,5 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
 
 ## Security
 
-A long-lived HA token was used during dev testing from the dev box; the add-on does not
+A long-lived HA token was used during dev testing from the dev box; the app does not
 need it (uses `SUPERVISOR_TOKEN`). Rotate any dev token when done.

@@ -81,8 +81,8 @@
       <div class="chart"><div class="label">Clients connected</div><svg id="cClients" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
       <div class="chart"><div class="label">Update traffic, per 5 min</div><svg id="cEvents" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
     </div>
-    <div class="note">Sampled every five minutes and kept on the add-on's own storage, so a
-      restart costs one bucket rather than the whole day. Gaps are periods the add-on was not
+    <div class="note">Sampled every five minutes and kept on the app's own storage, so a
+      restart costs one bucket rather than the whole day. Gaps are periods the app was not
       running.</div>
   </div>
 
@@ -92,7 +92,7 @@
       <tr><th>Message kind</th><th>Count</th><th>Bytes</th><th>Share</th></tr>
     </thead><tbody></tbody></table></div>
     <div class="note">Every message from Home Assistant, labelled — results attributed to the
-      command that asked for them. The trim categories above only cover payloads this add-on
+      command that asked for them. The trim categories above only cover payloads this app
       knows how to shrink; this list is everything, so anything large and unexpected shows up
       here rather than hiding in a total.</div>
   </div>
@@ -111,7 +111,7 @@
     </thead><tbody></tbody></table></div>
     <div class="note"><b>Payload</b> is the first entity block this connection received, with the
       number of entities in it — the dump a dashboard cannot render without, and the part this
-      add-on shrinks. The entity count is shown so the byte figure can be checked: a small
+      app shrinks. The entity count is shown so the byte figure can be checked: a small
       payload against a large <b>Entities</b> allowlist means a partial first block, not a tiny
       dashboard. <b>Ready in</b> is from the websocket opening to that block being written out.
       <b>On the wire</b> is how long that write took to be accepted by the network stack.
@@ -124,7 +124,7 @@
       6&nbsp;ms over cellular, which is far faster than any real transfer. Neither number is a
       round trip, and neither should be quoted as a speed.</div>
     <h2 id="http-h">HTTP requests</h2>
-    <div class="note">Kept apart from the add-on log on purpose. A busy panel makes hundreds of
+    <div class="note">Kept apart from the app log on purpose. A busy panel makes hundreds of
       requests a minute, and mixing those into the service log buries the one line that explains
       why a dashboard is behaving oddly. <b>Errors are held in their own ring</b>, so a failure
       this morning is still here this evening rather than having scrolled away behind a thousand
@@ -136,8 +136,8 @@
 
     <h2 id="tuning-h">Resource tuning</h2>
     <div class="note">Every resource below is installed in Home Assistant and referenced by
-      <b>no dashboard this add-on serves</b> — so no panel is receiving it. That means one of two
-      things, and the add-on cannot tell which:
+      <b>no dashboard this app serves</b> — so no panel is receiving it. That means one of two
+      things, and the app cannot tell which:
       <ul style="margin:.5rem 0 0 1rem;padding:0">
         <li><b>Genuinely unused</b> — the honest fix is to uninstall it, not to have a proxy hide
           it on every page load.</li>
@@ -146,7 +146,7 @@
           <b>invisible</b> — the dashboard renders normally and only the behaviour stops. Pin it.</li>
       </ul>
       <div style="margin-top:.5rem">Pinning writes to <code>resources_always_forward</code> and
-      needs an add-on restart to take effect.</div>
+      needs an app restart to take effect.</div>
     </div>
     <div id="tuning-wrap" class="tblwrap"><table id="tuning"><thead>
       <tr><th>Resource</th><th>Size</th><th></th></tr>
@@ -154,7 +154,7 @@
     <div id="tuning-msg" class="note" style="display:none"></div>
 
     <div class="note">Live update traffic is throughput, not a saving: Home Assistant filters the
-      event stream server-side from the entity list this add-on injects, so the untrimmed volume
+      event stream server-side from the entity list this app injects, so the untrimmed volume
       never exists and cannot honestly be measured. Compare it against a run with
       <code>strip_entities</code> off if you want the A/B.</div>
   </div>
@@ -230,7 +230,7 @@ async function pinResource(fragment, btn) {
     msg.innerHTML = j.already
       ? '<b>' + fragment + '</b> was already in <code>resources_always_forward</code>.'
       : '<b>' + fragment + '</b> added to <code>resources_always_forward</code>. '
-        + 'Restart the add-on to apply it.';
+        + 'Restart the app to apply it.';
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Always send';
     msg.style.display = '';
@@ -319,7 +319,7 @@ async function tick() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     s = await r.json();
   } catch (e) {
-    $('sub').innerHTML = '<span class="err">Cannot reach the add-on: ' + e.message + '</span>';
+    $('sub').innerHTML = '<span class="err">Cannot reach the app: ' + e.message + '</span>';
     return;
   }
 
