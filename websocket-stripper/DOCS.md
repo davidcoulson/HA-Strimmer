@@ -17,6 +17,10 @@ uses, so kiosk/wall-panel pages load fast on large instances — with no loss of
 | `trim_services` | bool | `false` (default). Cuts `get_services` to the domains the connection can see. It carries every service of every integration and is sent on every page load — **193KB across 115 domains** on the instance this was built against, where only **45 domains** had any entity. `homeassistant` is always kept, since its services are domain-agnostic. Off by default because the frontend uses this for service pickers and the automation editor. |
 | `compress_websocket` | bool | `true` (default) negotiates `permessage-deflate` with the browser, as HA's own websocket does. The `ws` library does not enable this server-side by default, so without it this add-on *removes* compression that HA would have provided — kiosks receive plaintext JSON. Deflate runs on libuv's threadpool, not the main loop. Set `false` only on very weak hardware where the CPU costs more than the bytes saved. |
 | `trim_resources` | bool | `false` (default). Trims **Lovelace resources** (custom cards) per dashboard. Resources are instance-wide in HA, so every kiosk downloads and parses every custom card you have installed — 21MB of JavaScript for a 4-card wall panel on the instance this was built against. A resource is kept when the dashboard's card types (or non-builtin icon prefixes) appear in its file. **Off by default**, and see the tuning section below before turning it on — some resources fail *silently* when dropped. Every drop is logged with its size. |
+| `dashboard_overrides` | list | Per-**dashboard** always/never lists. The global lists above are right for something every dashboard needs and wrong for something only one needs, because every panel then pays for it. Each entry takes a `dashboard` (its `url_path`) plus its own `always_forward` / `never_forward`, same syntax as the global lists. The global `never_forward` still wins last. |
+| `user_overrides` | list | Per-**user** always/never lists — the one thing per-dashboard rules cannot express: two people opening the *same* dashboard who should not be served the same entities. Give the user's name as shown in Settings → People (or their user id). Add `dashboard` to scope a rule to one dashboard, so "David sees `update.*` on lovelace" does not follow him onto a wall panel. Identity comes from the browser's own access token, resolved once per session against `auth/current_user`. **Cost:** a connection that a rule *could* match is held until the user resolves. Connections whose dashboard no rule is scoped to skip the lookup entirely, so scoping your rules is also a speed optimisation. Leave this empty and no lookup ever happens. |
+| `client_overrides` | list | Per-**device** always/never lists, pinned to a physical client rather than to a dashboard or a user. Some entities belong to the machine in front of you, not to the page it happens to be showing — a browser-based voice satellite is the clearest case, where the satellite's entities are only ever useful to the one panel that *is* that satellite. A dashboard rule gets that wrong both ways: the panel loses them when it navigates elsewhere, and every other client opening that dashboard pays for them. Each entry takes a `client` — an IP, an IPv4 CIDR (`10.2.4.0/24`), or a hostname — plus `devices` and/or `always_forward` / `never_forward`. `devices` names whole **devices** by registry name or id and pulls in every entity that device owns, which keeps working when an integration adds entities in a later release. Hostnames resolve when the allowlist is built, so a moved DHCP lease is picked up on the next rebuild; note mDNS/`.local` names generally do **not** resolve from inside a container, so use a real DNS record. |
+| `exclude_device_categories` | list | Empty by default. When a **device** is expanded — by a card configured with a device rather than entities, or by a `client_overrides` rule — drop entities Home Assistant labels `config` (controls that configure the device: panel brightness, a reset button, a firmware update) or `diagnostic` (readings about its health: last seen, signal, status code). A litter robot carries 21 entities and a card rendering a fill level needs a handful. **Empty on purpose:** whether a given card renders a diagnostic sensor is not knowable from here, and a wrongly dropped entity blanks part of a card with no error anywhere. Every device expansion logs its split — `+21 entities (8 primary, 7 config, 6 diagnostic)` — so decide with the real numbers for *your* devices in front of you. Note a browser voice satellite measured 18 of 21 entities as `config`, because its pipeline and wake-word selects are configuration controls that the page's JavaScript nonetheless reads to work. |
 | `resources_always_forward` | list | URL patterns (literal substring, e.g. `kiosk-mode`, or `/regex/`) always sent. Needed for plugins that patch the frontend instead of registering a card — they contain none of the dashboard's card names, so the content match cannot tell they're used. In practice: `kiosk-mode`, icon packs, and anything that restyles core cards. |
 | `resources_never_forward` | list | URL patterns never sent to any dashboard. Wins over `resources_always_forward`. |
 | `port` | int | Port the add-on listens on (default `9123`). Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another add-on (e.g. Zigbee2MQTT). |
@@ -40,6 +44,32 @@ strip_entities: true
 
 Regex entries are slash-wrapped with optional flags, e.g. `"/_motion$/i"`. In YAML,
 backslashes must be escaped (`"\\."`).
+
+### Scoping rules: dashboard, user, or device
+
+The three override blocks answer three different questions. Pick by what the entity actually
+belongs to:
+
+```yaml
+# "this dashboard needs an entity none of its cards name"
+dashboard_overrides:
+  - dashboard: hallway-kiosk
+    always_forward: ["input_boolean.hallway_night_mode"]
+
+# "David sees update.* on the main dashboard; nobody else does"
+user_overrides:
+  - user: David Coulson
+    dashboard: lovelace
+    always_forward: ["/^update\\./"]
+
+# "this panel IS a voice satellite, wherever it navigates"
+client_overrides:
+  - client: 10.2.4.109
+    devices: ["Basement Stairs Panel"]
+```
+
+A rule pinned to a **client** applies whether or not the dashboard could be attributed — that is
+the point of pinning to a device. A global `never_forward` still wins last over all three.
 
 ## Usage
 

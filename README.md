@@ -44,18 +44,28 @@ Headless Chrome on a desktop, loading the same dashboard twice — once through 
 straight at Home Assistant. Median of three runs, timed to the first `<ha-card>` actually
 rendered:
 
-| Link | 😴 Untrimmed | 🚀 Trimmed | |
-|---|---|---|---|
-| **4G** (9 Mbps, 40 ms) | 8.6 s | **3.3 s** | **2.6× faster** |
-| **Unthrottled LAN** | **0.9 s** | 2.0 s | **2.2× slower** |
+| Link | 😴 Untrimmed | 🚀 Trimmed | | Time saved |
+|---|---|---|---|---|
+| **Weak cell** (1.5 Mbps, 150 ms) | 47.1 s | **18.4 s** | **2.6× faster** | **−28.7 s** |
+| **4G** (9 Mbps, 40 ms) | 8.6 s | **3.3 s** | **2.6× faster** | **−5.4 s** |
+| **Unthrottled LAN** | **0.9 s** | 2.0 s | **2.2× slower** | +1.1 s |
 
 | | Untrimmed | Trimmed |
 |---|---|---|
 | WebSocket payload | 5,865 KB | **863 KB** (85% less) |
 | HTTP payload (frontend bundle) | 2,367 KB | 2,353 KB (unchanged) |
 
-**On a slow link it is a large win.** 5.4 seconds off a phone load, because 5 MB of entity data
-has to cross the link before anything renders, and this deletes most of it.
+**On a slow link it is a large win** — 5.4 seconds off a 4G load, nearly 30 off a weak one,
+because 5 MB of entity data has to cross the link before anything renders and this deletes most
+of it.
+
+Notice the **ratio is the same 2.6× on both cellular profiles.** That is not a coincidence: the
+ratio is set by the byte counts, which do not change with the link. What the link decides is how
+many seconds that ratio is worth — 5 on 4G, 29 on a weak cell. Slower link, same multiple, more
+waiting removed.
+
+Both cellular rows also land just above their theoretical transfer time at the stated bitrate,
+which is the sanity check that they are measuring the link rather than the harness.
 
 **On a fast link to a fast client it is a net loss**, and the three runs did not overlap — the
 fastest trimmed run was still slower than the slowest untrimmed one. The reason is structural:
@@ -63,6 +73,11 @@ the add-on is a reverse proxy, so **every HTTP byte goes through it**, including
 frontend bundle it does not trim. At 9 Mbps the link dominates and that hop is invisible. On
 gigabit it *is* the bottleneck, and saving 5 MB of websocket no longer pays for it. Per-user rules
 add a further round trip, since a connection is held until the user is resolved.
+
+Between those extremes there is a crossover. The trimming saves ~5 MB while the proxy hop costs
+about a second, so the two cancel somewhere in the **tens of Mbps** — call it a fast home
+broadband connection. Treat that as arithmetic from the three measured points, not a fourth
+measurement.
 
 So the rule of thumb is: **point the add-on at clients that are slow, or on slow links.** Wall
 panels, tablets, phones away from home, anything on cellular. For a desktop browser on the same
@@ -391,8 +406,10 @@ are JSON.
 | `TRIM_SERVICES` | `trim_services` | **Off by default** — visibly lossy in the admin UI. |
 | `RESOURCES_ALWAYS_FORWARD` | `resources_always_forward` | URL fragments, e.g. `kiosk-mode`. |
 | `RESOURCES_NEVER_FORWARD` | `resources_never_forward` | |
-| `DASHBOARD_OVERRIDES` | `dashboard_overrides` | JSON array. |
-| `USER_OVERRIDES` | `user_overrides` | JSON array. |
+| `DASHBOARD_OVERRIDES` | `dashboard_overrides` | JSON array. Always/never lists scoped to one dashboard. |
+| `USER_OVERRIDES` | `user_overrides` | JSON array. Always/never lists scoped to one HA user. |
+| `CLIENT_OVERRIDES` | `client_overrides` | JSON array. Always/never lists pinned to a **device** — an IP, a CIDR, or a hostname — and able to name whole devices whose entities it needs. |
+| `EXCLUDE_DEVICE_CATEGORIES` | `exclude_device_categories` | `config` and/or `diagnostic`, comma-separated. Empty by default — trims what a device expansion pulls in. |
 | `UA_DASHBOARDS` | `user_agent_dashboards` | JSON array. |
 | `HISTORY_DIR` | — | Where to keep the 24h stats. Defaults to `/data` when that exists. |
 
@@ -583,8 +600,10 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
   every type check quietly ignored
 - 🖼️ **Camera and media frames are no longer corrupted.** Binary frames were being decoded as
   text in transit. On a wall panel they were 90% of everything received
-- 👤 **Per-user and per-dashboard rules.** `always_forward` / `never_forward` can now be scoped
-  to a specific person or a specific dashboard, not just applied globally
+- 👤 **Rules can be scoped three ways** — to a dashboard, to a person, or to a **device**.
+  The last one matters for anything that belongs to the machine rather than the page: a
+  browser-based voice satellite needs its own entities wherever it navigates, and no other
+  client should pay for them
 - 📱 **Companion-app connections get attributed properly**, by User-Agent, since the native
   socket doesn't carry the cookie a browser does
 - 🌐 **You can see how each client reaches you** — LAN or internet, and whether it came via
