@@ -22,21 +22,43 @@ actually shows**. Same Home Assistant. Same dashboards. Same cards. Just not the
 Measured on a Sonoff NSPanel Pro (a genuinely slow wall panel) against a Home Assistant
 with **9,751 entities**:
 
-| | 😴 Without | 🚀 With |
-|---|---|---|
-| **Dashboard appears in** | 60 seconds | **16 seconds** |
-| Entities sent to the page | 9,751 | **104** |
-| 📇 Name/device/area catalogue | 12.7 MB | **~200 KB** |
-| 🎨 Custom card code | 21 MB | **3 MB** |
-| 🔌 Entity states | 2.5 MB | **112 KB** |
-| ⚙️ Service list | 196 KB | **~43 KB** |
-| Data per hour, just sitting there | ~17 MB | **~0.5 MB** |
+| | 😴 Without | 🚀 With | 📉 |
+|---|---|---|---|
+| **Dashboard appears in** | 60 seconds | **16 seconds** | **73%** faster |
+| Entities sent to the page | 9,751 | **104** | **98.9%** |
+| 📇 Name/device/area catalogue | 12.7 MB | **~200 KB** | **98.5%** |
+| 🎨 Custom card code | 21 MB | **3 MB** | **86%** |
+| 🔌 Entity states | 2.5 MB | **112 KB** | **96%** |
+| ⚙️ Service list | 196 KB | **~43 KB** | **78%** |
+| Data per hour, just sitting there | ~17 MB | **~0.5 MB** | **97%** |
 
 **≈ 4× faster**, and the panel stops thrashing.
 
 The surprise for most people is the catalogue row: on a large install the *catalogue* — the
 names and areas, not the values — is the biggest thing a dashboard downloads. It is sent in
 full, for the whole house, on every single page load.
+
+### 📅 Now scale that to a day
+
+Per-load numbers are easy to shrug at. The same numbers over 24 hours are not.
+
+One wall panel, connected all day, reloading ten times (screensaver wake, app restart,
+network blip):
+
+| | 😴 Without | 🚀 With |
+|---|---|---|
+| 10 page loads<br/>*(catalogue + states + services)* | 154 MB | **3.6 MB** |
+| 24 h of live updates | 408 MB | **12 MB** |
+| **One panel, one day** | **≈ 562 MB** | **≈ 16 MB** |
+| **Five panels, one day** | **≈ 2.8 GB** | **≈ 78 MB** |
+
+**That's ~36× less — more than half a gigabyte a day, per panel, that never leaves Home
+Assistant.** Every byte of it was assembled by your HA box, serialised to JSON, pushed over
+the network, and parsed by a cheap wall tablet, so that it could be ignored.
+
+> Custom-card JavaScript is left out of the day totals on purpose: browsers cache it, so the
+> 21 MB → 3 MB is paid on first load rather than every load. It still matters — it is 18 MB
+> the panel does not parse on a cold start, which is most of the 60 → 16 second gap.
 
 ---
 
