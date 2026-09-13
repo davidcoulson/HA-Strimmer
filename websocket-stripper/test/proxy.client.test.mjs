@@ -101,3 +101,77 @@ describe('client-pinned rules', () => {
     assert.match(out, /\+client rules \(\d+ -> \d+\)/);
   });
 });
+
+// A client that names itself gets its own device's entities, with no configuration at all.
+//
+// A browser-based voice satellite announces which satellite it is on the very websocket this
+// add-on proxies. That beats every alternative identity signal: mDNS cannot work (a web page has
+// no API to advertise it), an IP needs a DHCP reservation to be stable, and both still require
+// someone to write the mapping down. The panel simply says who it is.
+describe('clients that identify themselves', () => {
+  let mock, proxy, port, out = '';
+
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env,
+        HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(await getFreePort()),
+        STRIP_ENTITIES: '1', PER_DASHBOARD: '1',
+        CLIENT_OVERRIDES: '[]',          // nothing configured: this must work on its own
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 10000;
+    while (!/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never built an allowlist\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
+  after(() => { proxy?.kill(); mock?.close(); });
+
+  it('learns a satellite from the client announcing it, and serves it on reconnect', async () => {
+    // First connection: the panel announces itself. Its allowlist was already sent, so this
+    // connection does not benefit — the add-on learns and drops it so the frontend reconnects.
+    const c1 = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c1.authed;
+    c1.send({ type: 'subscribe_entities', id: 30 });
+    await new Promise((r) => setTimeout(r, 150));
+    c1.send({ type: 'voice_satellite/subscribe_events', id: 31, entity_id: 'assist_satellite.office_panel' });
+    await new Promise((r) => setTimeout(r, 700));
+
+    assert.match(out, /identified itself as assist_satellite\.office_panel/);
+
+    // Second connection from the same client: now it arrives already knowing.
+    const seq = mock.subscribeEntitiesSeq();
+    const c2 = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c2.authed;
+    c2.send({ type: 'subscribe_entities', id: 32 });
+    const ids = new Set((await mock.waitForSubscribeEntities(seq)) ?? []);
+    assert.ok(ids.has('assist_satellite.office_panel'),
+      `the satellite it named must be forwarded; got ${[...ids].slice(0, 15).join(', ')}`);
+    assert.ok(ids.has('switch.office_panel_mute'),
+      'and its siblings on the same device, since the card resolves those itself');
+    c2.close();
+    try { c1.close(); } catch {}
+  });
+
+  it('ignores an entity_id that is not a satellite', async () => {
+    // The trigger is narrow on purpose: only assist_satellite.* on a voice_satellite/* command.
+    // Anything broader would let a client widen its own allowlist by naming an entity.
+    const before = out.length;
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    c.send({ type: 'voice_satellite/subscribe_events', id: 40, entity_id: 'light.living_room' });
+    await new Promise((r) => setTimeout(r, 400));
+    assert.ok(!/identified itself as light\./.test(out.slice(before)),
+      'a non-satellite entity_id must not be treated as an identity claim');
+    c.close();
+  });
+});

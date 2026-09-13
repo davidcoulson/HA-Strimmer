@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.17';
+const VERSION = '2026.09.13.18';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -460,6 +460,17 @@ async function buildAllow(rpc, renderTemplate) {
   // Resolve client-pinned rules here: the device registry has just been fetched, and doing it
   // on every rebuild means a renamed device or a moved DHCP lease is picked up without a restart.
   await resolveClientRules(registries);
+  // And the entity -> its device's entities map that self-identifying clients resolve through.
+  REG_CACHE_BY_ENTITY = (() => {
+    const byDev = buildRegistryCtx(registries).byDevice;
+    const out = new Map();
+    for (const e of (registries?.entities || [])) {
+      if (!e.entity_id || !e.device_id) continue;
+      const rows = byDev.get(e.device_id);
+      if (rows) out.set(e.entity_id, deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES));
+    }
+    return out;
+  })();
   const union = new Set();
   const perDash = new Map();
   const keysByDash = new Map();
@@ -1413,6 +1424,53 @@ function applyUserRules(set, extra) {
 // it: Kiosk Satellite enumerates every dashboard's views at startup. See the note in
 // bridge() for what happened when this code tried to act on it.
 const CLIENT_DASH_TTL_MS = 10 * 60 * 1000;
+// ip -> { ids:Set<entity_id>, at } learned from the client's OWN traffic.
+//
+// A browser-based voice satellite announces which satellite it is, on the very websocket this
+// add-on is proxying:
+//
+//   { type: 'voice_satellite/subscribe_events', entity_id: 'assist_satellite.office_panel' }
+//
+// That is a better identity signal than anything we could infer. It needs no mDNS (a web page
+// cannot advertise it), no DHCP reservation, and no configuration: the panel says who it is, and
+// if its address ever changes the new address simply learns on its first connection.
+//
+// `client_overrides` remains for everything this cannot cover — a device that announces nothing.
+const clientLearned = new Map();
+const CLIENT_LEARNED_MAX = 500;
+// entity_id -> every entity id on that entity's device, honouring exclude_device_categories.
+// Rebuilt with the allowlist, so a renamed or re-added device is picked up without a restart.
+let REG_CACHE_BY_ENTITY = null;
+
+// Entities a client has told us it needs, by naming itself. Strictly additive: it can only ever
+// widen an allowlist, never narrow one.
+function learnedFor(ip) {
+  const hit = ip ? clientLearned.get(ip) : null;
+  return hit ? hit.ids : null;
+}
+
+// Record "this client IS this satellite" and expand it to the device's entities. Returns the ids
+// that were NEW for this client, so the caller can tell whether anything actually changed.
+function learnClientEntity(ip, entityId) {
+  if (!ip || !REG_CACHE_BY_ENTITY) return null;
+  const rows = REG_CACHE_BY_ENTITY.get(entityId);
+  if (!rows || !rows.length) return null;
+  let hit = clientLearned.get(ip);
+  if (!hit) {
+    if (clientLearned.size >= CLIENT_LEARNED_MAX) {
+      // Oldest-first prune, same shape as clientDash's.
+      const cutoff = Date.now() - 86400000;
+      for (const [k, v] of clientLearned) if (v.at < cutoff) clientLearned.delete(k);
+    }
+    hit = { ids: new Set(), at: Date.now() };
+    clientLearned.set(ip, hit);
+  }
+  hit.at = Date.now();
+  const added = rows.filter((id) => !hit.ids.has(id));
+  added.forEach((id) => hit.ids.add(id));
+  return added.length ? added : null;
+}
+
 const clientDash = new Map();                 // ip -> { path, at }
 
 // One implementation of "who is this", shared with the route classifier, so the IP a client
@@ -1547,12 +1605,25 @@ server.on('upgrade', (req, socket, head) => {
     // Client-pinned rules apply on top of whichever dashboard set was chosen, and regardless of
     // whether the dashboard could be attributed at all — the point of pinning to a device is
     // that it holds even when the page changes.
-    const set = applyClientRules(dashSet, rulesForClient(rt.ip));
+    let set = applyClientRules(dashSet, rulesForClient(rt.ip));
     const pinned = set !== dashSet;
-    if (dash || pinned) {
+    const afterRules = set.size;
+    // Entities this client previously told us it needs, by naming itself (see learnClientEntity).
+    // Applied after the configured rules and never instead of them: `client_overrides` stays the
+    // escape hatch for devices that announce nothing.
+    const learned = learnedFor(rt.ip);
+    let selfIdentified = 0;
+    if (learned?.size) {
+      const before = set.size;
+      const widened = new Set(set);
+      learned.forEach((id) => widened.add(id));
+      if (widened.size !== before) { set = widened; selfIdentified = widened.size - before; }
+    }
+    if (dash || pinned || selfIdentified) {
       log(`/api/websocket for ${rt.ip} (${rt.origin}, via ${rt.route}${rt.host ? ` @ ${rt.host}` : ''}): `
         + `serving ${dash ?? 'union'}${dash ? ` via ${via}` : ''}`
-        + `${pinned ? ` +client rules (${dashSet.size} -> ${set.size})` : ''} `
+        + `${pinned ? ` +client rules (${dashSet.size} -> ${afterRules})` : ''}`
+        + `${selfIdentified ? ` +${selfIdentified} self-identified` : ''} `
         + `(${set.size} entities, union is ${ALLOW.size})`);
     }
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
@@ -1587,6 +1658,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     origin: meta.origin, route: meta.route, host: meta.host, hop: meta.hop, hops: meta.hops,
   });
   let userChecked = false;
+  let learnedKick = false;   // only ever drop a connection once for a newly-learned identity
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
   const registryIds = new Map();    // request id -> which registry, to trim its result
@@ -1691,6 +1763,24 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         && (!m.event_type || m.event_type === 'state_changed')) {
       stateChangedSubs.add(m.id);
       log(`subscribe_events(${m.event_type ?? 'ALL EVENTS'}) id=${m.id} from ${meta.ip ?? '?'} dash=${dash ?? '(union)'}`);
+    }
+    // A client naming itself. A browser voice satellite sends its own entity_id on this socket
+    // (voice_satellite/subscribe_events, and a keepalive check every 30s), which is a far better
+    // identity signal than an IP: it needs no mDNS — a web page cannot advertise it — no DHCP
+    // reservation, and no configuration.
+    //
+    // Strictly additive. It can only widen this client's allowlist, never narrow it.
+    if (STRIP && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
+        && typeof m.entity_id === 'string' && m.entity_id.startsWith('assist_satellite.')) {
+      const added = learnClientEntity(meta.ip, m.entity_id);
+      if (added && !added.every((id) => allow.has(id))) {
+        log(`${meta.ip ?? '?'} identified itself as ${m.entity_id}: +${added.length} entities on its next connection`);
+        // The allowlist for THIS connection was already sent; the frontend has to re-subscribe
+        // to benefit. Dropping the socket makes it reconnect immediately, and the learned set is
+        // cached by address so the reconnect picks it up. Once per connection, so a satellite
+        // that re-announces cannot put the panel in a reconnect loop.
+        if (!learnedKick) { learnedKick = true; setTimeout(() => { try { browserWs.close(); } catch {} }, 250); }
+      }
     }
     // Deferred to send time rather than done here — see the gate note above for why stamping
     // at this point silently dropped per-user rules.

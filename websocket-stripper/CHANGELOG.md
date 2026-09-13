@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026.09.13.18 — 2026-09-13
+
+**A client that names itself now gets its own device's entities, with no configuration.**
+
+A browser-based voice satellite announces which satellite it is, on the very websocket this
+add-on already proxies:
+
+```json
+{ "type": "voice_satellite/subscribe_events",
+  "entity_id": "assist_satellite.office_panel" }
+```
+
+That is a better identity signal than anything the add-on could infer, and it beats every
+alternative that was considered:
+
+- **mDNS cannot work.** Kiosk Satellite is browser-side JavaScript, and a web page has no API to
+  advertise an mDNS name. Android does not advertise a hostname by default either, so there is
+  nothing to resolve. And even if there were, mDNS gives hostname-to-address — not identity.
+- **An IP works but must be kept true.** It needs a DHCP reservation, and if the lease ever moves
+  the rule stops matching silently: the panel loses its satellite entities with no error anywhere.
+
+Self-identification has neither problem. Nothing to advertise, nothing to reserve, nothing to
+write down — and if a panel's address changes, the new address simply learns on its first
+connection.
+
+The entity is expanded to its whole **device**, because a satellite card resolves its siblings
+itself (mute, screensaver, the pipeline and wake-word selects), and `exclude_device_categories`
+still applies.
+
+**Mechanics.** The announcement arrives after `subscribe_entities`, so the connection that made it
+cannot benefit — the add-on learns, logs, and drops that socket so the frontend reconnects with
+the wider list. Once per connection, so a satellite that re-announces cannot cause a reconnect
+loop. The learned set is cached per client address.
+
+**The trigger is deliberately narrow:** only an `assist_satellite.*` entity_id on a
+`voice_satellite/*` command. Anything broader would let a client widen its own allowlist by naming
+an entity.
+
+**`client_overrides` is unchanged and still the right tool** for anything that announces nothing —
+a device with no self-identifying traffic, or a rule that is about the client rather than about a
+device it hosts.
+
+
 ## 2026.09.13.17 — 2026-09-13
 
 **Connections that no per-user rule could match no longer wait for a user lookup.**
