@@ -815,3 +815,84 @@ describe('per-user gate is skipped when no rule could match', () => {
     c.close();
   });
 });
+
+// Latency regressions: the proxy inserting a blocking round trip before it forwards the client.
+//
+// This is the CLASS of bug, not one instance of it. A per-user rule scoped to a dashboard the
+// client never opened once held every connection while the add-on resolved the user — to reach a
+// conclusion that could not change anything. Measured end-to-end in a browser it cost ~1.6
+// seconds per page load and made the add-on measure *slower* than not using it at all on a LAN.
+//
+// The whole suite passed throughout. Every test asserted the gate WORKED; none asserted it stayed
+// out of the way, and none measured time. These two do, from both sides, because a one-sided
+// latency test is trivially satisfied by removing the feature.
+describe('a connection is not delayed by work that cannot change its answer', () => {
+  let mock, proxy, port, out = '';
+
+  // The user lookup is slowed far past any plausible scheduling noise, so "did the connection
+  // wait for it" is a question about hundreds of milliseconds rather than a few.
+  const LOOKUP_MS = 600;
+
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env,
+        HA_BASE: mock.base, HA_TOKEN: 'test-token',
+        DASH_PATHS: 'test-dash,auto-dash',
+        PORT: String(port), STATS_PORT: String(await getFreePort()),
+        STRIP_ENTITIES: '1', PER_DASHBOARD: '1',
+        USER_OVERRIDES: JSON.stringify([
+          { user: 'someone', dashboard: 'auto-dash', always_forward: ['light.bedroom'] },
+        ]),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 10000;
+    while (!/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never built an allowlist\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    mock.setCurrentUserDelay(LOOKUP_MS);
+  });
+
+  after(() => { proxy?.kill(); mock?.close(); });
+
+  // How long from opening the socket to HA actually receiving the subscription.
+  // A DISTINCT token per call, because the proxy caches the token -> user resolution. Sharing one
+  // would let whichever test ran first warm the cache and hand the next a lookup that costs
+  // nothing — a test passing for a reason that has nothing to do with what it claims to check.
+  let tokenSeq = 0;
+  const timeToSubscribe = async (pageUrl, id) => {
+    if (pageUrl) await httpGet(`http://127.0.0.1:${port}${pageUrl}`);
+    const seq = mock.subscribeEntitiesSeq();
+    const t0 = Date.now();
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, `test-token-${++tokenSeq}`);
+    await c.authed;
+    c.send({ type: 'subscribe_entities', id });
+    await mock.waitForSubscribeEntities(seq);
+    const ms = Date.now() - t0;
+    c.close();
+    return ms;
+  };
+
+  it('a dashboard no rule is scoped to is not held for a user lookup', async () => {
+    const ms = await timeToSubscribe('/test-dash/main', 80);
+    assert.ok(ms < LOOKUP_MS / 2,
+      `test-dash cannot match a rule scoped to auto-dash, so the connection must not wait `
+      + `${LOOKUP_MS}ms for a user lookup — took ${ms}ms`);
+  });
+
+  it('but a dashboard a rule IS scoped to still waits, so the rule can apply', async () => {
+    // The other half. Without this, deleting the gate entirely would pass the test above — and
+    // that is precisely the "fix" that silently serves the wrong allowlist.
+    const ms = await timeToSubscribe('/auto-dash/main', 81);
+    assert.ok(ms >= LOOKUP_MS * 0.8,
+      `auto-dash CAN match a rule, so its allowlist must not be sent before the user resolves `
+      + `— took only ${ms}ms`);
+  });
+});
