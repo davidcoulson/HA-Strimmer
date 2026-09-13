@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026.09.13.29 — 2026-09-13
+
+**Replaced `http-proxy` with `httpxy`, and moved to Node 24.**
+
+`http-proxy@1.18.1` was last modified in December 2024. `httpxy` is the unjs fork of
+node-http-proxy and is what `http-proxy-middleware` v4 moved onto, so it has real downstream
+exercise. Node 20 reached **end of life on 2026-03-24** — no security patches — and httpxy
+requires Node >= 22, so these are one change rather than two.
+
+Alpine stays. Both the official Home Assistant bases and the community hassio-addons bases are
+Alpine, Node-RED runs Alpine with Node 24, and nothing here compiles — every dependency is pure
+JavaScript with no native bindings. The base is now behind `ARG BUILD_FROM`, the add-on
+convention, with `node:24-alpine` as the default so the plain container still builds unchanged.
+
+### Three API differences, all of which mattered
+
+- Named export `createProxyServer`, not a default export.
+- **`ws()` is `(req, socket, options, head)`** where node-http-proxy was `(req, socket, head)`.
+  Passing `head` third spreads a Buffer into the request options and breaks the upgrade —
+  silently, because the socket simply never completes.
+- `web()` and `ws()` return promises. The `error` listener already handles failures, but an
+  unhandled rejection is still a process-level crash, so both call sites swallow.
+
+### And one behavioural difference, in the most sensitive place
+
+```
+node-http-proxy   APPENDS our hop to x-forwarded-{for,port,proto}
+httpxy            sets each only when ABSENT
+```
+
+The existing test asserted *"appends our hop"* — which was asserting the mechanism rather than the
+requirement, and it failed. The real issue-#9 invariant is that the **For and Proto chains agree
+in length**: the original bug was not a missing hop, it was `X-Forwarded-For` flattened to one
+entry while `X-Forwarded-Proto` still carried two, which Home Assistant rejects with `Incorrect
+number of elements in X-Forward-Proto`.
+
+Appending to both satisfies that. Appending to neither also satisfies it, and is arguably safer
+here — it leaves the add-on transparent to whatever the edge proxy set, so HA sees exactly Nginx
+Proxy Manager's chain rather than a hop it may not have in `trusted_proxies`.
+
+So the test now asserts the invariant rather than the mechanism, and keeps its meaning across a
+library change — which is precisely what it had to do.
+
+**Verified live** on a 9,610-entity instance: five websocket clients connected, real client
+addresses preserved (`10.2.4.x`, not the Docker gateway), attribution by cookie and User-Agent
+intact, 91.8% trim ratio, and a frontend asset served in 20ms.
+
+
 ## 2026.09.13.28 — 2026-09-13
 
 **New sensor: registry cache hit rate.**
