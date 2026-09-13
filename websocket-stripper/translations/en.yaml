@@ -98,6 +98,18 @@ configuration:
       Note that mDNS/.local names usually do NOT resolve from inside a container; use a real DNS
       record. `devices` names whole DEVICES by registry name or id and pulls in every entity that
       device owns, which keeps working when an integration adds entities in a later release.
+  exclude_device_categories:
+    name: Drop these entity categories from devices
+    description: >-
+      When a DEVICE is expanded — by a card configured with a device rather than entities, or by
+      a per-device rule — drop entities Home Assistant has labelled `config` (controls that
+      configure the device: panel brightness, a reset button, a firmware update) or `diagnostic`
+      (readings about its health: last seen, signal, status code). A litter robot carries 21
+      entities and a card rendering a fill level needs a handful of them. EMPTY BY DEFAULT on
+      purpose: whether a given card renders a diagnostic sensor is not knowable from here, and a
+      wrongly dropped entity blanks part of a card with no error anywhere. The add-on logs the
+      split for every device it expands — "21 entities (12 primary, 6 config, 3 diagnostic)" —
+      so look there first and decide with the real number in front of you.
   resources_always_forward:
     name: Always send these resources
     description: >-

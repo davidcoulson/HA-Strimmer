@@ -1,7 +1,7 @@
 // Registry-backed auto-entities resolution — the #4 fix (area/label/device/integration).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractEntities } from '../lovelace_extract.mjs';
+import { extractEntities, buildRegistryCtx, splitDeviceEntities } from '../lovelace_extract.mjs';
 import { STATES, REGISTRIES } from './fixtures.mjs';
 
 const view = (cards) => ({ views: [{ path: 'main', cards }] });
@@ -113,4 +113,54 @@ test('a 32-hex string that is NOT a registered device adds nothing', () => {
 test('device resolution does not drag in entities of other devices', () => {
   const got = devSetOf([{ type: 'custom:x', printer: DEV }]);
   assert.ok(!got.has('light.unrelated'), 'only the named device expands');
+});
+
+// Excluding entity categories when a device is expanded.
+//
+// A device carries far more than a card renders — Home Assistant's own `config` and `diagnostic`
+// labels mark the controls that configure it and the readings that describe its health. This is
+// opt-in, never default: whether a given card renders a diagnostic sensor is not knowable from
+// here, and a wrongly dropped entity blanks part of a card with no error anywhere.
+const CAT_REGS = {
+  areas: [], labels: [],
+  devices: [{ id: DEV, name: 'Robot 1' }],
+  entities: [
+    { entity_id: 'vacuum.robot', device_id: DEV, platform: 'litterrobot', entity_category: null },
+    { entity_id: 'sensor.robot_waste_drawer', device_id: DEV, platform: 'litterrobot', entity_category: null },
+    { entity_id: 'select.robot_panel_brightness', device_id: DEV, platform: 'litterrobot', entity_category: 'config' },
+    { entity_id: 'update.robot_firmware', device_id: DEV, platform: 'litterrobot', entity_category: 'config' },
+    { entity_id: 'sensor.robot_last_seen', device_id: DEV, platform: 'litterrobot', entity_category: 'diagnostic' },
+  ],
+};
+const catSetOf = (exclude) => new Set(extractEntities(
+  view([{ type: 'custom:whisker-card', device_id: DEV }]), [],
+  { registries: CAT_REGS, excludeDeviceCategories: exclude },
+).entities);
+
+test('by default a device expansion keeps every category', () => {
+  assert.equal(catSetOf([]).size, 5, 'no filtering unless asked for — a dropped entity fails silently');
+});
+
+test('excluding config and diagnostic leaves the primary entities', () => {
+  assert.deepEqual(catSetOf(['config', 'diagnostic']),
+    new Set(['vacuum.robot', 'sensor.robot_waste_drawer']));
+});
+
+test('excluding only config keeps diagnostics', () => {
+  const got = catSetOf(['config']);
+  assert.ok(got.has('sensor.robot_last_seen'), 'diagnostic survives when only config is excluded');
+  assert.ok(!got.has('update.robot_firmware'), 'config does not');
+});
+
+test('the device split is reported so the trade-off can be seen before it is taken', () => {
+  const rows = buildRegistryCtx(CAT_REGS).byDevice.get(DEV);
+  const split = splitDeviceEntities(rows);
+  assert.equal(split.primary.length, 2);
+  assert.equal(split.config.length, 2);
+  assert.equal(split.diagnostic.length, 1);
+});
+
+test('extraction reports which devices a card named', () => {
+  const res = extractEntities(view([{ type: 'custom:whisker-card', device_id: DEV }]), [], { registries: CAT_REGS });
+  assert.deepEqual(res.devices, [DEV]);
 });

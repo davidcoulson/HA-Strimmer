@@ -30,7 +30,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import httpProxy from 'http-proxy';
 import { WebSocketServer, WebSocket } from 'ws';
-import { extractEntities, collectTemplates, expandGroupMembers } from './lovelace_extract.mjs';
+import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
 import { classify, normalizeIp } from './route.mjs';
@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.11';
+const VERSION = '2026.09.13.12';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -197,6 +197,20 @@ const CLIENT_RULES = (() => {
     }));
 })();
 
+// Which entity_category buckets to drop when a DEVICE is expanded — by a card that names one,
+// or by a client rule. Home Assistant labels entities `config` (controls that configure the
+// device: panel brightness, a reset button) and `diagnostic` (readings about its health: last
+// seen, firmware, signal). A litter robot carries 21 entities and a card rendering a fill level
+// needs a handful.
+//
+// Empty by DEFAULT, deliberately. Whether a given card renders `status_code` is not knowable
+// from here, and a wrongly dropped entity blanks part of a card with no error anywhere — the
+// same silent failure this add-on keeps having to fix. The breakdown is logged on every expansion
+// so the saving can be seen BEFORE it is taken.
+const EXCLUDE_DEVICE_CATEGORIES = toList(
+  OPT.exclude_device_categories ?? process.env.EXCLUDE_DEVICE_CATEGORIES,
+).filter((c) => ['config', 'diagnostic'].includes(c));
+
 const matchesAny = (rules, id) => rules.some((r) => (r.re ? r.re.test(id) : r.literal === id));
 
 if (!ALLOW_TOKEN) {
@@ -297,11 +311,32 @@ const WATCH_EVENTS = ['lovelace_updated', 'entity_registry_updated', 'device_reg
 //  2) every REAL entity id appearing anywhere in the config text (catches ids inside
 //     button-card / mushroom-template / decluttering templates the walker can't parse).
 // Over-including is harmless (still tiny vs the instance); under-including breaks cards.
+// "21 entities (12 primary, 6 config, 3 diagnostic)" — the number next to the trade-off, so a
+// person can decide whether excluding a bucket is worth it instead of guessing.
+function describeDeviceSplit(rows = []) {
+  const s = splitDeviceEntities(rows);
+  return `(${s.primary.length} primary, ${s.config.length} config, ${s.diagnostic.length} diagnostic)`;
+}
+
 function allowlistFor(cfg, states, registries, renderedTemplates) {
   const real = new Set(states.map((s) => s.entity_id));
   // overInclude: forward every entity a card COULD show (don't shrink on volatile
   // state/attributes filters); registries resolve area/label/device/integration filters.
-  const out = new Set(extractEntities(cfg, states, { registries, overInclude: true, renderedTemplates }).entities);
+  const extracted = extractEntities(cfg, states, {
+    registries, overInclude: true, renderedTemplates,
+    excludeDeviceCategories: EXCLUDE_DEVICE_CATEGORIES,
+  });
+  const out = new Set(extracted.entities);
+  // Cards configured with a device are the single biggest source of entities nobody asked for,
+  // so name them and show what each costs. Silence here would hide the whole trade-off.
+  if (extracted.devices?.length) {
+    const byDev = buildRegistryCtx(registries).byDevice;
+    const names = new Map((registries?.devices || []).map((d) => [d.id, d.name_by_user || d.name || d.id]));
+    for (const id of extracted.devices) {
+      const rows = byDev.get(id) || [];
+      log(`    card names device "${names.get(id) ?? id}": +${deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES).length} entities ${describeDeviceSplit(rows)}`);
+    }
+  }
   const text = JSON.stringify(cfg);
   const re = /[a-z_][a-z0-9_]*\.[a-z0-9_]+/g;
   let m;
@@ -1194,12 +1229,7 @@ async function resolveClientRules(registries) {
   const idByName = new Map(devices
     .map((d) => [String(d.name_by_user || d.name || '').toLowerCase(), d.id])
     .filter(([n]) => n));
-  const entsFor = new Map();
-  for (const e of entities) {
-    if (!e.device_id || !e.entity_id) continue;
-    if (!entsFor.has(e.device_id)) entsFor.set(e.device_id, []);
-    entsFor.get(e.device_id).push(e.entity_id);
-  }
+  const entsFor = buildRegistryCtx({ devices, entities }).byDevice;
 
   for (const r of CLIENT_RULES) {
     r.cidr = parseCidr(r.client);
@@ -1227,9 +1257,11 @@ async function resolveClientRules(registries) {
     for (const want of r.devices) {
       const id = byId.has(want) ? want : idByName.get(want.toLowerCase());
       if (!id) { log(`  client rule ${r.client}: no device named "${want}"`); continue; }
-      const ents = entsFor.get(id) || [];
-      r.deviceEntities.push(...ents);
-      log(`  client rule ${r.client}: device "${byId.get(id)?.name ?? id}" -> ${ents.length} entities`);
+      const rows = entsFor.get(id) || [];
+      const kept = deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES);
+      r.deviceEntities.push(...kept);
+      log(`  client rule ${r.client}: device "${byId.get(id)?.name ?? id}" -> ${kept.length} entities`
+        + ` ${describeDeviceSplit(rows)}`);
     }
   }
 }

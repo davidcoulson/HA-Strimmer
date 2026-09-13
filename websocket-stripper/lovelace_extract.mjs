@@ -106,9 +106,35 @@ export function buildRegistryCtx(registries = {}) {
   for (const e of entities) {
     if (!e.device_id || !e.entity_id) continue;
     if (!byDevice.has(e.device_id)) byDevice.set(e.device_id, []);
-    byDevice.get(e.device_id).push(e.entity_id);
+    // The category comes along because it is the only authoritative signal for "this entity is
+    // not the device's primary function". Home Assistant sets it; we never infer it.
+    byDevice.get(e.device_id).push({ id: e.entity_id, cat: e.entity_category || null });
   }
   return { ent, byDevice };
+}
+
+// Split a device's entities by entity_category. `config` and `diagnostic` are Home Assistant's
+// own labels for controls that configure the device and readings that describe its health —
+// panel brightness, firmware, last-seen — as opposed to what the device is FOR.
+//
+// A litter robot measured here carries 21 entities and a card that renders a fill percentage
+// needs a handful of them. But this is not filtered by default, and deliberately so: whether a
+// given card renders `status_code` is not knowable from here, and a wrongly dropped entity blanks
+// part of a card with no error anywhere. Opt in once you have seen the breakdown in the log.
+export function splitDeviceEntities(rows = []) {
+  const out = { primary: [], config: [], diagnostic: [] };
+  for (const r of rows) {
+    const bucket = r.cat === 'config' ? 'config' : r.cat === 'diagnostic' ? 'diagnostic' : 'primary';
+    out[bucket].push(r.id);
+  }
+  return out;
+}
+
+// Which entity ids of a device survive the configured category exclusions.
+export function deviceEntityIds(rows = [], exclude = []) {
+  if (!exclude.length) return rows.map((r) => r.id);
+  const drop = new Set(exclude);
+  return rows.filter((r) => !drop.has(r.cat || 'primary')).map((r) => r.id);
 }
 
 // Home Assistant device ids are 32 lowercase hex characters. Matching the shape alone would be
@@ -289,8 +315,10 @@ function resolveDeviceIds(node, ctx, add) {
   if (!byDevice || !byDevice.size) return;
   const consider = (v) => {
     if (typeof v !== 'string' || !DEVICE_ID_RE.test(v)) return;
-    const ids = byDevice.get(v);
-    if (ids) ids.forEach(add);
+    const rows = byDevice.get(v);
+    if (!rows) return;
+    ctx.devicesSeen?.add(v);
+    deviceEntityIds(rows, ctx.excludeDeviceCategories || []).forEach(add);
   };
   for (const v of Object.values(node)) {
     if (Array.isArray(v)) v.forEach(consider);
@@ -307,6 +335,8 @@ export function extractEntities(config, allStates = [], opts = {}) {
   // rendered template. Templates come pre-rendered from the caller (see collectTemplates).
   ctx.byId = new Map(allStates.map((s) => [s.entity_id, s]));
   ctx.templates = opts.renderedTemplates instanceof Map ? opts.renderedTemplates : new Map();
+  ctx.excludeDeviceCategories = Array.isArray(opts.excludeDeviceCategories) ? opts.excludeDeviceCategories : [];
+  ctx.devicesSeen = new Set();
   const overInclude = !!opts.overInclude;
 
   function walk(node) {
@@ -359,5 +389,5 @@ export function extractEntities(config, allStates = [], opts = {}) {
   if (opts.viewPath) views = views.filter((v) => v.path === opts.viewPath);
   views.forEach(walk);
 
-  return { entities: [...found].sort(), unsupported: [...new Set(unsupported)] };
+  return { entities: [...found].sort(), unsupported: [...new Set(unsupported)], devices: [...ctx.devicesSeen] };
 }

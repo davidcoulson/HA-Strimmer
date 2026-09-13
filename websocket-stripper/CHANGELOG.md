@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026.09.13.12 — 2026-09-13
+
+**New: `exclude_device_categories`, and every device expansion now reports its own split.**
+
+Expanding a device pulls in everything it owns, and a device owns far more than a card renders.
+A Litter-Robot 4 measured here carries **21 entities** — the vacuum, waste drawer, litter level
+and pet weight, but also panel brightness, globe brightness, a reset button, a firmware update,
+last-seen, status code and power status. A card rendering a fill percentage needs a handful.
+
+Home Assistant already labels the difference. `config` marks controls that configure the device;
+`diagnostic` marks readings about its health. `exclude_device_categories` drops either or both
+whenever a device is expanded — by a card configured with a device, or by a `client_overrides`
+rule.
+
+**It is empty by default, and that is deliberate.** Whether a given card renders `status_code` is
+not knowable from outside the card, and a wrongly dropped entity blanks part of it with no error
+anywhere — the same silent failure mode this add-on has had to fix three times already.
+
+So instead of guessing, every device expansion now **logs its own breakdown**:
+
+```
+card names device "Robot 1": +21 entities (12 primary, 6 config, 3 diagnostic)
+client rule 10.2.4.109: device "Basement Stairs Panel" -> 21 entities (14 primary, 7 config, 0 diagnostic)
+```
+
+Read the real numbers for your own devices, then decide. A saving you can see before you take it
+is worth more than a default that quietly breaks a card.
+
+Also considered and rejected: inferring the entities from the card's own JavaScript bundle. The
+add-on already reads bundles for `trim_resources`, but that works because a *card type name* is a
+literal string. Which entities a card renders is resolved at runtime from a device id, by
+`unique_id` suffix or translation key, and may be built dynamically — so a miss is silent and
+invisible. Entity categories come from Home Assistant and require no inference at all.
+
+
 ## 2026.09.13.11 — 2026-09-13
 
 **New: `client_overrides` — entity rules pinned to a physical device, not to a dashboard.**
