@@ -12,6 +12,11 @@ on:
     tags: ['*']
     # Don't rebuild the image for documentation-only changes.
     paths-ignore: ['**/*.md', 'assets/**', 'tools/**']
+  # Build and smoke test on pull requests too, WITHOUT publishing (the push step below is
+  # guarded on ref). A Dockerfile is only really tested by building it, and until this existed
+  # the first build of a Dockerfile change was the one that also published it.
+  pull_request:
+    paths-ignore: ['**/*.md', 'assets/**', 'tools/**']
   workflow_dispatch:
 
 env:
@@ -26,7 +31,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The add-on version is the source of truth for the image tag, so a published image can
       # always be traced back to the add-on release it came from.
@@ -38,14 +43,14 @@ jobs:
           echo "value=$v" >> "$GITHUB_OUTPUT"
           echo "Add-on version: $v"
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
 
       # Build one native amd64 image FIRST and prove it actually starts, before anything is
       # pushed. A multi-arch build cannot be loaded into the local daemon, so smoke testing has
       # to happen on a single-arch build; the layers are cached and reused by the push below.
       - name: Build amd64 image for testing
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./websocket-stripper
           platforms: linux/amd64
@@ -98,23 +103,29 @@ jobs:
           docker logs smoketest
           docker rm -f smoketest
 
+      # Skipped on pull requests: nothing is pushed from a PR, and a PR raised from a fork gets
+      # a read-only token that cannot log in anyway — so attempting it would fail the run for a
+      # step whose output is never used.
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # amd64 and arm64 only. Those cover x86 boxes and 64-bit Raspberry Pi OS, which is now
-      # the default and what HA's own documentation recommends; armv7 is omitted rather than
-      # shipped slowly and untested under QEMU. Say the word and it is one line.
+      # the default and what HA's own documentation recommends. armv7 is not merely omitted for
+      # speed any more: `node:24-alpine` publishes no arm/v7 image, and Home Assistant itself
+      # dropped 32-bit ARM after 2025.12 — so there is nothing to build it from and nobody
+      # supported to run it.
       # Only main and tags publish. workflow_dispatch exists so a BRANCH can be built and smoke
       # tested before merging — and without this guard it published too, overwriting `latest` and
       # the version tag with unmerged code. The smoke test above still runs on every dispatch,
       # which is the part that made dispatch worth having.
       - name: Build and push
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./websocket-stripper
           platforms: linux/amd64,linux/arm64
