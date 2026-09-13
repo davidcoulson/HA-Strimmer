@@ -73,7 +73,9 @@ configuration:
       Always/never lists that apply to one Home Assistant USER. This is the only way to express
       "David sees update.* but Michelle does not" when both open the same dashboard. Give the
       user's name as shown in Settings → People (or their user id), then their own
-      always_forward / never_forward patterns. Identity comes from the browser's own access
+      always_forward / never_forward patterns. Add `dashboard` to scope a rule to one dashboard,
+      so "David sees update.* on lovelace" does not follow him onto a wall panel; omit it and
+      the rule applies wherever that user connects. Identity comes from the browser's own access
       token, resolved once per session; leave this empty and no lookup is ever made.
   dashboard_overrides:
     name: Per-dashboard entity rules

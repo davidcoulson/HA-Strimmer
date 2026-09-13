@@ -45,7 +45,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.04';
+const VERSION = '2026.09.13.05';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -136,18 +136,20 @@ const UA_DASHBOARDS = (() => {
 // Per-USER rules, because per-dashboard cannot express "David sees update.* on lovelace but
 // Michelle does not" — they load the same dashboard. The identity comes from the browser's own
 // auth token, resolved once per session against HA's `auth/current_user`.
-const USER_RULES = new Map(
-  (() => {
-    const raw = OPT.user_overrides
-      ?? (process.env.USER_OVERRIDES ? JSON.parse(process.env.USER_OVERRIDES) : []);
-    return Array.isArray(raw) ? raw : [];
-  })()
+// A list, not a map: a user may have several rules, and each may be scoped to one dashboard.
+// `dashboard` omitted means "any dashboard this user opens".
+const USER_RULES = (() => {
+  const raw = OPT.user_overrides
+    ?? (process.env.USER_OVERRIDES ? JSON.parse(process.env.USER_OVERRIDES) : []);
+  return (Array.isArray(raw) ? raw : [])
     .filter((o) => o && typeof o.user === 'string')
-    .map((o) => [o.user.toLowerCase(), {
+    .map((o) => ({
+      user: o.user.toLowerCase(),
+      dashboard: typeof o.dashboard === 'string' && o.dashboard ? o.dashboard : null,
       always: parseRules(o.always_forward),
       never: parseRules(o.never_forward),
-    }]),
-);
+    }));
+})();
 
 // dash -> { always: rules, never: rules }
 const PER_DASH_RULES = new Map(
@@ -1025,11 +1027,19 @@ function resolveUser(token) {
 }
 
 // The rules for a resolved user, matched on name (case-insensitive) or id.
-function rulesForUser(user) {
-  if (!user || !USER_RULES.size) return null;
-  return USER_RULES.get(String(user.name ?? '').toLowerCase())
-    ?? USER_RULES.get(String(user.id ?? '').toLowerCase())
-    ?? null;
+// Every rule matching this user AND this dashboard, merged. Scoping to a dashboard is the
+// point: "David sees update.* on lovelace" should not put 252 entities on a wall panel just
+// because David happens to walk past it.
+function rulesForUser(user, dash) {
+  if (!user || !USER_RULES.length) return null;
+  const names = [String(user.name ?? '').toLowerCase(), String(user.id ?? '').toLowerCase()];
+  const hits = USER_RULES.filter((r) => names.includes(r.user)
+    && (r.dashboard === null || r.dashboard === dash));
+  if (!hits.length) return null;
+  return {
+    always: hits.flatMap((r) => r.always),
+    never: hits.flatMap((r) => r.never),
+  };
 }
 
 // Widen (or narrow) one connection's allowlist by its user's rules. Never mutates the shared
@@ -1255,12 +1265,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     try { m = JSON.parse(s); } catch { return toHA(s); }
     // The auth message carries the identity. Forward it immediately (HA is waiting for it),
     // then hold everything after it until the user is known.
-    if (USER_RULES.size && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
+    if (USER_RULES.length && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
       userChecked = true;
       toHA(s);
       gateQueue = [];
       resolveUser(m.access_token).then((user) => {
-        const extra = rulesForUser(user);
+        const extra = rulesForUser(user, dash);
         if (extra) {
           allow = applyUserRules(allow, extra);
           log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`

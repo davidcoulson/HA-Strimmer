@@ -179,11 +179,11 @@ describe('per-user always_forward', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({
-      mock, dashPaths: 'test-dash', port,
+      mock, dashPaths: 'test-dash,auto-dash', port,
       // The case per-dashboard rules cannot express: two people, one dashboard, different
       // entities. David gets the decoys; Michelle opens the very same dashboard and does not.
       extraEnv: { USER_OVERRIDES: JSON.stringify([
-        { user: 'David', always_forward: ['/^sensor\\.decoy_/'] },
+        { user: 'David', dashboard: 'test-dash', always_forward: ['/^sensor\\.decoy_/'] },
       ]) },
     });
     await proxy.waitForLog(/union allowlist for/);
@@ -191,6 +191,7 @@ describe('per-user always_forward', () => {
   after(async () => { proxy.kill(); await mock.close(); });
 
   const injectedForToken = async (token) => {
+    await httpGet(`http://127.0.0.1:${port}/test-dash/main`);   // so the rule's dashboard scope matches
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, token);
     await c.authed;
     c.send({ type: 'subscribe_entities' });
@@ -210,6 +211,21 @@ describe('per-user always_forward', () => {
     const michelle = await injectedForToken('michelle-token');
     assert.ok(!michelle.has('sensor.decoy_power'), 'Michelle must not inherit David rules');
     assert.ok(michelle.has('light.living_room'), 'but still gets the dashboard itself');
+  });
+
+  it('honours a rule scoped to one dashboard', async () => {
+    // David's rule is scoped to test-dash. On auto-dash he is still David, but the rule must
+    // not follow him there — that is the whole point of scoping it.
+    // Page GET FIRST: the websocket upgrade is what reads the attribution, so fetching the
+    // page afterwards would leave this client on the previous test's hint.
+    await httpGet(`http://127.0.0.1:${port}/auto-dash/main`);
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'david-token');
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    await new Promise((r) => setTimeout(r, 400));
+    const got = new Set(mock.lastSubscribeEntities() ?? []);
+    c.close();
+    assert.ok(!got.has('sensor.decoy_power'), 'a test-dash rule must not apply on auto-dash');
   });
 
   it('applies no rules when the user is unknown', async () => {
