@@ -135,6 +135,10 @@ the network, and parsed by a cheap wall tablet, so that it could be ignored.
 - 📊 **A stats panel in your sidebar** that shows what it is actually doing — per-client
   payload sizes, what each dashboard costs, and where every byte went
 - 🐳 **Runs on plain Docker too**, if you have no Supervisor
+- 🧱 **Running on a current, supported stack.** Node 24 LTS on Alpine — the same combination the
+  rest of the add-on ecosystem uses — with a maintained HTTP proxy library underneath. No
+  end-of-life runtime quietly shipping without security patches, and nothing here compiles, so
+  there are no native bindings to break on an upgrade
 - 🤖 **Built with AI assistance — and proven on real hardware.** Every number above was
   measured on a live Home Assistant instance and a real wall panel, not estimated. The
   optimisations were AI-assisted, then tested against actual dashboards, tablets and
