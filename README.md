@@ -15,6 +15,12 @@ This add-on sits in front of Home Assistant and sends each dashboard **only what
 actually shows**. Same Home Assistant. Same dashboards. Same cards. Just not the other
 9,000 entities.
 
+**On a phone this is the difference between usable and not.** Measured end-to-end in a
+browser, the same dashboard: **5.8 MB of entity data becomes 844 KB**, and the load goes
+from **8.6 s to 3.3 s on 4G** — or **47 s to 18 s** on a weak cellular link. That is 29
+seconds of waiting deleted, and about 5 MB of mobile data *per page load* that never
+leaves the house.
+
 ---
 
 ## ⚡ The difference
@@ -107,12 +113,24 @@ the network, and parsed by a cheap wall tablet, so that it could be ignored.
 ## 🎁 What you get
 
 - 🏃 **Dashboards that open in seconds**, not in "go and make a coffee"
-- 📱 **Way less mobile data** — great if you reach HA from outside the house
+- 📱 **~5 MB less mobile data per page load, and seconds off every open.** 5.8 MB of entity
+  data down to 844 KB — 8.6 s → 3.3 s on 4G, 47 s → 18 s on a weak signal. If you check
+  Home Assistant from outside the house, this is the headline
 - 🔋 **Old tablets and wall panels become usable again** — no new hardware
 - 🎨 **Nothing looks different.** It is your real Home Assistant frontend, your real
   cards, your real theme. Nothing is re-implemented or approximated
 - 🧩 **No changes to your dashboards.** It works out what each one needs by reading it
 - 🛟 **Fails safe.** If it is ever unsure, it sends *more*, not less
+- 🎯 **Rules that follow the thing they belong to** — scope entities to a dashboard, to a
+  person, or to a **physical device**. A wall panel running a browser voice satellite keeps
+  its own entities wherever it navigates, and no other client pays for them
+- 🔎 **Cards configured with a *device* work properly.** Some custom cards are set up by
+  pointing at a device rather than at entities — a 3D printer card, a litter-robot card —
+  and the device's entities are pulled in automatically instead of being stripped, which
+  used to leave the card rendering blank with no error anywhere
+- 📊 **A stats panel in your sidebar** that shows what it is actually doing — per-client
+  payload sizes, what each dashboard costs, and where every byte went
+- 🐳 **Runs on plain Docker too**, if you have no Supervisor
 - 🤖 **Built with AI assistance — and proven on real hardware.** Every number above was
   measured on a live Home Assistant instance and a real wall panel, not estimated. The
   optimisations were AI-assisted, then tested against actual dashboards, tablets and
