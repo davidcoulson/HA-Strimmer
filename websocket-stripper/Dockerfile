@@ -26,8 +26,15 @@ LABEL org.opencontainers.image.source="https://github.com/davidcoulson/HA-Websoc
 WORKDIR /app
 
 # Install production deps first (cached layer).
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+#
+# `npm ci` against the committed lockfile, NOT `npm install`. With the lockfile absent from the
+# image, `npm install` re-resolved every `^` range at build time — so the tree in the published
+# image depended on the day it was built, and the lockfile we carefully keep in git described
+# nothing that ever shipped. Two builds of the same commit could differ. `ci` also fails loudly
+# when the lock and the manifest disagree, which is the check that catches a hand-edited
+# dependency before it reaches a user.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # App code. This list is explicit, so a new module that is not added here builds fine and then
 # dies at startup with ERR_MODULE_NOT_FOUND — add every .mjs the proxy imports.

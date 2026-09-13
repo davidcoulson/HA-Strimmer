@@ -1,0 +1,93 @@
+# Runs the test suite. Until this existed, nothing did — container.yml builds an image and
+# smoke-tests that it starts, which catches a missing COPY but not a single behavioural
+# regression. 227 tests were being run only on whichever laptop last touched the code.
+#
+# Deliberately separate from container.yml rather than a job inside it: tests should run on a
+# pull request from a fork, where the container workflow's `packages: write` token is not
+# something to hand out.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: websocket-stripper
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24 is what the image ships (see Dockerfile). 22 is the floor declared in
+        # package.json engines — testing only the shipped version would let a change that
+        # needs 24 land while still claiming to support 22.
+        node: ['22', '24']
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: websocket-stripper/package-lock.json
+
+      # `ci`, not `install`: it installs exactly the committed lockfile and fails if the lock
+      # and package.json have drifted apart — the same guarantee the image build now relies on.
+      - run: npm ci --no-audit --no-fund
+
+      # The suite spawns real proxies on real ports and talks to them over real sockets, so it
+      # is slower than a unit-test run and occasionally sensitive to a loaded runner. The
+      # timeout is a backstop against a hung socket wedging the job for the full 6 hours.
+      - name: Run tests
+        run: npm test
+        timeout-minutes: 10
+
+  # Cheap checks that do not need a matrix. Kept in a separate job so a metadata mistake is
+  # reported as a metadata mistake rather than hiding inside a test log.
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # config.yaml `version` and package.json `version` describe the same artifact, and the
+      # image is tagged from config.yaml. When they disagree, the published tag and the version
+      # the proxy logs at boot disagree too — which is exactly the confusion that makes "is the
+      # new code actually running?" unanswerable.
+      - name: config.yaml and package.json versions agree
+        run: |
+          cfg=$(grep -E '^version:' config.yaml | sed -E 's/^version:[[:space:]]*"?([^"]+)"?/\1/')
+          pkg=$(node -p "require('./package.json').version")
+          echo "config.yaml: $cfg"
+          echo "package.json: $pkg"
+          [ "$cfg" = "$pkg" ] || { echo "::error::version mismatch: config.yaml=$cfg package.json=$pkg"; exit 1; }
+
+      # Every .mjs the proxy imports has to be named in the Dockerfile's COPY line, or the
+      # image builds cleanly and then dies at startup with ERR_MODULE_NOT_FOUND. That has
+      # shipped before. Checked here as well as by the smoke test because the failure is far
+      # easier to read as a filename than as a container that exited.
+      - name: every local import is COPYed into the image
+        run: |
+          copy=$(grep -E '^COPY .*\.mjs' Dockerfile)
+          missing=0
+          for f in *.mjs; do
+            case "$f" in
+              *.test.mjs) continue ;;
+            esac
+            # Only modules that something actually imports; a standalone tool is not in the image.
+            grep -qE "from '\./$f'" *.mjs 2>/dev/null || continue
+            case "$copy" in
+              *"$f"*) ;;
+              *) echo "::error file=Dockerfile::$f is imported but not COPYed into the image"; missing=1 ;;
+            esac
+          done
+          exit $missing

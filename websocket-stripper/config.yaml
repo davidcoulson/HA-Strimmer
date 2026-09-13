@@ -8,10 +8,13 @@ description: Serves your real HA dashboards but trims the entity websocket to on
 # should describe what is running. Upstream is credited in the README instead, which is the
 # right place for attribution and the wrong place for a "what am I running?" link.
 url: https://github.com/davidcoulson/HA-Websocket-Stripper
+# armv7 is deliberately absent. Home Assistant deprecated 32-bit ARM in 2025.6 and dropped it
+# after 2025.12, and `node:24-alpine` publishes no arm/v7 image at all — so leaving it listed
+# would advertise an install that cannot build. amd64 and aarch64 are what both the base image
+# and Home Assistant itself still support.
 arch:
   - amd64
   - aarch64
-  - armv7
 init: false
 # host_network: lets the app see the REAL browser IP (not the Docker gateway
 # 172.30.32.1), so HA's trusted_networks auth provider can match the kiosk's LAN IP

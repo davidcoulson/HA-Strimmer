@@ -9,10 +9,16 @@
     "start": "node ha_ws_trim_proxy.mjs",
     "test": "node --test"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "httpxy": "^0.5.5",
     "mqtt": "^5.15.2",
     "multicast-dns": "^7.2.5",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.10.0"
   }
 }
