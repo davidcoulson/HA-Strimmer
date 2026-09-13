@@ -48,14 +48,6 @@ describe('the image contains everything the proxy imports', () => {
     assert.ok(/^COPY\s.*\bpanel\.html\b/m.test(dockerfile), 'panel.html must be COPYed');
   });
 
-  it('the add-on version and the proxy version agree', () => {
-    // They are set in two places by hand. When they drift, the panel and the update entity
-    // disagree about what is running, which is exactly the confusion the panel exists to end.
-    const config = fs.readFileSync(path.join(ROOT, 'config.yaml'), 'utf8');
-    const proxy = fs.readFileSync(path.join(ROOT, 'ha_ws_trim_proxy.mjs'), 'utf8');
-    const inConfig = config.match(/^version:\s*"([^"]+)"/m)?.[1];
-    const inProxy = proxy.match(/^const VERSION = '([^']+)';/m)?.[1];
-    assert.ok(inConfig, 'config.yaml has a version');
-    assert.equal(inProxy, inConfig, 'config.yaml and ha_ws_trim_proxy.mjs must state the same version');
-  });
+  // Version agreement across config.yaml / package.json / VERSION is already covered by
+  // config.test.mjs; deliberately not repeated here.
 });
