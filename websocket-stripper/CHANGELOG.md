@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.09.12.21 — 2026-09-12
+
+Removes the investigation-time logging added while tracking the `subscribe_events` leak: it
+dumped entity ids and payload samples, which is right for a hunt and wrong to ship. The
+throttled "batched state_changed trimmed N -> M" line stays, since that one reports the fix
+doing its job.
+
 ## 2026.09.12.20 — 2026-09-12
 
 **Fixed: `subscribe_events("state_changed")` bypassed the allowlist completely.**

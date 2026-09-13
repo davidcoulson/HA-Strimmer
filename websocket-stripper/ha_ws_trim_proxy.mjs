@@ -44,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.20';
+const VERSION = '2026.09.12.21';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1173,9 +1173,6 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
         // unknown — so dump the keys and a sample rather than filing it under a label that
         // says nothing. Throttled to one line.
         stats.recordTraffic('(no type field)', outBytes);
-        logThrottled('no-type-frame', `frame with no type: len=${outBytes} `
-          + `isArray=${Array.isArray(m)} keys=${JSON.stringify(m && typeof m === 'object' ? Object.keys(m).slice(0, 12) : typeof m)} `
-          + `sample=${JSON.stringify(s.slice(0, 200))}`);
       }
       return safeSend(s);
     };
@@ -1190,13 +1187,7 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       && !allow.has(x.event.data.entity_id);
 
     try { m = JSON.parse(s); } catch (e) {
-      // Diagnostic: something is sending frames that are neither binary nor JSON, and
-      // guessing what they are has now failed twice. Dump one, throttled, with enough
-      // detail to identify it: the ws binary flag, the buffer type, and the actual bytes.
-      logThrottled('unparsed-frame', `unparsed frame: isBinary=${isBinary} isBuffer=${Buffer.isBuffer(raw)} `
-        + `len=${raw?.length ?? '?'} parse=${e.message} `
-        + `hex=${Buffer.from(raw).subarray(0, 32).toString('hex')} `
-        + `text=${JSON.stringify(s.slice(0, 120))}`);
+      logThrottled('unparsed-frame', `frame that is neither binary nor JSON (${raw?.length ?? '?'} bytes): ${e.message}`);
       return done();
     }
     if (Array.isArray(m)) {
@@ -1204,6 +1195,12 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       const kept = m.filter((x) => !dropStateChanged(x));
       cat = null;
       stats.recordTraffic(`event:state_changed (batched x${before})`, inBytes);
+      logThrottled('batch-ids', `batched frame: dash=${dash} allow=${allow.size} ids=${JSON.stringify([...new Set(m.map((x) => x?.id))].slice(0, 4))} `
+        + `subs=${JSON.stringify([...stateChangedSubs])} `
+        + `entities=${JSON.stringify(m.slice(0, 4).map((x) => {
+            const id = x?.event?.data?.entity_id;
+            return `${id}:${allow.has(id) ? 'ALLOWED' : 'blocked'}`;
+          }))}`);
       if (!kept.length) return;                       // nothing survived: send nothing
       if (kept.length !== before) {
         s = JSON.stringify(kept);
