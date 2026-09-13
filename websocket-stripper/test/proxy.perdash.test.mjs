@@ -121,6 +121,58 @@ describe('per-dashboard allowlists', () => {
 // same WAN address overwrite each other. A cookie is per-browser, which is the granularity
 // actually wanted — and it is what makes remote access through a tunnel work, where every
 // client arrives from one address.
+describe('User-Agent attribution fallback', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash,auto-dash', port,
+      extraEnv: { UA_DASHBOARDS: JSON.stringify([
+        { match: 'io.robbie.HomeAssistant', dashboard: 'auto-dash' },
+      ]) },
+    });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  const injectedWithUA = async (ua, pageUrl = null) => {
+    if (pageUrl) await httpGet(`http://127.0.0.1:${port}${pageUrl}`);
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'test-token',
+      ua ? { 'user-agent': ua } : undefined);
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    await new Promise((r) => setTimeout(r, 300));
+    const got = mock.lastSubscribeEntities();
+    c.close();
+    return new Set(got ?? []);
+  };
+
+  // The companion app's native connection never fetches a dashboard page, so it has no cookie
+  // and no IP hint and would otherwise be served the union of every dashboard.
+  it('attributes a companion-app connection that has no other signal', async () => {
+    const app = await injectedWithUA('Home Assistant/2026.9.1 (io.robbie.HomeAssistant; iOS 27.0.0)');
+    assert.ok(app.has('light.bedroom'), 'got auto-dash, the dashboard named for this UA');
+    assert.ok(!app.has('sensor.humidity'), 'and NOT the union, which would include test-dash');
+  });
+
+  // Before the next test, which fetches a page: an IP hint lives for ten minutes, so a client
+  // that ran after it would be attributed and never exercise the union at all.
+  it('leaves an unrecognised client on the union', async () => {
+    const other = await injectedWithUA('Mozilla/5.0 (X11; Linux x86_64) Firefox/141.0');
+    assert.ok(other.has('sensor.humidity'), 'union covers every dashboard');
+    assert.ok(other.has('light.bedroom'));
+  });
+
+  it('never overrides a real signal', async () => {
+    // Same app UA, but this client did load a dashboard page: the page wins.
+    const real = await injectedWithUA(
+      'Home Assistant/2026.9.1 (io.robbie.HomeAssistant; iOS 27.0.0)', '/test-dash/main');
+    assert.ok(real.has('sensor.humidity'), 'the page GET decides, not the User-Agent');
+  });
+
+});
+
 describe('per-user always_forward', () => {
   let mock, proxy, port;
   before(async () => {

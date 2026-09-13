@@ -58,6 +58,15 @@ configuration:
       every integration and is sent on every page load — 193KB across 115 domains on a large
       install. Off by default: the frontend uses it for service pickers and the automation
       editor, so this is fine for a kiosk and visibly lossy in the admin UI.
+  user_agent_dashboards:
+    name: Dashboard by client app (fallback)
+    description: >-
+      Attribute a connection by its client app when nothing else can. The Home Assistant
+      companion app opens a native connection that never loads a dashboard page, so it has no
+      cookie and no IP hint and gets the union of every dashboard instead of the one it shows.
+      Match part of its User-Agent (literal or /regex/) — for the companion app,
+      io.robbie.HomeAssistant — and name the dashboard to assume. Used only when cookie and IP
+      both fail, and only dashboards you already serve can be chosen.
   user_overrides:
     name: Per-user entity rules
     description: >-

@@ -45,7 +45,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.03';
+const VERSION = '2026.09.13.04';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -116,6 +116,21 @@ const NEVER = parseRules(OPT.never_forward ?? process.env.NEVER_FORWARD);
 // Assist pipeline). They are the wrong shape for something ONE dashboard needs: forcing
 // `update.*` in globally to fix a sidebar counter on the admin dashboard added 252 entities
 // to a wall panel that shows four lights, which is most of the trimming given back.
+// User-Agent patterns that name a dashboard, used ONLY as a last-resort attribution fallback.
+//
+// The companion app's native connection never fetches a dashboard page, so it has neither a
+// cookie nor an IP hint and lands on the union — 390 entities where the app actually shows one
+// dashboard. Its User-Agent does identify it (`io.robbie.HomeAssistant`), so it can stand in
+// for the missing page GET. Deliberately last: a real signal always wins, and a UA is
+// trivially spoofed, so it may only ever pick between dashboards the add-on already serves.
+const UA_DASHBOARDS = (() => {
+  const raw = OPT.user_agent_dashboards
+    ?? (process.env.UA_DASHBOARDS ? JSON.parse(process.env.UA_DASHBOARDS) : []);
+  return (Array.isArray(raw) ? raw : [])
+    .filter((o) => o && typeof o.match === 'string' && typeof o.dashboard === 'string')
+    .map((o) => ({ ...parseRules([o.match])[0], dashboard: o.dashboard }));
+})();
+
 // user (lower-cased name, or id) -> { always: rules, never: rules }
 //
 // Per-USER rules, because per-dashboard cannot express "David sees update.* on lovelace but
@@ -1106,12 +1121,28 @@ function dashFromCookie(req) {
 // has entries — an empty entity_ids means "no filter" to HA, i.e. the whole firehose.
 function allowFor(req) {
   if (!PER_DASH) return { set: ALLOW, dash: null, via: null };
-  for (const [path, via] of [[dashFromCookie(req), 'cookie'], [ipHint(req), 'ip']]) {
+  for (const [path, via] of [
+    [dashFromCookie(req), 'cookie'],
+    [ipHint(req), 'ip'],
+    [dashFromUA(req), 'user-agent'],
+  ]) {
     if (!path) continue;
     const set = ALLOW_BY_DASH.get(path);
     if (set?.size) return { set, dash: path, via };
   }
   return { set: ALLOW, dash: null, via: null };
+}
+
+// Last-resort attribution from the User-Agent. Only ever returns a dashboard the add-on is
+// configured to serve, so a spoofed UA can at worst select another of your own dashboards.
+function dashFromUA(req) {
+  const ua = req.headers?.['user-agent'];
+  if (!ua || !UA_DASHBOARDS.length) return null;
+  for (const r of UA_DASHBOARDS) {
+    const hit = r.re ? r.re.test(ua) : ua.includes(r.literal);
+    if (hit && DASH_PATHS.includes(r.dashboard)) return r.dashboard;
+  }
+  return null;
 }
 
 function ipHint(req) {
