@@ -69,12 +69,24 @@ export function connOpen({ ip, dash, via, allowSize, ua }) {
     // distinctions live in vendor tokens that vary by app and firmware, so guessing a class
     // here would bake in an assumption nobody can see or correct.
     ua: typeof ua === 'string' ? ua.slice(0, 200) : null,
+    user: null,
     since: Date.now(), fromHA: 0, toBrowser: 0, eventBytes: 0, msgs: 0,
   });
   return id;
 }
 
 export function connClose(id) { conns.delete(id); }
+
+// A connection's allowlist is not fixed at open: per-user rules resolve a moment later and can
+// widen it. Reporting the size captured at open meant the panel under-reported exactly the
+// connections a user rule had just changed — the panel stating something untrue about its own
+// behaviour, which is the failure it exists to prevent.
+export function connIdentity(id, { allowSize, user } = {}) {
+  const c = conns.get(id);
+  if (!c) return;
+  if (Number.isFinite(allowSize)) c.allowSize = allowSize;
+  if (user) c.user = String(user).slice(0, 80);
+}
 
 export function connTraffic(id, inBytes, outBytes, isEvent) {
   const c = conns.get(id);
@@ -106,6 +118,7 @@ export function snapshot(extra = {}) {
     const rate = ageMs >= 60000 ? Math.round(c.eventBytes / (ageMs / 60000)) : null;
     return {
       id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize, ua: c.ua,
+      user: c.user,
       connectedSec: Math.round((now - c.since) / 1000), messages: c.msgs,
       fromHA: c.fromHA, toBrowser: c.toBrowser,
       eventBytes: c.eventBytes,

@@ -1271,11 +1271,21 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       gateQueue = [];
       resolveUser(m.access_token).then((user) => {
         const extra = rulesForUser(user, dash);
+        // Log the miss too. A rule that matches nothing is indistinguishable from no rule at
+        // all otherwise — and the usual cause is that HA's user NAME ("David Coulson") is not
+        // the first name people write in config.
+        if (!extra && user) {
+          logThrottled(`user-nomatch:${user.id}`, `no user rule matched ${JSON.stringify(user.name)} `
+            + `(id ${user.id})${dash ? ` on ${dash}` : ''} — match on that exact name or the id`);
+        }
         if (extra) {
           allow = applyUserRules(allow, extra);
           log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
             + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`);
         }
+        // Tell the panel who this is and what it ended up with, so a widened connection stops
+        // reporting the size it had before the rules ran.
+        if (user) stats.connIdentity(connId, { allowSize: allow.size, user: user.name ?? user.id });
       }).catch(() => {}).finally(openGate);
       return;
     }
