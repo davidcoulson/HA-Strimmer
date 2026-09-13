@@ -1,0 +1,62 @@
+# Nothing was watching this repo, which is why an audit found every Action a full major behind
+# (checkout v4 while v7 was current) and the runtime three years past its security support. That
+# is not a thing to catch by remembering to look — it is a thing to be told about.
+#
+# Tuned for low noise on purpose: a dependency bot that opens eight PRs a week gets muted, and a
+# muted bot is worse than none because it looks like coverage. Weekly, grouped, capped.
+version: 2
+
+updates:
+  # The app's own dependencies. Grouped so a quiet week is one PR, not four.
+  - package-ecosystem: npm
+    directory: /websocket-stripper
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Patch and minor together: these are the ones that should be boring to merge, and the
+      # test suite now runs on every PR to say so.
+      production-minor:
+        applies-to: version-updates
+        dependency-type: production
+        update-types: [minor, patch]
+      dev-minor:
+        applies-to: version-updates
+        dependency-type: development
+        update-types: [minor, patch]
+      # Security fixes arrive as their own group regardless of type, so they are never queued
+      # behind a routine version bump.
+      security:
+        applies-to: security-updates
+        patterns: ['*']
+    # Majors stay ungrouped and arrive as individual PRs — httpxy 0.x in particular can break
+    # on a minor, and the ws/http-proxy migration showed what a proxy library swap really costs
+    # to review. Those deserve to be read one at a time.
+
+  # GitHub Actions. This is the ecosystem that had actually rotted.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  # The base image. Majors are IGNORED deliberately — see below.
+  - package-ecosystem: docker
+    directory: /websocket-stripper
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    ignore:
+      # Node majors are a decision, not an update. Even-numbered lines only become LTS in the
+      # October after release, so an unfiltered bot would offer node:25 (never LTS, EOL after
+      # two months) and node:26 six months before it is supported. The current line is 24;
+      # 26 reaches Active LTS on 2026-10-28 and that is when to move, by hand.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
