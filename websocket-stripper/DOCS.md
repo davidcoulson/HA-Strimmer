@@ -110,6 +110,73 @@ rely on trusted-network auto-login, that's a reasonable local change; you then t
 port via the Network tab as usual. The default stays `true` so the documented kiosk login
 keeps working out of the box.
 
+## Statistics panel
+
+The add-on registers an Ingress panel, so there is a **Stripper** entry in the Home Assistant
+sidebar. (If it is missing, turn on *Show in sidebar* on the add-on's own page — Supervisor
+stores that flag per install and leaves it off for add-ons that gained Ingress in an update.)
+
+It shows:
+
+- **clients connected now** — address, which dashboard each was attributed to and how, how
+  many entities it is subscribed to, and its live update throughput;
+- **what got trimmed** — per payload, the size Home Assistant sent, the size the browser
+  received, and the difference;
+- **per-dashboard** entity counts against the size of the instance, and resource kept/dropped
+  figures when `trim_resources` is on;
+- **the last 24 hours** — data not sent, clients connected, and update traffic, as charts.
+
+Two JSON endpoints back it, both read-only:
+
+| URL | What |
+|---|---|
+| `http://<host>:8100/stats.json` | Current snapshot |
+| `http://<host>:8100/history.json` | Rolling 24h, 5-minute buckets |
+
+Point a `rest` sensor at either to graph it in Home Assistant itself:
+
+```yaml
+sensor:
+  - platform: rest
+    name: Stripper entities served
+    resource: http://homeassistant.local:8100/stats.json
+    value_template: "{{ value_json.allowlist.union }}"
+    json_attributes_path: "$.savings"
+    json_attributes: [before, after, savedPct]
+```
+
+### How the 24h history works
+
+Sampled every five minutes into 288 buckets and persisted to `/data`, so an add-on restart
+costs one bucket rather than the whole day.
+
+Buckets hold **deltas**, not cumulative counters. The counters themselves reset when the
+process restarts, so a cumulative series goes backwards and a naive difference would emit a
+large negative bucket. A counter that decreased is treated as the first sample of a new
+process, where the reading is its own delta. Gaps in the charts are periods the add-on was not
+running.
+
+The window total reports the span it actually covers, so an add-on that has been up for twenty
+minutes says twenty minutes rather than implying a full day.
+
+### What the numbers mean
+
+Sizes are **uncompressed payload** — the bytes the browser has to parse. Fewer than that cross
+the wire, because the websocket negotiates compression.
+
+The trimmed payloads report a genuine before/after: the proxy holds Home Assistant's full
+answer and its own trimmed answer in the same function, so the saving is a subtraction rather
+than an estimate.
+
+**Live update traffic is throughput, not a saving.** Home Assistant filters the event stream
+server-side from the `entity_ids` this add-on injects, so the untrimmed volume never exists
+anywhere and cannot be measured. Reporting a saving there would mean inventing a
+counterfactual. For that comparison, run once with `strip_entities: false` and compare the two
+throughput figures.
+
+A connection younger than a minute reports no rate at all rather than extrapolating its
+opening burst — the panel shows "—" until there is a full minute to divide by.
+
 ## Notes & limits
 
 - Trimming affects the **entity** stream (`get_states` / `subscribe_entities`), the
