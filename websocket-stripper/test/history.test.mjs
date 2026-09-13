@@ -76,8 +76,8 @@ describe('history persistence', () => {
   });
 
   it('survives a restart through /data', () => {
-    const tick = history.start(() => snap(100, 1000, 10), dir, 1e9);
-    tick();
+    // start() samples immediately, so one bucket exists without waiting for the interval.
+    history.start(() => snap(100, 1000, 10), dir, 1e9);
     assert.equal(history.history().samples.length, 1);
     assert.ok(fs.existsSync(path.join(dir, 'history.json')), 'history was written');
     history.stop();
@@ -97,9 +97,18 @@ describe('history persistence', () => {
 
   it('does not need a data directory at all', () => {
     history.reset();
-    const tick = history.start(() => snap(5, 50, 1), null, 1e9);
-    assert.doesNotThrow(tick);
+    assert.doesNotThrow(() => history.start(() => snap(5, 50, 1), null, 1e9));
     assert.equal(history.history().samples.length, 1, 'still samples in memory');
+    history.stop();
+  });
+
+  it('samples immediately on start, not one interval later', () => {
+    // Regression: the first bucket used to land a full interval after boot and the first
+    // chart an interval after that, so a freshly restarted add-on showed an empty card for
+    // ten minutes and looked broken while working perfectly.
+    history.reset();
+    history.start(() => snap(7, 70, 3), null, 1e9);
+    assert.equal(history.history().samples.length, 1, 'a bucket exists before the first tick');
     history.stop();
   });
 });

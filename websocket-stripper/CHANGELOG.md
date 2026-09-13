@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.09.12.15 — 2026-09-12
+
+**The history now samples at startup, not only on the interval.** The first bucket used to land
+five minutes after boot and the first chart five minutes after that, so a freshly restarted
+add-on showed an empty card for ten minutes — a panel that looks broken while working, which is
+the precise thing this panel exists to eliminate.
+
 ## 2026.09.12.14 — 2026-09-12
 
 **A 24-hour history behind the panel, with charts.** The counters were cumulative since

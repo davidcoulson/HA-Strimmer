@@ -90,6 +90,10 @@ export function start(getSnapshot, dataDir, interval = INTERVAL_MS) {
   const tick = () => {
     try { push(getSnapshot()); persist(); } catch { /* never throw from a timer */ }
   };
+  // Sample immediately as well as on the interval. Without this the first bucket lands a
+  // whole interval after startup and the first CHART lands two intervals after — ten minutes
+  // of a panel that looks broken, which is the exact failure this panel exists to remove.
+  tick();
   timer = setInterval(tick, interval);
   if (typeof timer.unref === 'function') timer.unref();
   return tick;
