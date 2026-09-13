@@ -135,10 +135,14 @@ the network, and parsed by a cheap wall tablet, so that it could be ignored.
 - 📊 **A stats panel in your sidebar** that shows what it is actually doing — per-client
   payload sizes, what each dashboard costs, and where every byte went
 - 🐳 **Runs on plain Docker too**, if you have no Supervisor
-- 🧱 **Running on a current, supported stack.** Node 24 LTS on Alpine — the same combination the
-  rest of the app ecosystem uses — with a maintained HTTP proxy library underneath. No
-  end-of-life runtime quietly shipping without security patches, and nothing here compiles, so
-  there are no native bindings to break on an upgrade
+- 🧱 **Running on a current, supported stack — and kept there.** Node 26 on Alpine, with
+  [httpxy](https://github.com/unjs/httpxy) (the maintained unjs fork of node-http-proxy, and
+  what `http-proxy-middleware` moved onto) rather than a proxy library last touched in 2024.
+  Four direct runtime dependencies and **zero native bindings** — nothing here compiles, so
+  there is nothing to rebuild when the runtime moves. The test suite runs on Node
+  22, 24 and 26 on every push, the image build is smoke-tested before anything publishes, and
+  Dependabot watches the dependencies so "current" does not quietly rot back into
+  "end-of-life"
 - 🤖 **Built with AI assistance — and proven on real hardware.** Every number above was
   measured on a live Home Assistant instance and a real wall panel, not estimated. The
   optimisations were AI-assisted, then tested against actual dashboards, tablets and
@@ -447,7 +451,14 @@ Use the container's actual subnet, and keep it as narrow as you can — anything
 ### Which architectures
 
 `linux/amd64` and `linux/arm64` — x86 boxes and 64-bit Raspberry Pi OS, which is what HA's own
-documentation recommends. 32-bit `armv7` isn't published; open an issue if you need it.
+documentation recommends.
+
+32-bit `armv7` is **not** published, and this one isn't a case of nobody asking. The Node base
+image stopped publishing an `arm/v7` build after Node 20, so there is nothing to build it
+*from* — and Home Assistant deprecated 32-bit ARM in 2025.6 and
+[dropped it after 2025.12](https://www.home-assistant.io/blog/2025/05/22/deprecating-core-and-supervised-installation-methods-and-32-bit-systems/),
+so an armv7 host is running an unsupported Home Assistant regardless. If you're on a Pi 2, or a
+Pi 3/4 with a 32-bit OS, the fix is a 64-bit OS rather than a 32-bit build of this.
 
 ## 🔓 Skip the login screen on a wall panel
 
@@ -540,9 +551,12 @@ works through the proxy too.
 
 ## 💻 Run it locally (for developers)
 
+Needs **Node 22 or newer** (the image ships 26; CI covers 22, 24 and 26).
+
 ```bash
 cd websocket-stripper
-npm install
+npm ci                     # `ci`, not `install` — installs exactly the committed lockfile
+npm test                   # 229 tests, no network and no Home Assistant required
 HA_TOKEN="<long-lived-token>" \
   HA_BASE="http://homeassistant.mgmt:8123" \
   DASH_PATHS="kitchen-panel,hallway-kiosk" \
@@ -592,6 +606,16 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
 
 **The big ones, in plain English:**
 
+- 🧱 **The whole stack got modernised, and wired up so it stays that way.** The runtime moved
+  Node 20 → 24 → 26 (20 hit end-of-life in March 2026 and had been shipping without security
+  patches), and `http-proxy` — untouched since December 2024 — was replaced with
+  [httpxy](https://github.com/unjs/httpxy), which also has **zero dependencies**, so
+  `follow-redirects`, `eventemitter3` and `requires-port` left the tree entirely. More
+  importantly the gaps that let it rot are closed: the 229 tests now run in CI on three Node
+  versions instead of on whichever laptop last touched the code, the image installs from the
+  committed lockfile (`npm ci`) so a build is reproducible rather than "whatever resolved
+  today", pull requests build and smoke-test the image before anything publishes, and
+  Dependabot watches for the next round
 - 🎯 **Each panel gets only its own dashboard.** Before, every kiosk got everything *any*
   listed dashboard needed. Now a panel showing one dashboard pays for one dashboard —
   104 entities instead of 391 on the instance this was built against

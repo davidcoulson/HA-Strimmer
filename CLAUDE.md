@@ -96,10 +96,10 @@ unsubscribes. Don't route it through `rpc()`, which resolves on `result`.
 
 Dev run:
 ```bash
-cd websocket-stripper && npm install
+cd websocket-stripper && npm ci     # `ci`, not `install` — the image builds from the lockfile
 HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   DASH_PATHS="fridge-status,home-status,dashboard-deck" node ha_ws_trim_proxy.mjs
-# open http://localhost:8099/fridge-status
+# open http://localhost:9123/fridge-status
 ```
 
 ## Environment specifics
@@ -129,14 +129,28 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   Removals deliberately don't churn connections. Adding a whole new dashboard to the
   `dashboards` option still needs a restart (options are read at boot). If the control ws
   can't reconnect, the proxy keeps serving the last-known allowlist.
-- **Registries (entity/device/area) are not trimmed** yet — they pass through full. If
-  load is still heavy after entity trimming, trimming/caching these is the next lever.
+- **Registries (entity/device/area) ARE trimmed and cached** (`trim_registries`, on by
+  default), as is `get_services` (`trim_services`, off by default). The shared response cache
+  is keyed by `(kind, dashboard, allowlist version)` — so any connection whose allowlist is
+  *wider* than its dashboard's must skip it in both directions, or it reads rows missing its
+  extra entities and writes another client's rows back for everyone else. Three things widen
+  one: a `client_overrides` pin, a self-identified satellite, and `user_overrides`. That is
+  what `allowDiverged` in `bridge()` is for — do not "optimise" it away.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
   is now set (for trusted-network login, below), which can break the internal
   `homeassistant`/`supervisor` DNS names — the `ha_base` / `allow_ws_url` options pin them
   to IPs if startup fails (e.g. `ha_base: http://192.168.4.2:8123`).
-- **armv7**: base image is `node:20-alpine` (multi-arch). Verify the build on the target
-  arch; drop `armv7` from `config.yaml` `arch` if it doesn't build.
+- **Architectures: amd64 and aarch64 only.** `armv7` was removed 2026-09-13 and should not be
+  re-added: `node:24-alpine` onwards publishes **no `arm/v7` image** (`node:20-alpine` did), so
+  the Supervisor build fails outright on 32-bit ARM — and Home Assistant itself deprecated
+  32-bit ARM in 2025.6 and dropped it after 2025.12. **Check the registry manifest before any
+  base-image bump**, because that regression was silent: the tag existed, the platform did not.
+- **Base image is `node:26-alpine`** via `ARG BUILD_FROM`, taken deliberately ahead of its
+  2026-10-28 LTS date (v24 LTS 2025-10-28 / EOL 2028-04-30; v26 LTS 2026-10-28 / EOL
+  2029-04-30). Cheap because nothing here compiles — no native bindings, no ABI to rebuild.
+  CI tests Node 22, 24 and 26; 24 stays in the matrix as the known-good fallback. Dependabot is
+  configured to **ignore Node majors** on purpose: odd lines are never LTS, even ones only
+  qualify the October after release, so that call is a person's, not a bot's.
 - **Auth through the proxy:** first load does a normal HA login against the proxy origin.
   If login loops/400s, the HA `http:` integration may need `use_x_forwarded_for` +
   `trusted_proxies` for the app's IP.
@@ -166,13 +180,24 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
 - **Never flatten the X-Forwarded-For chain — CONFIRMED FIXED 0.2.3, verified live by a user
   behind Caddy.** The normalization above was originally written as
   `proxyReq.setHeader('x-forwarded-for', ip)`, which *replaced* the whole chain with our
-  immediate peer. `http-proxy`'s `xfwd` **appends** our hop to XFF, XFP and X-Forwarded-Port,
-  so with any upstream reverse proxy HA received XFF=1 entry and XFP=2, and
+  immediate peer, so with any upstream reverse proxy HA received XFF=1 entry and XFP=2, and
   `forwarded.py` raises `HTTPBadRequest` on
   `len(forwarded_proto) not in (1, len(forwarded_for))` → a hard **400 on every request**
   (issue #9). Normalize each entry **in place**; never rebuild the header from a single IP.
   Also note `proxy.ws()` does NOT fire `proxyReq` — the ws path needs its own `proxyReqWs`
   handler or upgrades silently keep the `::ffff:` form.
+
+  **The invariant is that the For and Proto chains agree in LENGTH — not that our hop is
+  appended.** The two proxy libraries differ: node-http-proxy *appended* our hop to all three
+  headers; **httpxy sets each only when absent**. Both satisfy HA. A test asserting "the chain
+  has exactly 2 entries" pins the library instead of the requirement and fails on a swap that
+  broke nothing — which is exactly what happened during the httpxy migration.
+- **The proxy library is `httpxy`, not `http-proxy`.** Three API differences bite:
+  `createProxyServer` is a **named** export; **`ws()` is `(req, socket, options, head)`** where
+  node-http-proxy was `(req, socket, head)` — passing `head` third spreads a Buffer into the
+  request options and the upgrade silently never completes; and `web()`/`ws()` return promises,
+  so both call sites need a `.catch()` or a proxy error becomes an unhandled rejection and
+  takes the process down.
 
 ## Security
 
