@@ -824,14 +824,12 @@ const isDistinctive = (f) => (FRAG_DF.get(f) || 0) <= FRAG_DF_MAX;
 let FRAG_RARE_MAX = 2;
 const isRare = (f) => (FRAG_DF.get(f) || 0) <= FRAG_RARE_MAX;
 
-// Does this body provide this card type?
-//
-// The literal name is the strong signal. The fragment fallback exists for bundles that
-// BUILD their element names at runtime: `ha-bambulab-cards.js` is 3.2MB, a dashboard
-// renders `ha-bambulab-print_status-card`, and that string appears nowhere in the file —
-// only `bambulab` and `print_status` separately. Every fragment must be present, and at
-// least two of them must be distinctive, so a pair of common words can never carry a match.
 // Does this bundle look like it provides `type`?
+//
+// The literal name is the strong signal. The fragment fallback exists for bundles that BUILD
+// their element names at runtime: `ha-bambulab-cards.js` is 3.2MB, a dashboard renders
+// `ha-bambulab-print_status-card`, and that string appears nowhere in the file — only
+// `bambulab` and `print_status` separately.
 //
 // The literal check is the reliable one, but plenty of card packs never write their own card
 // names down: Mushroom registers elements from template literals, so "mushroom-cover-card"
