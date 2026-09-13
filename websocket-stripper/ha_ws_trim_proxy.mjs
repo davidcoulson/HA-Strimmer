@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.16';
+const VERSION = '2026.09.13.17';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1343,6 +1343,25 @@ function applyClientRules(set, extra) {
   return out.size === set.size ? set : out;
 }
 
+// Could ANY per-user rule apply to this connection at all?
+//
+// Resolving the user costs a round trip to Home Assistant, and the connection is held for its
+// duration — every message after `auth` waits. That is worth paying when a rule might change the
+// allowlist, and pure loss when none can.
+//
+// A rule scoped to a dashboard cannot apply to a connection serving a different one. Measured on
+// a live instance, every per-user rule was scoped to `lovelace`, so every wall-panel connection
+// paid the lookup to reach a foregone conclusion.
+//
+// An unattributed connection (dash === null) still gates: we do not know which dashboard it is
+// showing, so we cannot rule anything out. Same asymmetry as everywhere else — a needless gate
+// costs milliseconds, a skipped one serves the wrong allowlist.
+function userRulesCouldApply(dash) {
+  if (!USER_RULES.length) return false;
+  if (dash === null || dash === undefined) return true;
+  return USER_RULES.some((r) => r.dashboard === null || r.dashboard === dash);
+}
+
 // The rules for a resolved user, matched on name (case-insensitive) or id.
 // Every rule matching this user AND this dashboard, merged. Scoping to a dashboard is the
 // point: "David sees update.* on lovelace" should not put 252 entities on a wall panel just
@@ -1622,7 +1641,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     try { m = JSON.parse(s); } catch { return toHA(s); }
     // The auth message carries the identity. Forward it immediately (HA is waiting for it),
     // then hold everything after it until the user is known.
-    if (USER_RULES.length && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
+    if (userRulesCouldApply(dash) && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
       userChecked = true;
       toHA(s);
       gateQueue = [];

@@ -758,3 +758,60 @@ describe('registry trimming', () => {
       'with trimming off, entities from other dashboards must still pass through');
   });
 });
+
+// Skipping the user lookup when no per-user rule could possibly apply.
+//
+// Resolving the user costs a round trip to HA and the connection is held for its duration. That
+// is worth paying when a rule might widen the allowlist, and pure loss when none can. Measured on
+// a live instance, every per-user rule was scoped to one dashboard — so every wall-panel
+// connection paid the lookup to reach a foregone conclusion.
+describe('per-user gate is skipped when no rule could match', () => {
+  let mock, proxy, port, out = '';
+
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env,
+        HA_BASE: mock.base, HA_TOKEN: 'test-token',
+        DASH_PATHS: 'test-dash,auto-dash',
+        PORT: String(port), STATS_PORT: String(await getFreePort()),
+        STRIP_ENTITIES: '1', PER_DASHBOARD: '1',
+        // Scoped to auto-dash only — a test-dash connection can never match it.
+        USER_OVERRIDES: JSON.stringify([
+          { user: 'someone', dashboard: 'auto-dash', always_forward: ['light.bedroom'] },
+        ]),
+        // Make a lookup impossible to miss if it happens.
+        CLIENT_DASH_TTL_MS: '60000',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 10000;
+    while (!/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never built an allowlist\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
+  after(() => { proxy?.kill(); mock?.close(); });
+
+  it('does not resolve the user for a dashboard no rule is scoped to', async () => {
+    mock.setCurrentUserDelay?.(400);           // a lookup, if it happens, is unmissable
+    // Attribute the connection to test-dash first. Unattributed connections still gate, and
+    // deliberately so — we cannot rule a rule out when we do not know the dashboard.
+    await httpGet(`http://127.0.0.1:${port}/test-dash/main`);
+    const before = mock.rpcCount('auth/current_user');
+    const seq = mock.subscribeEntitiesSeq();
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    c.send({ type: 'subscribe_entities', id: 60 });
+    await mock.waitForSubscribeEntities(seq);
+    assert.equal(mock.rpcCount('auth/current_user'), before,
+      'a connection no user rule can match must not pay for a user lookup');
+    c.close();
+  });
+});

@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.09.13.17 — 2026-09-13
+
+**Connections that no per-user rule could match no longer wait for a user lookup.**
+
+Resolving the connecting user costs a round trip to Home Assistant, and the connection is **held**
+for its duration — every message after `auth` queues behind it. That is worth paying when a rule
+might widen the allowlist, and pure loss when none can.
+
+A per-user rule scoped to a dashboard cannot apply to a connection serving a different one.
+Measured on a live instance, *every* per-user rule was scoped to `lovelace` — so every wall-panel
+connection paid the lookup to reach a foregone conclusion.
+
+The gate now fires only when some rule could actually match this connection's dashboard. In a
+test where the lookup is artificially slowed to 400 ms, an unmatchable connection went from
+**408 ms to 17 ms**.
+
+An **unattributed** connection still gates, deliberately. Without knowing which dashboard it is
+showing we cannot rule anything out, and the asymmetry runs the usual way: a needless gate costs
+milliseconds, a skipped one serves the wrong allowlist.
+
+There is no way to pre-resolve this ahead of time, which is the obvious alternative. The lookup
+maps *this browser's access token* to a user; the token is issued per browser session, and Home
+Assistant's access tokens carry the refresh-token id rather than the user, so only HA can resolve
+it. Skipping the lookup when it cannot matter is the win that is actually available.
+
+
 ## 2026.09.13.16 — 2026-09-13
 
 **The websocket passthrough log now names the client.**
