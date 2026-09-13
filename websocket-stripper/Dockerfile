@@ -9,13 +9,23 @@
 # from build.yaml. The DEFAULT is what matters here though, because the same Dockerfile also
 # builds the plain container published to GHCR, where nothing injects anything.
 #
-# node:24-alpine, for two reasons. Node 20 reached end-of-life on 2026-03-24 — no security
-# patches — and httpxy requires Node >= 22. Alpine because that is what the whole add-on
-# ecosystem uses: both the official Home Assistant bases and the community hassio-addons bases
-# are Alpine, and Node-RED (the most-installed Node add-on) runs Alpine with Node 24. Nothing
-# here compiles, so a Debian base would buy nothing and cost image size — every dependency is
-# pure JavaScript with no native bindings.
-ARG BUILD_FROM=node:24-alpine
+# Alpine because that is what the whole app ecosystem uses: both the official Home Assistant
+# bases and the community hassio-addons bases are Alpine. Nothing here compiles, so a Debian
+# base would buy nothing and cost image size — every dependency is pure JavaScript with no
+# native bindings, and there is no ABI to rebuild against when the runtime moves.
+#
+# node:26-alpine is a DELIBERATE choice to run the Current line slightly ahead of its LTS date,
+# not an oversight. The schedule:
+#
+#     v24   LTS 2025-10-28   maintenance 2026-10-20   EOL 2028-04-30
+#     v26   LTS 2026-10-28   maintenance 2027-10-20   EOL 2029-04-30
+#
+# As of this commit 26 is still "Current" — the line where breaking changes land — and reaches
+# Active LTS on 2026-10-28, almost exactly when 24 drops into maintenance. Taking it now buys
+# the longer support window a few weeks early, and the cost is those few weeks on Current.
+# The test suite runs on 22, 24 and 26, so a regression specific to the new line is caught in
+# CI rather than on a wall panel; 24 stays in that matrix as the fallback if this bites.
+ARG BUILD_FROM=node:26-alpine
 FROM ${BUILD_FROM}
 
 # Points the GHCR package at this repo and its README.

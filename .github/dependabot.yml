@@ -54,9 +54,11 @@ updates:
       day: monday
     open-pull-requests-limit: 3
     ignore:
-      # Node majors are a decision, not an update. Even-numbered lines only become LTS in the
-      # October after release, so an unfiltered bot would offer node:25 (never LTS, EOL after
-      # two months) and node:26 six months before it is supported. The current line is 24;
-      # 26 reaches Active LTS on 2026-10-28 and that is when to move, by hand.
+      # Node majors are a decision, not an update. Odd-numbered lines are never LTS at all
+      # (node:25 went EOL two months after release), and even ones only become LTS in the
+      # October after release — so an unfiltered bot would happily offer both. The image is on
+      # 26 by deliberate choice ahead of its 2026-10-28 LTS date; the next move after that is
+      # 28, and it should be made by a person reading the release schedule, not by a bot
+      # reacting to a tag appearing.
       - dependency-name: node
         update-types: [version-update:semver-major]
