@@ -107,7 +107,7 @@
   <div class="card">
     <h2>Connected now</h2>
     <div class="scroll"><table id="cl"><thead>
-      <tr><th>Client</th><th>From</th><th>Front door</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
+      <tr><th>Client</th><th>Device</th><th>From</th><th>Front door</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
     </thead><tbody></tbody></table></div>
     <div class="note"><b>Payload</b> is the first entity block this connection received, with the
       number of entities in it — the dump a dashboard cannot render without, and the part this
@@ -236,6 +236,7 @@ async function tick() {
 
   rows('cl', s.clients.list, (c) => [
     c.ip || '?',
+    c.device ? (c.device.name || c.device.kind) + (c.device.kind && c.device.name ? ` (${c.device.kind})` : '') : '—',
     c.origin && c.route ? c.origin + ' · ' + c.route : c.origin || c.route || '—',
     c.host || '—',
     c.user || '—', c.dashboard || '(union — not attributed)', c.attributedVia || '—',

@@ -31,11 +31,12 @@ async function startRedirectHa(port, routes) {
 }
 
 describe('#9 redirects point back at the origin the browser used', () => {
-  let ha, proxy, haPort, port;
+  let ha, proxy, haPort, port, statsPort;
 
   before(async () => {
     haPort = await getFreePort();
     port = await getFreePort();
+    statsPort = await getFreePort();
     ha = await startRedirectHa(haPort, {
       '/rel': '/lovelace/0',
       '/abs': (p) => `http://127.0.0.1:${p}/lovelace/0`,
@@ -47,7 +48,7 @@ describe('#9 redirects point back at the origin the browser used', () => {
     proxy = spawn(process.execPath, [PROXY], {
       env: {
         ...process.env, HA_BASE: `http://127.0.0.1:${haPort}`, HA_TOKEN: 't',
-        DASH_PATHS: 'd', PORT: String(port), SUPERVISOR_TOKEN: '',
+        DASH_PATHS: 'd', PORT: String(port), STATS_PORT: String(statsPort), SUPERVISOR_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

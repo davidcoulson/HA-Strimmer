@@ -98,6 +98,24 @@ configuration:
       Note that mDNS/.local names usually do NOT resolve from inside a container; use a real DNS
       record. `devices` names whole DEVICES by registry name or id and pulls in every entity that
       device owns, which keeps working when an integration adds entities in a later release.
+  mdns_discovery:
+    name: Identify devices via mDNS
+    description: >-
+      Ask the network what each connecting device actually IS. Most panels already announce
+      themselves over multicast DNS — a Kiosk Satellite publishes its name and version, an ESPHome
+      device and a ha-paneld panel publish theirs — so the stats panel can label a row "Office Test
+      Panel, Kiosk Satellite 2026.9.46" instead of just an IP address. It also lets a per-device
+      rule use a `.local` hostname, which the container's own resolver cannot look up. Purely
+      observational: it never decides what a client is served, because an mDNS name is a label a
+      device chose for itself and matching it against Home Assistant device names would be
+      guesswork. Turn off if you do not want the add-on sending multicast queries.
+  mdns_services:
+    name: mDNS service types to look for
+    description: >-
+      Leave empty for the default set (_kiosk-satellite._tcp.local, _esphomelib._tcp.local,
+      _ha-paneld._tcp.local, _googlecast._tcp.local). Add a service type to recognise something
+      else on your network. A full sweep is deliberately not done — it would return printers and
+      speakers too, for more traffic and no benefit.
   exclude_device_categories:
     name: Drop these entity categories from devices
     description: >-

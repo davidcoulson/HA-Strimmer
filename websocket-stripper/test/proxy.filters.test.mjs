@@ -18,11 +18,15 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function spawnProxy({ mock, dashPaths, port, extraEnv = {} }) {
+// statsPort defaults to 0 so the OS picks a free one. Without it every spawned proxy
+// defaults to 8100, and two test files running in parallel fight over it — the loser then
+// fails for a reason unrelated to what it is testing.
+function spawnProxy({ mock, dashPaths, port, statsPort = 0, extraEnv = {} }) {
   const proc = spawn(process.execPath, [PROXY], {
     env: {
       ...process.env, HA_BASE: mock.base, HA_TOKEN: 'test-token',
-      DASH_PATHS: dashPaths, PORT: String(port), SUPERVISOR_TOKEN: '', ...extraEnv,
+      DASH_PATHS: dashPaths, PORT: String(port), STATS_PORT: String(statsPort),
+      SUPERVISOR_TOKEN: '', ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

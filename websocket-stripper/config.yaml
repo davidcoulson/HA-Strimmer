@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.13.18"
+version: "2026.09.13.19"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -77,6 +77,8 @@ options:
   dashboard_overrides: []
   client_overrides: []
   exclude_device_categories: []
+  mdns_discovery: true
+  mdns_services: []
   # Per-USER always/never. The one thing per-dashboard rules cannot express: two people opening
   # the SAME dashboard who should not be served the same entities. Identity comes from the
   # browser's own auth token, resolved once per session against HA's auth/current_user, so it
@@ -131,6 +133,9 @@ schema:
         - str?
       never_forward:
         - str?
+  mdns_discovery: "bool?"
+  mdns_services:
+    - str?
   exclude_device_categories:
     - "list(config|diagnostic)?"
   resources_always_forward:

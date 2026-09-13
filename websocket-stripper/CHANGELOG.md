@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026.09.13.19 — 2026-09-13
+
+**New: the add-on asks the network what each client actually is.**
+
+`route.mjs` already classifies *how* a connection arrived — LAN or internet, and through which
+front door. This answers the other half: *what* the device at that address is. Most panels
+already say so over multicast DNS, unprompted:
+
+| Service | What it is |
+| --- | --- |
+| `_kiosk-satellite._tcp` | A Kiosk Satellite panel — TXT carries its name and version |
+| `_esphomelib._tcp` | An ESPHome device |
+| `_ha-paneld._tcp` | A ha-paneld panel |
+| `_googlecast._tcp` | A Cast display |
+
+A stats row reading `10.2.4.129` is worse than one reading **`Office Test Panel · Kiosk Satellite
+2026.9.46`**, and the difference costs a few multicast packets a minute.
+
+It also resolves a **`.local` hostname in a `client_overrides` rule**, which the container's own
+resolver cannot do — Alpine has no mDNS. So a per-device rule can be written against a name that
+survives a DHCP lease moving, rather than an address that does not.
+
+**What it deliberately does not do is decide what a client is served.** An mDNS instance name is a
+label a device chose for itself; matching it against Home Assistant device names would be fuzzy
+string matching, and a wrong match silently serves the wrong entities. Identity for that purpose
+still comes from the client naming its own `entity_id`, or from an explicit rule.
+
+Best-effort throughout. Multicast may be filtered, the socket may fail to bind, the network may
+not carry it — each degrades to "we learned nothing", never to a failure to serve. Discovery runs
+beside the request path and is never awaited by it. Disable with `mdns_discovery: false`; add
+service types with `mdns_services`.
+
+A full `_services._dns-sd._udp` sweep is deliberately not done: it would return printers and
+speakers too, for more traffic and no benefit.
+
+
 ## 2026.09.13.18 — 2026-09-13
 
 **A client that names itself now gets its own device's entities, with no configuration.**

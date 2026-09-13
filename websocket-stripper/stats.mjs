@@ -73,7 +73,7 @@ export function recordTraffic(kind, bytes) {
 
 export function recordCacheHit(bytes) { cache.hits += 1; cache.bytes += bytes; }
 
-export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, hop, hops }) {
+export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, hop, hops, device }) {
   const id = nextConnId++;
   connTotal += 1;
   bump(byRoute, route);
@@ -89,6 +89,13 @@ export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, ho
     // distinctions live in vendor tokens that vary by app and firmware, so guessing a class
     // here would bake in an assumption nobody can see or correct.
     ua: typeof ua === 'string' ? ua.slice(0, 200) : null,
+    // What the network says this client IS, from mDNS. Observational, like `route` — it labels
+    // the row and never decides what the connection is served.
+    device: device && typeof device === 'object' ? {
+      kind: String(device.kind ?? '').slice(0, 40) || null,
+      name: String(device.name ?? '').slice(0, 60) || null,
+      version: device.version ? String(device.version).slice(0, 30) : null,
+    } : null,
     user: null,
     // How long this connection took to become useful, and how much of that was the link.
     // Null until the first full entity payload has actually gone out; see connTiming.
@@ -179,6 +186,7 @@ export function snapshot(extra = {}) {
       id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize, ua: c.ua,
       user: c.user,
       origin: c.origin, route: c.route, host: c.host, hop: c.hop, hops: c.hops,
+      device: c.device,
       msToEntityData: c.msToEntityData,
       initialPayloadBytes: c.initialPayloadBytes,
       initialEntityCount: c.initialEntityCount,

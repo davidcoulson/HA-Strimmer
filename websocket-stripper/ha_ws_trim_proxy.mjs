@@ -34,6 +34,7 @@ import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
 import { classify, normalizeIp } from './route.mjs';
+import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
 
 // ---- config (add-on options.json or env) ----
 function loadOptions() {
@@ -46,7 +47,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.18';
+const VERSION = '2026.09.13.19';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -210,6 +211,21 @@ const CLIENT_RULES = (() => {
 const EXCLUDE_DEVICE_CATEGORIES = toList(
   OPT.exclude_device_categories ?? process.env.EXCLUDE_DEVICE_CATEGORIES,
 ).filter((c) => ['config', 'diagnostic'].includes(c));
+
+// Ask the network what each client IS. Purely observational — it labels a connection on the
+// stats panel and resolves a `.local` name in a client rule, and it never decides what a client
+// is served. An mDNS instance name is a label a device chose for itself; matching it against
+// Home Assistant device names would be fuzzy string matching, and a wrong match would silently
+// serve the wrong entities.
+const MDNS_ENABLED = (OPT.mdns_discovery ?? process.env.MDNS_DISCOVERY ?? '1') !== false
+  && String(OPT.mdns_discovery ?? process.env.MDNS_DISCOVERY ?? '1') !== '0';
+const MDNS_SERVICES = (() => {
+  const raw = toList(OPT.mdns_services ?? process.env.MDNS_SERVICES);
+  return raw.length ? raw : DEFAULT_SERVICES;
+})();
+// `log` is declared further down, so bind it lazily rather than by value — this module runs
+// its config block before the logger exists.
+const discovery = createDiscovery({ services: MDNS_SERVICES, log: (...a) => log(...a) });
 
 const matchesAny = (rules, id) => rules.some((r) => (r.re ? r.re.test(id) : r.literal === id));
 
@@ -1298,9 +1314,16 @@ async function resolveClientRules(registries) {
       if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(r.client) || r.client.includes(':')) {
         r.ips.add(normalizeIp(r.client));
       } else {
+        // mDNS first for a `.local` name: the OS resolver inside the container has none, so
+        // node:dns cannot answer those at all. Falls through to DNS for everything else.
+        const viaMdns = discovery.resolve(r.client);
+        if (viaMdns) {
+          r.ips.add(normalizeIp(viaMdns));
+          log(`  client rule ${r.client} -> ${viaMdns} (via mDNS)`);
+        }
         // A hostname. Resolving it is best-effort by design: a panel that is powered off has no
         // lease, and that must not stop the other rules — or the whole allowlist — from building.
-        try {
+        else try {
           const { lookup } = await import('node:dns/promises');
           const hits = await lookup(r.client, { all: true });
           hits.forEach((h) => r.ips.add(normalizeIp(h.address)));
@@ -1626,8 +1649,10 @@ server.on('upgrade', (req, socket, head) => {
         + `${selfIdentified ? ` +${selfIdentified} self-identified` : ''} `
         + `(${set.size} entities, union is ${ALLOW.size})`);
     }
+    const device = discovery.lookup(rt.ip);
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
       ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned,
+      device: device ? { kind: device[0].kind, name: device[0].name, version: device[0].version } : null,
       origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
     }));
   } else {
@@ -2151,6 +2176,9 @@ log(`options: per_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compr
 server.listen(PORT, () => {
   log(`HA trim-proxy listening on :${PORT}  ->  ${HA_BASE}`);
   DASH_PATHS.forEach((p) => log(`  open: http://<host>:${PORT}/${p}`));
+  // Started after listen, never awaited: discovery is beside the request path, so a network
+  // that filters multicast costs us a label and nothing else.
+  if (MDNS_ENABLED) { discovery.start(); log(`  mDNS discovery on for ${MDNS_SERVICES.length} service type(s)`); }
 });
 // A port we can't bind is a real config error (another add-on on :9123 — see issue #6) and
 // worth exiting for; anything else the server surfaces is not worth dying over.
