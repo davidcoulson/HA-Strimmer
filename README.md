@@ -82,6 +82,10 @@ does — 0.029 s versus 0.043 s for the same 564 KB bundle, and 31 ms versus 75 
 40 sequential requests. And the HTTP column is the control throughout: the add-on does not trim
 the frontend bundle, and it stays put.
 
+**[Full data and methodology → `docs/PERFORMANCE.md`](docs/PERFORMANCE.md)** — every run, the
+validity checks, the limitations, a profile that produced invalid results and why it was
+discarded, and a measurement that was wrong for an hour before it was explained.
+
 Reproduce any of it with
 [`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs) — it needs no
 configuration change, because it compares the add-on's port against Home Assistant's own.
