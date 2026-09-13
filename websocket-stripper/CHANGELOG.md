@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026.09.13.31 — 2026-09-13
+
+**The image moves to Node 26, deliberately ahead of its LTS date.**
+
+    v24   LTS 2025-10-28   maintenance 2026-10-20   EOL 2028-04-30
+    v26   LTS 2026-10-28   maintenance 2027-10-20   EOL 2029-04-30
+
+As of this release Node 26 is still on the **Current** line — where breaking changes land — and
+becomes Active LTS on 2026-10-28, almost exactly when 24 drops into maintenance. Taking it now
+buys the longer support window about six weeks early; the cost is those six weeks on Current.
+
+Two things make that a cheap bet rather than a gamble. Nothing in this image compiles — every
+dependency is pure JavaScript with no native bindings, so there is no ABI to rebuild and nothing
+to break on a runtime change. And the test suite now runs on **22, 24 and 26**, so a regression
+specific to the new line is caught in CI rather than on a wall panel. 24 stays in that matrix
+precisely so the fallback is known to work.
+
+`node:26-alpine` publishes `amd64` and `arm64/v8` — both architectures this project builds —
+which was checked against the registry manifest rather than assumed. That check exists because
+the Node 24 bump silently dropped `armv7`: `node:20-alpine` published it and `node:24-alpine`
+does not, which would have made the Supervisor build fail outright on 32-bit ARM.
+
 ## 2026.09.13.30 — 2026-09-13
 
 **`get_services` is now served from the same cache the registries use — and that cache stopped

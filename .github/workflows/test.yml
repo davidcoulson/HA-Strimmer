@@ -27,10 +27,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 24 is what the image ships (see Dockerfile). 22 is the floor declared in
+        # 26 is what the image ships (see Dockerfile). 22 is the floor declared in
         # package.json engines — testing only the shipped version would let a change that
-        # needs 24 land while still claiming to support 22.
-        node: ['22', '24']
+        # needs 26 land while still claiming to support 22. 24 stays because it is the current
+        # LTS and the fallback if running ahead of the LTS date turns out to bite.
+        node: ['22', '24', '26']
 
     steps:
       - uses: actions/checkout@v7
