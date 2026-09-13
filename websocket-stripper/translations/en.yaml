@@ -85,6 +85,19 @@ configuration:
       single dashboard needs, because every panel then pays for it. Give a dashboard's
       url_path, then its own always_forward / never_forward patterns — same syntax as the
       global lists. The global never list still wins last.
+  client_overrides:
+    name: Per-device entity rules
+    description: >-
+      Always/never lists pinned to a physical CLIENT rather than to a dashboard or a user. Some
+      entities belong to the device in front of you, not to the page it happens to be showing —
+      a browser-based voice satellite is the clearest case, where the satellite entities are only
+      ever useful to the one panel that IS that satellite. A dashboard rule gets that wrong both
+      ways: the panel loses them when it navigates elsewhere, and every other client opening that
+      dashboard pays for them. Give an IP, a CIDR (10.2.4.0/24), or a hostname — hostnames are
+      resolved when the allowlist is built, so a DHCP lease can move without breaking the rule.
+      Note that mDNS/.local names usually do NOT resolve from inside a container; use a real DNS
+      record. `devices` names whole DEVICES by registry name or id and pulls in every entity that
+      device owns, which keeps working when an integration adds entities in a later release.
   resources_always_forward:
     name: Always send these resources
     description: >-

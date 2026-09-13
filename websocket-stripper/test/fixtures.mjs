@@ -11,6 +11,11 @@ export const STATES = [
   { entity_id: 'binary_sensor.front_door', state: 'off', attributes: { device_class: 'door' } },
   { entity_id: 'binary_sensor.back_door', state: 'on', attributes: { device_class: 'door' } },
   { entity_id: 'sensor.temperature', state: '72', attributes: { unit_of_measurement: '°F' } },
+  { entity_id: 'assist_satellite.office_panel', state: 'idle', attributes: { friendly_name: 'Office Panel' } },
+  { entity_id: 'switch.office_panel_mute', state: 'off', attributes: {} },
+  { entity_id: 'select.office_panel_pipeline_1', state: 'preferred', attributes: {} },
+  { entity_id: 'input_boolean.pinned_thing', state: 'on', attributes: {} },
+  { entity_id: 'sensor.other_vlan_only', state: '1', attributes: {} },
   { entity_id: 'sensor.humidity', state: '40', attributes: { unit_of_measurement: '%' } },
   { entity_id: 'switch.fan', state: 'on', attributes: {} },
   { entity_id: 'camera.front', state: 'streaming', attributes: {} },
@@ -43,6 +48,9 @@ export const LABELS = [
 export const DEVICES = [
   { id: 'dev_kitchen_light', area_id: 'kitchen' },
   { id: 'dev_thermo', area_id: 'living_room' },
+  // A browser-based voice satellite, the case client_overrides exists for. No dashboard
+  // references it, so its entities can only ever arrive through a client-pinned rule.
+  { id: 'dev_office_panel', area_id: null, name: 'Office Panel' },
 ];
 export const ENTITY_REGISTRY = [
   { entity_id: 'light.living_room', device_id: null, area_id: 'living_room', labels: ['lbl_1st'], platform: 'hue' },
@@ -50,6 +58,9 @@ export const ENTITY_REGISTRY = [
   { entity_id: 'light.kitchen', device_id: 'dev_kitchen_light', area_id: null, labels: [], platform: 'hue' },
   { entity_id: 'sensor.temperature', device_id: 'dev_thermo', area_id: null, labels: [], platform: 'template' },
   { entity_id: 'switch.fan', device_id: null, area_id: null, labels: [], platform: 'esphome' },
+  { entity_id: 'assist_satellite.office_panel', device_id: 'dev_office_panel', area_id: null, labels: [], platform: 'voice_satellite' },
+  { entity_id: 'switch.office_panel_mute', device_id: 'dev_office_panel', area_id: null, labels: [], platform: 'voice_satellite' },
+  { entity_id: 'select.office_panel_pipeline_1', device_id: 'dev_office_panel', area_id: null, labels: [], platform: 'voice_satellite' },
 ];
 
 export const REGISTRIES = {

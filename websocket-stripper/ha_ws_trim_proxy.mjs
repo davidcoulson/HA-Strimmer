@@ -33,7 +33,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
-import { classify } from './route.mjs';
+import { classify, normalizeIp } from './route.mjs';
 
 // ---- config (add-on options.json or env) ----
 function loadOptions() {
@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.10';
+const VERSION = '2026.09.13.11';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -165,6 +165,38 @@ const PER_DASH_RULES = new Map(
       never: parseRules(o.never_forward),
     }]),
 );
+// Rules pinned to a physical CLIENT rather than to a dashboard or a user.
+//
+// Some entities belong to the device in front of you, not to whatever page it happens to be
+// showing. A browser-based voice satellite is the clearest case: `assist_satellite.office_panel`
+// and its twenty siblings are only ever useful to the one panel that IS that satellite, and a
+// dashboard-scoped rule gets this wrong in both directions — the panel loses them the moment it
+// navigates elsewhere, and every other client opening that dashboard pays for them.
+//
+// `client` is an IP, a CIDR, or a hostname. Hostnames are resolved when the allowlist is built
+// (see resolveClientRules): a DHCP lease can move, and a name that resolves through your own DNS
+// keeps working when it does. Note mDNS/`.local` names generally do NOT resolve from inside the
+// container — use a real DNS record, which a UniFi client reservation can provide.
+//
+// `devices` names whole DEVICES, by registry name or id, and expands to every entity that device
+// owns. That is deliberately coarser than listing entity ids: a voice satellite integration adds
+// entities between releases, and a rule that has to be re-edited to keep working is a rule that
+// silently stops working.
+const CLIENT_RULES = (() => {
+  const raw = OPT.client_overrides
+    ?? (process.env.CLIENT_OVERRIDES ? JSON.parse(process.env.CLIENT_OVERRIDES) : []);
+  return (Array.isArray(raw) ? raw : [])
+    .filter((o) => o && typeof o.client === 'string' && o.client.trim())
+    .map((o) => ({
+      client: o.client.trim(),
+      devices: toList(o.devices),
+      always: parseRules(o.always_forward),
+      never: parseRules(o.never_forward),
+      // Filled in by resolveClientRules once DNS and the device registry are available.
+      ips: new Set(), cidr: null, deviceEntities: [],
+    }));
+})();
+
 const matchesAny = (rules, id) => rules.some((r) => (r.re ? r.re.test(id) : r.literal === id));
 
 if (!ALLOW_TOKEN) {
@@ -359,6 +391,9 @@ async function buildAllow(rpc, renderTemplate) {
   INSTANCE_ENTITIES = states.length;
   const byId = new Map(states.map((st) => [st.entity_id, st]));
   const registries = await fetchRegistries(rpc);
+  // Resolve client-pinned rules here: the device registry has just been fetched, and doing it
+  // on every rebuild means a renamed device or a moved DHCP lease is picked up without a restart.
+  await resolveClientRules(registries);
   const union = new Set();
   const perDash = new Map();
   const keysByDash = new Map();
@@ -1128,6 +1163,105 @@ function resolveUser(token) {
   });
 }
 
+// ---- client-pinned rules ----
+
+// Parse "10.2.4.0/24" into a test. IPv4 only on purpose: a CIDR here exists to name a VLAN of
+// wall panels, and anything needing IPv6 subtleties is better served by listing addresses.
+function parseCidr(s) {
+  const m = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(s);
+  if (!m) return null;
+  const bits = Number(m[2]);
+  if (bits > 32) return null;
+  const toInt = (ip) => ip.split('.').reduce((a, o) => (a << 8 >>> 0) + Number(o), 0) >>> 0;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  const net = (toInt(m[1]) & mask) >>> 0;
+  return (ip) => {
+    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) return false;
+    return ((toInt(ip) & mask) >>> 0) === net;
+  };
+}
+
+// Resolve each rule's `client` to addresses and each `devices` entry to entity ids.
+//
+// Run at allowlist-build time rather than at connect time: a DNS lookup on the hot path would
+// put a network round trip in front of every websocket upgrade, and a failure there would be a
+// failure to serve rather than a logged warning.
+async function resolveClientRules(registries) {
+  if (!CLIENT_RULES.length) return;
+  const devices = registries?.devices || [];
+  const entities = registries?.entities || [];
+  const byId = new Map(devices.map((d) => [d.id, d]));
+  const idByName = new Map(devices
+    .map((d) => [String(d.name_by_user || d.name || '').toLowerCase(), d.id])
+    .filter(([n]) => n));
+  const entsFor = new Map();
+  for (const e of entities) {
+    if (!e.device_id || !e.entity_id) continue;
+    if (!entsFor.has(e.device_id)) entsFor.set(e.device_id, []);
+    entsFor.get(e.device_id).push(e.entity_id);
+  }
+
+  for (const r of CLIENT_RULES) {
+    r.cidr = parseCidr(r.client);
+    r.ips = new Set();
+    if (!r.cidr) {
+      if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(r.client) || r.client.includes(':')) {
+        r.ips.add(normalizeIp(r.client));
+      } else {
+        // A hostname. Resolving it is best-effort by design: a panel that is powered off has no
+        // lease, and that must not stop the other rules — or the whole allowlist — from building.
+        try {
+          const { lookup } = await import('node:dns/promises');
+          const hits = await lookup(r.client, { all: true });
+          hits.forEach((h) => r.ips.add(normalizeIp(h.address)));
+          log(`  client rule ${r.client} -> ${[...r.ips].join(', ')}`);
+        } catch (e) {
+          logThrottled(`client-dns:${r.client}`,
+            `  client rule ${r.client}: DNS lookup failed (${e.code || e.message}) — rule inactive until it resolves. `
+            + 'mDNS/.local names usually do not resolve from a container; a real DNS record does.');
+        }
+      }
+    }
+
+    r.deviceEntities = [];
+    for (const want of r.devices) {
+      const id = byId.has(want) ? want : idByName.get(want.toLowerCase());
+      if (!id) { log(`  client rule ${r.client}: no device named "${want}"`); continue; }
+      const ents = entsFor.get(id) || [];
+      r.deviceEntities.push(...ents);
+      log(`  client rule ${r.client}: device "${byId.get(id)?.name ?? id}" -> ${ents.length} entities`);
+    }
+  }
+}
+
+// Every client rule matching this connection's address, merged. Cheap: a handful of set lookups
+// on a list a user hand-wrote, evaluated once per websocket upgrade.
+function rulesForClient(ip) {
+  if (!ip || !CLIENT_RULES.length) return null;
+  const hits = CLIENT_RULES.filter((r) => (r.cidr ? r.cidr(ip) : r.ips.has(ip)));
+  if (!hits.length) return null;
+  return {
+    always: hits.flatMap((r) => r.always),
+    never: hits.flatMap((r) => r.never),
+    entities: hits.flatMap((r) => r.deviceEntities),
+  };
+}
+
+// Widen/narrow one connection's allowlist by its client rules. Returns the SAME set when nothing
+// changed, so the common case allocates nothing and the caller can tell whether a rule applied.
+function applyClientRules(set, extra) {
+  if (!extra) return set;
+  const out = new Set(set);
+  extra.entities.forEach((eid) => out.add(eid));
+  extra.always.forEach((r) => {
+    if (r.literal) out.add(r.literal);
+    else REAL_IDS.forEach((eid) => { if (r.re.test(eid)) out.add(eid); });
+  });
+  // never wins last here too, matching every other override block.
+  [...out].forEach((eid) => { if (matchesAny(extra.never, eid)) out.delete(eid); });
+  return out.size === set.size ? set : out;
+}
+
 // The rules for a resolved user, matched on name (case-insensitive) or id.
 // Every rule matching this user AND this dashboard, merged. Scoping to a dashboard is the
 // point: "David sees update.* on lovelace" should not put 252 entities on a wall panel just
@@ -1306,13 +1440,23 @@ server.on('upgrade', (req, socket, head) => {
       } catch { socket.destroy(); }
       return;
     }
-    const { set, dash, via } = allowFor(req);
+    const { set: dashSet, dash, via } = allowFor(req);
     // Classified once here rather than per-field: the request object is gone by the time the
     // bridge reports anything, so the path has to be captured at the only moment it exists.
     const rt = classify(req);
-    if (dash) log(`/api/websocket for ${rt.ip} (${rt.origin}, via ${rt.route}${rt.host ? ` @ ${rt.host}` : ''}): serving ${dash} via ${via} (${set.size} entities, union is ${ALLOW.size})`);
+    // Client-pinned rules apply on top of whichever dashboard set was chosen, and regardless of
+    // whether the dashboard could be attributed at all — the point of pinning to a device is
+    // that it holds even when the page changes.
+    const set = applyClientRules(dashSet, rulesForClient(rt.ip));
+    const pinned = set !== dashSet;
+    if (dash || pinned) {
+      log(`/api/websocket for ${rt.ip} (${rt.origin}, via ${rt.route}${rt.host ? ` @ ${rt.host}` : ''}): `
+        + `serving ${dash ?? 'union'}${dash ? ` via ${via}` : ''}`
+        + `${pinned ? ` +client rules (${dashSet.size} -> ${set.size})` : ''} `
+        + `(${set.size} entities, union is ${ALLOW.size})`);
+    }
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
-      ip: rt.ip, via, ua: req.headers['user-agent'],
+      ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned,
       origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
     }));
   } else {

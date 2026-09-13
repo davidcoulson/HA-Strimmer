@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026.09.13.11 — 2026-09-13
+
+**New: `client_overrides` — entity rules pinned to a physical device, not to a dashboard.**
+
+Some entities belong to the machine in front of you rather than to whatever page it is showing.
+A **browser-based voice satellite** is the clearest case: `assist_satellite.office_panel` and its
+twenty siblings are only ever useful to the one panel that *is* that satellite. Scoping them to a
+dashboard is wrong in both directions — the panel loses them the moment it navigates somewhere
+else, and every other client opening that dashboard pays for entities it can never use.
+
+```yaml
+client_overrides:
+  - client: 10.2.4.109          # an IP, a CIDR, or a hostname
+    devices: ["Office Panel"]   # the whole device, by registry name or id
+    always_forward: []          # patterns, same syntax as everywhere else
+    never_forward: []
+```
+
+`devices` names whole **devices** rather than listing entity ids, deliberately: a voice satellite
+integration adds entities between releases, and a rule that must be re-edited to keep working is
+a rule that silently stops working. The measured device here owns 21 entities across six domains.
+
+`client` accepts an IP, an IPv4 CIDR (`10.2.4.0/24`) for a whole VLAN of panels, or a hostname.
+Hostnames are resolved when the allowlist is built — not per connection, which would put a DNS
+round trip in front of every websocket upgrade — so a moved DHCP lease is picked up on the next
+rebuild. A lookup that fails logs and leaves that one rule inactive rather than failing the
+build. Note that mDNS/`.local` names generally do **not** resolve from inside the container; use
+a real DNS record, which a UniFi client reservation can supply.
+
+Rules apply on top of whichever dashboard set was chosen, **and whether or not the dashboard
+could be attributed at all** — that is the point of pinning to a device. `never_forward` still
+wins last, consistent with every other override block. The widening is logged
+(`+client rules (149 -> 170)`) so a pin is visible rather than mysterious.
+
+
 ## 2026.09.13.10 — 2026-09-13
 
 **Fixed: a card configured with a *device* instead of entities had all of them stripped.**
