@@ -87,6 +87,17 @@
   </div>
 
   <div class="card">
+    <h2>What's actually flowing</h2>
+    <div class="scroll"><table id="msgs"><thead>
+      <tr><th>Message kind</th><th>Count</th><th>Bytes</th><th>Share</th></tr>
+    </thead><tbody></tbody></table></div>
+    <div class="note">Every message from Home Assistant, labelled — results attributed to the
+      command that asked for them. The trim categories above only cover payloads this add-on
+      knows how to shrink; this list is everything, so anything large and unexpected shows up
+      here rather than hiding in a total.</div>
+  </div>
+
+  <div class="card">
     <h2>Dashboards</h2>
     <div class="scroll"><table id="dash"><thead>
       <tr><th>Dashboard</th><th>Entities</th><th>of instance</th><th>Resources kept</th><th>Resource KB kept</th><th>KB dropped</th></tr>
@@ -171,6 +182,10 @@ async function tick() {
     : '—';
   $('cacheHits').textContent = s.registryCache.hits;
   $('cacheBytes').textContent = kb(s.registryCache.bytesServed) + ' HA never rebuilt';
+
+  const msgs = Object.entries(s.byMessage || {});
+  const msgTotal = msgs.reduce((t, [, v]) => t + v.bytes, 0) || 1;
+  rows('msgs', msgs, ([k, v]) => [k, v.count.toLocaleString(), kb(v.bytes), ((v.bytes / msgTotal) * 100).toFixed(1) + '%']);
 
   rows('cats', Object.entries(s.savings.byCategory), ([k, v]) => [
     NICE[k] || k, v.count, kb(v.before), kb(v.after), kb(v.saved), v.savedPct + '%',

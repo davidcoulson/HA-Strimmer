@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.09.12.16 — 2026-09-12
+
+**The panel now labels every message, not just the ones it trims.** A wall panel trimmed to 104
+entities was receiving ~98MB/h, and nothing in the panel could say what it was: the trim
+categories only cover payloads this add-on knows how to shrink, so everything else landed in a
+total with no breakdown. Results are attributed to the command that asked for them, events to
+their event_type.
+
 ## 2026.09.12.15 — 2026-09-12
 
 **The history now samples at startup, not only on the interval.** The first bucket used to land

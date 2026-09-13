@@ -26,6 +26,10 @@ const trims = new Map();
 const events = { count: 0, bytes: 0 };
 // Registry answers served from the local cache without asking HA at all.
 const cache = { hits: 0, bytes: 0 };
+// What is actually coming down the socket, keyed by message kind. The trim categories only
+// cover payloads this add-on knows how to shrink; everything else was invisible, which is how
+// a 98MB/h stream sat unexplained next to a panel claiming 0.5MB/h.
+const traffic = new Map();
 // Live connections, keyed by a monotonic id.
 const conns = new Map();
 let nextConnId = 1;
@@ -43,6 +47,16 @@ export function recordTrim(category, before, after) {
 }
 
 export function recordEvent(bytes) { events.count += 1; events.bytes += bytes; }
+
+export function recordTraffic(kind, bytes) {
+  let e = traffic.get(kind);
+  if (!e) {
+    if (traffic.size >= MAX_CATS) return;       // same guard as categories
+    e = { count: 0, bytes: 0 };
+    traffic.set(kind, e);
+  }
+  e.count += 1; e.bytes += bytes;
+}
 
 export function recordCacheHit(bytes) { cache.hits += 1; cache.bytes += bytes; }
 
@@ -112,6 +126,10 @@ export function snapshot(extra = {}) {
       bytesPerMin: Math.round(events.bytes / Math.max((now - startedAt) / 60000, 1 / 60)),
     },
     registryCache: { hits: cache.hits, bytesServed: cache.bytes },
+    // Biggest first: the point of this list is to make an unexplained stream obvious.
+    byMessage: Object.fromEntries(
+      [...traffic.entries()].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 15),
+    ),
     clients: { open: conns.size, total: connTotal, list: clients },
   };
 }
@@ -121,6 +139,7 @@ export function reset() {
   trims.clear();
   events.count = 0; events.bytes = 0;
   cache.hits = 0; cache.bytes = 0;
+  traffic.clear();
   conns.clear();
   nextConnId = 1; connTotal = 0;
 }

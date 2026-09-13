@@ -44,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.15';
+const VERSION = '2026.09.12.16';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1059,6 +1059,9 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
   const registryIds = new Map();    // request id -> which registry, to trim its result
   const resourceIds = new Set();    // lovelace/resources requests, to trim their result
   const serviceIds = new Set();     // get_services requests, to trim their result
+  // id -> the command the browser sent, so a `result` can be attributed to what asked for it.
+  // Bounded: a client that never gets answers must not grow this without limit.
+  const pendingTypes = new Map();
   const queue = []; let haOpen = false;
   const toHA = (s) => { if (haOpen) haWs.send(s); else queue.push(s); };
 
@@ -1067,6 +1070,10 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
   browserWs.on('message', (raw) => {
     let s = raw.toString(); let m;
     try { m = JSON.parse(s); } catch { return toHA(s); }
+    if (m && m.id != null && m.type) {
+      if (pendingTypes.size > 500) pendingTypes.clear();
+      pendingTypes.set(m.id, m.type);
+    }
     if (STRIP && m && m.type === 'get_states') getStatesIds.add(m.id);
     if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) {
       const kind = REGISTRY_TYPES.get(m.type);
@@ -1128,6 +1135,18 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       // four trimmed categories", which swept up lovelace/config and every other untrimmed
       // reply and reported the lot as live update traffic.
       stats.connTraffic(connId, inBytes, outBytes, isEvent);
+      // Label by kind so nothing can flow unexplained. Events carry their event_type;
+      // results are attributed to the command that asked for them.
+      if (m && m.type === 'event') {
+        stats.recordTraffic(`event:${m.event?.event_type ?? 'entity-diff'}`, outBytes);
+      } else if (m && m.type === 'result') {
+        stats.recordTraffic(`result:${pendingTypes.get(m.id) ?? 'unknown'}`, outBytes);
+        pendingTypes.delete(m.id);
+      } else if (m && m.type) {
+        stats.recordTraffic(m.type, outBytes);
+      } else {
+        stats.recordTraffic('(unparsed)', outBytes);
+      }
       return safeSend(s);
     };
     try { m = JSON.parse(s); } catch { return done(); }
