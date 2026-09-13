@@ -97,17 +97,101 @@ Being straight with you, because measuring this took a while:
      - hallway-kiosk
    always_forward: []          # e.g. ["/^sun\\./", "person.alex"]
    never_forward: []           # e.g. ["/_battery$/"]
-   strip_entities: true
+   strip_entities: true        # the main switch
    per_dashboard: true         # each connection gets only its own dashboard's entities
    trim_registries: true       # also cut the entity/device/area registries
    compress_websocket: true    # leave on: HA's own websocket compresses too
-   trim_resources: false       # off by default — see DOCS.md before enabling
+   trim_resources: false       # off by default — see below
+   trim_services: false        # off by default — fine for kiosks, lossy in the admin UI
    ```
    Every option has a name and description in the **Configuration** tab, so you can read
    what each does without leaving Home Assistant.
+
+### 🧠 Wait — what's an entity vs a registry vs a resource?
+
+Fair question. Home Assistant sends a dashboard four completely different kinds of thing, and
+each switch trims a different one.
+
+#### 🔌 Entities — your actual stuff, and what it's doing right now
+
+> `light.kitchen_ceiling` → *on, 60% brightness*
+> `sensor.outdoor_temperature` → *12.4 °C*
+> `binary_sensor.front_door` → *closed*
+
+One per light, sensor, switch, button, plug and thermostat you own. This is the part that
+never stops: Home Assistant streams **every change to every one of them**, forever, to every
+open dashboard — including the 9,000 your wall panel will never show.
+
+*Trimmed by `strip_entities`.*
+
+#### 📇 Registries — Home Assistant's address book
+
+Three separate lists: one of every **entity**, one of every **device**, one of every **area**.
+They record names and what belongs to what.
+
+> The entity registry row for `light.kitchen_ceiling` says it's called "Ceiling" and belongs
+> to device *Hue Lamp 3*. The device registry says *Hue Lamp 3* lives in the **Kitchen** area.
+
+That's the machinery that lets a card show **"Kitchen · Ceiling"** instead of
+`light.kitchen_ceiling`. Useful — but it's one row per entity **for your entire house**, sent
+on every single page load, even for a dashboard showing four lights.
+
+*Trimmed by `trim_registries`.*
+
+#### 🎨 Resources — the custom cards you installed
+
+The JavaScript files behind the cards you added through HACS.
+
+> `/hacsfiles/lovelace-mushroom/mushroom.js`
+> `/hacsfiles/mini-graph-card/mini-graph-card-bundle.js`
+> `/hacsfiles/ha-bambulab-cards/ha-bambulab-cards.js`
+
+Resources are installed **instance-wide**, so Home Assistant hands *every* dashboard *every*
+card you have ever installed. Add a 3D-printer card for one dashboard and your bedroom wall
+panel downloads and parses it too — forever, whether or not a single card on it uses one.
+
+*Trimmed by `trim_resources`.*
+
+#### ⚙️ Services — the list of things that can be *done*
+
+> `light.turn_on`, `climate.set_temperature`, `vacuum.start`, `media_player.volume_set`
+
+Every action every installed integration can perform. The frontend uses it to populate service
+pickers and the automation editor — so it's essential if you're *editing* automations, and
+dead weight on a panel that just shows the temperature.
+
+*Trimmed by `trim_services`.*
+
+---
+
+Rough sizes on the instance this was built against (9,751 entities), **per page load**:
+
+| | Size | |
+|---|---|---|
+| 📇 Registries | **12.7 MB** | the largest download by a distance |
+| 🎨 Resources | **21 MB** | of custom-card JavaScript |
+| 🔌 Entities | **2.5 MB** | plus a permanent stream of updates |
+| ⚙️ Services | **196 KB** | across 115 integrations |
+
+### Which are safe to leave on?
+
+- ✅ **`strip_entities` and `trim_registries`** — on by default. If either goes wrong you see it
+  instantly: a card shows "unavailable", or a name renders as `light.abc123` instead of
+  "Ceiling". Loud, obvious, easy to undo.
+- ⚠️ **`trim_resources`** — opt-in. Most mistakes here are loud too: a missing card shows
+  *"Custom element doesn't exist"*, a missing icon pack shows blank squares. The catch is one
+  specific kind — a resource with **no card at all**, that just runs quietly in the background.
+  An idle timer that dims the screen. A pop-up that appears when the doorbell rings. Drop one
+  of those and the dashboard looks *pixel-identical*; only the behaviour stops, and nothing
+  tells you. Turn it on, load each dashboard once, and read the log's
+  **"dropped by ALL dashboards"** list — that's where such a resource would be hiding.
+- ⚠️ **`trim_services`** — opt-in, and nothing ever breaks visually. Service dropdowns and the
+  automation editor just get shorter. Ideal for a wall panel, irritating if you administer
+  Home Assistant through the same URL. Keep a normal HA address for that.
+
 3. Start it. Browse `http://<ha-host>:9123/<your-dashboard>`. Point your kiosk browser
-   there. To move it off `9123` (e.g. it collides with Zigbee2MQTT), set the `port` option
-   — because the add-on runs `host_network: true`, the **Network** tab can't remap it.
+   there. To move it off `9123`, set the `port` option — because the add-on runs
+   `host_network: true`, the **Network** tab can't remap it.
 
 > **Tip — keep broad admin dashboards out of the `dashboards` list.** The allowlist is the
 > *union* of every listed dashboard, so a big admin/overview dashboard built on wide
