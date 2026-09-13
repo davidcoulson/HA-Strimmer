@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026.09.13.10 — 2026-09-13
+
+**Fixed: a card configured with a *device* instead of entities had all of them stripped.**
+
+Some custom cards are configured by pointing at a device and look up that device's entities
+themselves, in the browser. `custom:ha-bambulab-print_status-card` is configured as
+`printer: 43f1e9fddd670256ced58c9fe7971e41` — a device id. Nothing anywhere in that card config
+is an `entity_id`, so the structural walk found none.
+
+Measured on the instance this was found on: the dashboard carrying it resolved to **2 entities**
+(its two lights), and the printer's **57 entities were all stripped**. The card then renders with
+nothing in it — which reads as a broken card, not as a trimming problem, and that is what makes
+this worth fixing rather than documenting.
+
+Device ids were already understood as an auto-entities *filter key* (`device:`). They were not
+understood as a value sitting on an ordinary card.
+
+The fix matches on the **value**, not the key. The key name cannot be predicted — `printer`
+here, something else on the next card — so any string that is a **registered device id** expands
+to that device's entities, wherever it appears in the card tree, including inside lists and
+nested stacks. Shape alone is never enough: a 32-hex string that is not in the device registry
+adds nothing, which makes a false positive essentially impossible.
+
+This deliberately admits the device's whole entity set rather than guessing which subset the
+card renders, because the card's internals are not knowable from here and the failure modes are
+not symmetric — a few entities too many costs bandwidth, while one missing silently empties a
+card on a wall panel with no error anywhere.
+
 ## 2026.09.13.09 — 2026-09-13
 
 **Fixed: the connection-timing panel was reporting a payload size it had not measured.**
