@@ -450,3 +450,90 @@ describe('boots while HA is still down', () => {
     c.close();
   });
 });
+
+// Registry noise must not trigger a full allowlist rebuild.
+//
+// `entity_registry_updated` fires for far more than the allowlist depends on. Measured on a live
+// instance: 24 rebuilds in 14 minutes, EVERY one reporting "+0 -0" — a full get_states over
+// 9,592 entities plus all four registries, ~20MB pulled from HA each time, to change nothing.
+// The handler never looked at the payload.
+describe('registry event filtering', () => {
+  let mock, proxy, port, out = '';
+
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env,
+        HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(await getFreePort()), STRIP_ENTITIES: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 10000;
+    while (!/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never built an allowlist\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    out = '';
+  });
+
+  after(() => { proxy?.kill(); mock?.close(); });
+
+  const rebuilds = () => (out.match(/allowlist recomputed/g) || []).length;
+
+  it('ignores an update that only touches fields the allowlist cannot depend on', async () => {
+    mock.fireEvent('entity_registry_updated', {
+      action: 'update', entity_id: 'light.living_room', changes: { options: { sensor: {} } },
+    });
+    await new Promise((r) => setTimeout(r, 2500));   // past the 1500ms debounce
+    assert.equal(rebuilds(), 0,
+      `a display-precision change must not trigger a full instance rebuild; log:\n${out}`);
+    assert.match(out, /entity_registry_updated ignored/);
+  });
+
+  it('still rebuilds when a field the allowlist DOES depend on changes', async () => {
+    out = '';
+    mock.fireEvent('entity_registry_updated', {
+      action: 'update', entity_id: 'light.living_room', changes: { area_id: 'kitchen' },
+    });
+    await new Promise((r) => setTimeout(r, 3000));
+    assert.equal(rebuilds(), 1, `an area change must rebuild; log:\n${out}`);
+  });
+
+  it('always rebuilds on create and remove', async () => {
+    for (const action of ['create', 'remove']) {
+      out = '';
+      mock.fireEvent('entity_registry_updated', { action, entity_id: 'light.new_one' });
+      await new Promise((r) => setTimeout(r, 3000));
+      assert.equal(rebuilds(), 1, `action=${action} must rebuild; log:\n${out}`);
+    }
+  });
+
+  it('rebuilds on a shape it does not recognise, rather than silently skipping', async () => {
+    // Under-rebuilding serves a dashboard entities it no longer has; over-rebuilding costs
+    // bandwidth. The unknown case must fail toward correctness.
+    out = '';
+    mock.fireEvent('entity_registry_updated', { action: 'update', entity_id: 'light.x' });
+    await new Promise((r) => setTimeout(r, 3000));
+    assert.equal(rebuilds(), 1, `a payload with no "changes" must still rebuild; log:\n${out}`);
+  });
+
+  it('coalesces a burst into a single rebuild instead of overlapping them', async () => {
+    // The debounce guards SCHEDULING, not execution: once the timer fires, buildAllow() is
+    // awaited and a new event schedules a fresh timer that fires while the first is still
+    // running. Three rebuilds completed inside one second on a live instance.
+    out = '';
+    for (let i = 0; i < 8; i++) {
+      mock.fireEvent('entity_registry_updated', { action: 'create', entity_id: `light.burst_${i}` });
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+    const n = rebuilds();
+    assert.ok(n >= 1 && n <= 2, `8 events in ~1s must collapse to 1-2 rebuilds, got ${n}; log:\n${out}`);
+  });
+});

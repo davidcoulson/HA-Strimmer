@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.14';
+const VERSION = '2026.09.13.15';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -304,6 +304,37 @@ let REAL_IDS = [];
 
 // HA events that can change the computed allowlist: a dashboard edit, or a registry change
 // that alters what an area/label/device/integration auto-entities filter resolves to.
+// Registry fields a rebuild can safely ignore.
+//
+// `entity_registry_updated` fires for far more than the allowlist depends on. Measured on a
+// live instance: 24 full rebuilds in 14 minutes, EVERY one reporting "+0 -0" — a full
+// get_states over 9,592 entities plus all four registries, roughly 20MB pulled from Home
+// Assistant each time, to change nothing.
+//
+// Listed here are fields that cannot move an allowlist. Everything else — including anything
+// unrecognised — still rebuilds, because the asymmetry runs the usual way: a wasted rebuild
+// costs bandwidth, a skipped one serves a dashboard entities it no longer has.
+const IGNORABLE_REGISTRY_FIELDS = new Set([
+  'options',                 // per-domain display settings, e.g. sensor precision
+  'capabilities',
+  'supported_features',
+  'unit_of_measurement',
+  'previous_unique_id',
+  'suggested_object_id',
+]);
+
+// Does this registry event plausibly change what a dashboard resolves to?
+function registryEventMatters(eventType, data) {
+  if (eventType !== 'entity_registry_updated') return true;
+  // create/remove always matter: a new entity can match a filter, a removed one must go.
+  if (data?.action !== 'update') return true;
+  const changed = data?.changes && typeof data.changes === 'object' ? Object.keys(data.changes) : null;
+  if (!changed || !changed.length) return true;       // shape we don't understand -> rebuild
+  if (changed.some((k) => !IGNORABLE_REGISTRY_FIELDS.has(k))) return true;
+  logThrottled('reg-noop', `entity_registry_updated ignored (only ${changed.join(', ')} changed)`);
+  return false;
+}
+
 const WATCH_EVENTS = ['lovelace_updated', 'entity_registry_updated', 'device_registry_updated', 'area_registry_updated', 'label_registry_updated'];
 
 // Allowlist for one dashboard = entities used across ALL its views. Two passes unioned:
@@ -586,12 +617,29 @@ function startController() {
       });
 
       // Debounce bursts of edits (the editor can fire several saves) into one rebuild.
+      //
+      // The debounce alone is not enough. It guards SCHEDULING, not execution: once the timer
+      // fires, buildAllow() is awaited, and any event arriving during that await schedules a
+      // fresh timer that fires while the first rebuild is still running. Measured on a live
+      // instance, three rebuilds completed inside one second. So a rebuild in flight sets a
+      // flag instead, and exactly one follow-up runs when it finishes.
+      let rebuilding = false;
+      let rebuildAgain = null;
+      const runRecompute = async (why) => {
+        if (rebuilding) { rebuildAgain = why; return; }
+        rebuilding = true;
+        try { applyAllow(await buildAllow(rpc, renderTemplate), `recomputed (${why})`); }
+        catch (e) { log('recompute failed:', e.message); }
+        finally {
+          rebuilding = false;
+          const next = rebuildAgain;
+          rebuildAgain = null;
+          if (next !== null) scheduleRecompute(next);
+        }
+      };
       const scheduleRecompute = (why) => {
         clearTimeout(recomputeTimer);
-        recomputeTimer = setTimeout(async () => {
-          try { applyAllow(await buildAllow(rpc, renderTemplate), `recomputed (${why})`); }
-          catch (e) { log('recompute failed:', e.message); }
-        }, 1500);
+        recomputeTimer = setTimeout(() => runRecompute(why), 1500);
       };
 
       ws.on('message', async (raw) => {
@@ -645,6 +693,7 @@ function startController() {
         }
         if (m.type === 'event' && WATCH_EVENTS.includes(m.event?.event_type)) {
           const ev = m.event.event_type;
+          if (!registryEventMatters(ev, m.event.data)) return;
           const why = ev === 'lovelace_updated' ? (m.event.data?.url_path ?? '(default)') : ev;
           log(`${ev}: ${ev === 'lovelace_updated' ? why : ''}`.trim());
           scheduleRecompute(why);

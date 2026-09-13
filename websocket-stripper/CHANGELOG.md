@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026.09.13.15 — 2026-09-13
+
+**Fixed: the add-on rebuilt its entire allowlist for registry changes that could not possibly
+affect it — 24 times in 14 minutes, every one a no-op.**
+
+`entity_registry_updated` fires for far more than an allowlist depends on, and the handler never
+looked at the payload. Measured on a live instance:
+
+```
+allowlist recomputed (entity_registry_updated): 418 entities (+0 -0)
+allowlist recomputed (entity_registry_updated): 418 entities (+0 -0)
+allowlist recomputed (entity_registry_updated): 418 entities (+0 -0)
+```
+
+Twenty-four of those in fourteen minutes, **every single one reporting `+0 -0`**. Each rebuild is
+a full `get_states` over 9,592 entities plus all four registries — roughly **20 MB pulled from
+Home Assistant per rebuild**, and the serialisation cost on HA's side to produce it, to change
+nothing at all.
+
+Registry events are now filtered: `create` and `remove` always rebuild, and an `update` rebuilds
+unless *every* changed field is one an allowlist cannot depend on (`options`, `capabilities`,
+`supported_features`, `unit_of_measurement`, `previous_unique_id`, `suggested_object_id`). An
+unrecognised payload shape still rebuilds — the asymmetry runs the usual way here, since a wasted
+rebuild costs bandwidth while a skipped one serves a dashboard entities it no longer has.
+
+**Second defect, in the same place: rebuilds could overlap.** The 1500 ms debounce guarded
+*scheduling*, not execution — once the timer fired, `buildAllow()` was awaited, and any event
+arriving during that await scheduled a fresh timer that fired while the first rebuild was still
+running. Three rebuilds completed inside one second on the live instance. A rebuild in flight now
+sets a flag, and exactly one follow-up runs when it finishes.
+
+Nothing about what the add-on serves changes. This is purely work it was doing for no reason,
+against a Home Assistant that had to produce a full instance dump each time.
+
+
 ## 2026.09.13.14 — 2026-09-13
 
 **Fixed: the traffic panel double-counted every batched frame, and sized it wrong.**
