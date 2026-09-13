@@ -170,6 +170,8 @@ const pct = (before, after) => (before > 0 ? Math.round(((before - after) / befo
 // stays a pure counter and the tests can drive it without booting the proxy.
 export function snapshot(extra = {}) {
   const now = Date.now();
+  // Supplied by the proxy so this module stays a pure counter with no discovery dependency.
+  const deviceFor = typeof extra.deviceFor === 'function' ? extra.deviceFor : null;
   const byCategory = {};
   let before = 0, after = 0;
   for (const [k, t] of trims) {
@@ -186,7 +188,7 @@ export function snapshot(extra = {}) {
       id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize, ua: c.ua,
       user: c.user,
       origin: c.origin, route: c.route, host: c.host, hop: c.hop, hops: c.hops,
-      device: c.device,
+      device: deviceFor ? (deviceFor(c.ip) ?? c.device) : c.device,
       msToEntityData: c.msToEntityData,
       initialPayloadBytes: c.initialPayloadBytes,
       initialEntityCount: c.initialEntityCount,
@@ -206,6 +208,7 @@ export function snapshot(extra = {}) {
     options: extra.options ?? {},
     allowlist: extra.allowlist ?? {},
     resources: extra.resources ?? {},
+    mdns: extra.mdns ?? null,
     // Request/response payloads, where a real before/after exists.
     savings: { before, after, saved: before - after, savedPct: pct(before, after), byCategory },
     // Throughput only. Deliberately NOT folded into `savings` — see the file header.

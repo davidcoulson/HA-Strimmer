@@ -47,7 +47,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.19';
+const VERSION = '2026.09.13.20';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2113,6 +2113,14 @@ const PANEL_HTML = (() => {
 function statsExtras() {
   return {
     version: VERSION,
+    // Resolved per snapshot rather than captured at connect: discovery is asynchronous, so a
+    // client that connects in the first second of uptime is seen before any mDNS answer arrives.
+    // A label frozen then would stay empty for the life of that connection.
+    deviceFor: (ip) => {
+      const rows = discovery.lookup(ip);
+      return rows ? { kind: rows[0].kind, name: rows[0].name, version: rows[0].version } : null;
+    },
+    mdns: MDNS_ENABLED ? discovery.snapshot() : { available: false, error: 'disabled', services: [], devices: [] },
     options: {
       strip_entities: STRIP,
       per_dashboard: PER_DASH,
