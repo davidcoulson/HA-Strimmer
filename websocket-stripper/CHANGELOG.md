@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.09.12.19 — 2026-09-12
+
+Diagnostic, corrected. The previous one instrumented the JSON-parse failure path, but these
+frames parse fine — they are valid JSON with no `type` field, which fell into a catch-all
+bucket labelled "(unparsed)" that was actively misleading. Now labelled "(no type field)" and
+dumped once with its keys and a sample.
+
 ## 2026.09.12.18 — 2026-09-12
 
 Diagnostic: log one sample of any frame that is neither binary nor parseable JSON, throttled,

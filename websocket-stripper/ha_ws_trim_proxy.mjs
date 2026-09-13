@@ -44,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.18';
+const VERSION = '2026.09.12.19';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1158,7 +1158,13 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       } else if (m && m.type) {
         stats.recordTraffic(m.type, outBytes);
       } else {
-        stats.recordTraffic('(unparsed)', outBytes);
+        // Valid JSON with no `type`. This is where the volume actually is, and the shape is
+        // unknown — so dump the keys and a sample rather than filing it under a label that
+        // says nothing. Throttled to one line.
+        stats.recordTraffic('(no type field)', outBytes);
+        logThrottled('no-type-frame', `frame with no type: len=${outBytes} `
+          + `isArray=${Array.isArray(m)} keys=${JSON.stringify(m && typeof m === 'object' ? Object.keys(m).slice(0, 12) : typeof m)} `
+          + `sample=${JSON.stringify(s.slice(0, 200))}`);
       }
       return safeSend(s);
     };
