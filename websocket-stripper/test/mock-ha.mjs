@@ -172,6 +172,8 @@ export async function startMockHa({ configs = DEFAULT_CONFIGS, states = STATES, 
 
   return {
     // Push a raw binary frame at the most recent client, mimicking HA's media frames.
+    // Push a raw text frame (used to emit a BATCHED array, which HA really does send).
+    sendRaw: (str) => { try { state.lastSocket?.send(str); } catch {} },
     sendBinaryToLastClient: (buf) => { try { state.lastSocket?.send(buf, { binary: true }); } catch {} },
     rpcCount: (type) => state.rpcCounts.get(type) || 0,
     port,

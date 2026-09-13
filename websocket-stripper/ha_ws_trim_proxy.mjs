@@ -44,7 +44,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.12.19';
+const VERSION = '2026.09.12.20';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1059,6 +1059,11 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
   const registryIds = new Map();    // request id -> which registry, to trim its result
   const resourceIds = new Set();    // lovelace/resources requests, to trim their result
   const serviceIds = new Set();     // get_services requests, to trim their result
+  // `subscribe_events` subscriptions that will deliver state_changed. These bypass the
+  // allowlist entirely: the egress filter below only ever covered subscribe_entities, so a
+  // card using the older subscribe_events path received the WHOLE firehose — the exact thing
+  // this add-on exists to prevent. Measured at ~700MB/h to a single wall panel.
+  const stateChangedSubs = new Set();
   // id -> the command the browser sent, so a `result` can be attributed to what asked for it.
   // Bounded: a client that never gets answers must not grow this without limit.
   const pendingTypes = new Map();
@@ -1095,6 +1100,9 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
     }
     if (STRIP && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') serviceIds.add(m.id);
+    // No event_type means "every event", which includes state_changed.
+    if (STRIP && m && m.type === 'subscribe_events'
+        && (!m.event_type || m.event_type === 'state_changed')) stateChangedSubs.add(m.id);
     if (STRIP && m && m.type === 'subscribe_entities' && !m.entity_ids) {
       // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
       // nothing", it's "no filter" (HA: `set(msg["entity_ids"]) or None`). Sending one would
@@ -1121,7 +1129,10 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
     // client is displaying this dashboard", so it is the only one used. The cost is that a
     // client-side navigation to a DIFFERENT dashboard keeps the old allowlist until the page
     // reloads; set `per_dashboard: false` if that matters more than the trimming does.
-    if (m && m.type === 'unsubscribe_events' && m.subscription != null) subEntityIds.delete(m.subscription);
+    if (m && m.type === 'unsubscribe_events' && m.subscription != null) {
+      subEntityIds.delete(m.subscription);
+      stateChangedSubs.delete(m.subscription);
+    }
     toHA(s);
   });
 
@@ -1168,6 +1179,16 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
       }
       return safeSend(s);
     };
+    // Home Assistant BATCHES messages into a JSON array. Every `m.type` check below sees
+    // undefined on those, so an array frame fell through every branch untouched and
+    // unlabelled — which is how an unfiltered firehose hid in plain sight. Handle the array
+    // by filtering its elements, then fall through with the rest of the logic intact.
+    const dropStateChanged = (x) => STRIP
+      && x && x.type === 'event'
+      && stateChangedSubs.has(x.id)
+      && typeof x.event?.data?.entity_id === 'string'
+      && !allow.has(x.event.data.entity_id);
+
     try { m = JSON.parse(s); } catch (e) {
       // Diagnostic: something is sending frames that are neither binary nor JSON, and
       // guessing what they are has now failed twice. Dump one, throttled, with enough
@@ -1178,6 +1199,22 @@ function bridge(browserWs, allow = ALLOW, dash = null, meta = {}) {
         + `text=${JSON.stringify(s.slice(0, 120))}`);
       return done();
     }
+    if (Array.isArray(m)) {
+      const before = m.length;
+      const kept = m.filter((x) => !dropStateChanged(x));
+      cat = null;
+      stats.recordTraffic(`event:state_changed (batched x${before})`, inBytes);
+      if (!kept.length) return;                       // nothing survived: send nothing
+      if (kept.length !== before) {
+        s = JSON.stringify(kept);
+        logThrottled('batch-trim', `batched state_changed trimmed ${before} -> ${kept.length} per frame${dash ? ` (${dash})` : ''}`);
+      }
+      stats.connTraffic(connId, inBytes, Buffer.byteLength(s), true);
+      stats.recordEvent(Buffer.byteLength(s));
+      return safeSend(s);
+    }
+    // A single (unbatched) state_changed from the same subscription gets the same treatment.
+    if (dropStateChanged(m)) return;
     if (STRIP && m && m.type === 'result' && getStatesIds.has(m.id) && Array.isArray(m.result)) {
       const before = m.result.length;
       m.result = m.result.filter((e) => allow.has(e.entity_id));

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.09.12.20 — 2026-09-12
+
+**Fixed: `subscribe_events("state_changed")` bypassed the allowlist completely.**
+
+The egress filter only ever covered `subscribe_entities`. A card using the older
+`subscribe_events` path received **every entity on the instance** — the entire firehose, through
+the add-on built to stop it. Measured at ~700MB/h to a single wall panel trimmed to 104
+entities, in the verbose legacy format that carries full `old_state` *and* `new_state` with
+every attribute.
+
+It hid because **Home Assistant batches messages into a JSON array**. Every `m.type` check sees
+`undefined` on an array, so batched frames fell through every branch untouched — and landed in
+a stats bucket labelled "(unparsed)", which asserted something untrue and sent two
+investigations in the wrong direction.
+
+Array frames are now filtered element by element, single frames from the same subscription get
+the same treatment, and a frame whose entire contents were disallowed is dropped rather than
+forwarded empty.
+
 ## 2026.09.12.19 — 2026-09-12
 
 Diagnostic, corrected. The previous one instrumented the JSON-parse failure path, but these

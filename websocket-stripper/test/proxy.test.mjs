@@ -165,6 +165,50 @@ describe('proxy integration (strip on)', () => {
   });
 });
 
+describe('subscribe_events state_changed is filtered too', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  // The egress filter only ever covered subscribe_entities. A card using the older
+  // subscribe_events("state_changed") path therefore received EVERY entity on the instance —
+  // the whole firehose, straight through the thing built to stop it. Worse, Home Assistant
+  // batches messages into a JSON array, and every `m.type` check saw undefined on those, so
+  // the frames fell through untouched AND unlabelled. Measured at ~700MB/h to one panel.
+  it('drops disallowed entities from batched state_changed frames', async () => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    const seen = [];
+    c.ws.on('message', (raw) => {
+      let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+      for (const x of Array.isArray(m) ? m : [m]) {
+        if (x?.type === 'event' && x.event?.event_type === 'state_changed') {
+          seen.push(x.event.data.entity_id);
+        }
+      }
+    });
+    c.send({ id: 99, type: 'subscribe_events', event_type: 'state_changed' });
+    await new Promise((r) => setTimeout(r, 200));
+
+    // One allowed entity, one the dashboard has never heard of, in a single batched frame.
+    mock.sendRaw?.(JSON.stringify([
+      { id: 99, type: 'event', event: { event_type: 'state_changed', data: { entity_id: 'light.living_room', new_state: {} } } },
+      { id: 99, type: 'event', event: { event_type: 'state_changed', data: { entity_id: 'light.decoy', new_state: {} } } },
+    ]));
+    await new Promise((r) => setTimeout(r, 300));
+    c.close();
+
+    if (!mock.sendRaw) return;
+    assert.ok(seen.includes('light.living_room'), 'an allowed entity still arrives');
+    assert.ok(!seen.includes('light.decoy'), 'a disallowed entity must not reach the browser');
+  });
+});
+
 describe('live allowlist rebuild on lovelace_updated', () => {
   let mock, proxy, port;
   before(async () => {
