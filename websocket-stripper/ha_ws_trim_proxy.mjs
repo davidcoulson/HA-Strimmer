@@ -35,6 +35,7 @@ import * as stats from './stats.mjs';
 import * as history from './history.mjs';
 import { classify, normalizeIp } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
+import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 
 // ---- config (add-on options.json or env) ----
 function loadOptions() {
@@ -47,7 +48,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.20';
+const VERSION = '2026.09.13.24';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -226,6 +227,20 @@ const MDNS_SERVICES = (() => {
 // `log` is declared further down, so bind it lazily rather than by value — this module runs
 // its config block before the logger exists.
 const discovery = createDiscovery({ services: MDNS_SERVICES, log: (...a) => log(...a) });
+
+// Long-term metrics, published over MQTT discovery so the recorder builds statistics for them.
+// The stats panel answers "what is happening now"; these answer "what has been happening for six
+// months", and only real registered entities get statistics.
+const MQTT_SENSORS = String(OPT.mqtt_sensors ?? process.env.MQTT_SENSORS ?? '1') !== '0'
+  && (OPT.mqtt_sensors ?? true) !== false;
+// Host whose SERVED certificate to watch. Measured by connecting, not by reading a file: a
+// renewal that succeeded into the wrong directory looks perfect on disk and still breaks clients.
+const CERT_HOST = String(OPT.cert_monitor_host ?? process.env.CERT_MONITOR_HOST ?? '').trim();
+const mqttSensors = createPublisher({ version: VERSION, log: (...a) => log(...a) });
+// Counted for the rebuilds sensor: a steadily climbing number is the rebuild storm this add-on
+// has already had once, and it is invisible in any single snapshot.
+let REBUILD_COUNT = 0;
+let CERT_DAYS = null;
 
 const matchesAny = (rules, id) => rules.some((r) => (r.re ? r.re.test(id) : r.literal === id));
 
@@ -2187,6 +2202,23 @@ server.listen(PORT, () => {
   // Started after listen, never awaited: discovery is beside the request path, so a network
   // that filters multicast costs us a label and nothing else.
   if (MDNS_ENABLED) { discovery.start(); log(`  mDNS discovery on for ${MDNS_SERVICES.length} service type(s)`); }
+  if (MQTT_SENSORS) {
+    mqttSensors.start({
+      token: ALLOW_TOKEN,
+      snapshot: () => stats.snapshot(statsExtras()),
+      extras: () => ({ rebuilds: REBUILD_COUNT, certDaysLeft: CERT_DAYS }),
+    }).catch(() => {});
+  }
+  if (CERT_HOST) {
+    // Hourly is plenty for a number measured in days, and it keeps a TLS handshake off the
+    // per-minute publish path.
+    const checkCert = () => certDaysLeft(CERT_HOST).then((d) => {
+      if (d !== CERT_DAYS) log(`  certificate for ${CERT_HOST}: ${d === null ? 'unreadable' : `${d} days left`}`);
+      CERT_DAYS = d;
+    }).catch(() => {});
+    checkCert();
+    setInterval(checkCert, 3600000).unref?.();
+  }
 });
 // A port we can't bind is a real config error (another add-on on :9123 — see issue #6) and
 // worth exiting for; anything else the server surfaces is not worth dying over.

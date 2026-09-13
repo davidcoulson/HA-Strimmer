@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.13.20"
+version: "2026.09.13.24"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -28,6 +28,10 @@ panel_admin: false
 # SUPERVISOR_TOKEN + core API access (used only to precompute the dashboard allowlists).
 homeassistant_api: true
 hassio_api: true
+# Supervisor hands over broker credentials only to an add-on that declares it wants them.
+# `want`, not `need`: with no broker installed the add-on must still start and proxy.
+services:
+  - mqtt:want
 # No `ports:` mapping: with host_network the add-on binds the host port directly, so a
 # Docker port map is inert. The single source of truth for the listen port is the `port`
 # option below (default 9123). Reach the add-on at http://<host>:<port>.
@@ -77,6 +81,8 @@ options:
   dashboard_overrides: []
   client_overrides: []
   exclude_device_categories: []
+  mqtt_sensors: true
+  cert_monitor_host: ""
   mdns_discovery: true
   mdns_services: []
   # Per-USER always/never. The one thing per-dashboard rules cannot express: two people opening
@@ -133,6 +139,8 @@ schema:
         - str?
       never_forward:
         - str?
+  mqtt_sensors: "bool?"
+  cert_monitor_host: "str?"
   mdns_discovery: "bool?"
   mdns_services:
     - str?

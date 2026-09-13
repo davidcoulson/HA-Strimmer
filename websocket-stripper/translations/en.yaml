@@ -98,6 +98,26 @@ configuration:
       Note that mDNS/.local names usually do NOT resolve from inside a container; use a real DNS
       record. `devices` names whole DEVICES by registry name or id and pulls in every entity that
       device owns, which keeps working when an integration adds entities in a later release.
+  mqtt_sensors:
+    name: Publish long-term metrics over MQTT
+    description: >-
+      Publishes about fifteen high-level metrics as real Home Assistant sensors, so the recorder
+      builds long-term statistics for them and you can graph months rather than minutes. Broker
+      credentials come from Supervisor automatically when the Mosquitto add-on is installed —
+      nothing to configure. The stats panel answers "what is happening right now"; these answer
+      "what has been happening since June", which is a different question: a slowly climbing
+      entity count means a dashboard picked up a broad filter, and a rebuild counter that never
+      stops rising is the kind of fault that is invisible in any single snapshot. Uses MQTT
+      discovery rather than the REST API deliberately — states pushed over REST are not
+      registered entities, vanish on restart, and the recorder will not summarise them.
+  cert_monitor_host:
+    name: Certificate to watch
+    description: >-
+      Optional. A hostname whose TLS certificate expiry to publish as a sensor, e.g.
+      `ha.example.org`. The certificate is read by actually connecting to the host, not by reading
+      a file from disk — whatever issues and renews it, the question worth answering is what a
+      browser is handed today. A renewal that succeeded into the wrong directory looks perfect on
+      disk and still takes your dashboards down. Leave empty to skip the check.
   mdns_discovery:
     name: Identify devices via mDNS
     description: >-

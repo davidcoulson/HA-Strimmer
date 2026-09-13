@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026.09.13.21 — 2026-09-13
+
+**New: fifteen long-term metrics, published as real Home Assistant sensors.**
+
+The stats panel answers *what is happening right now*. This answers *what has been happening for
+six months*, which is a different question and needs a different mechanism — Home Assistant long-
+term statistics, which only apply to real registered entities.
+
+Hence MQTT discovery rather than `POST /api/states`. States pushed over the REST API are not
+registered entities: they vanish on restart, never get a `unique_id`, and the recorder will not
+summarise them. Discovery entities are real, survive restarts, and can be renamed and assigned to
+an area like anything else.
+
+Broker credentials come from **Supervisor automatically** when the Mosquitto add-on is installed.
+Nothing to paste, nothing to keep in sync.
+
+The set is deliberately small — fifteen metrics that reward a trend line beat fifty nobody opens.
+Each was chosen because a *change* in it means something:
+
+- a jump in **entities forwarded** means a dashboard picked up a broad `auto-entities` filter
+- **allowlist rebuilds** climbing steadily is the rebuild storm this add-on has already had once,
+  and it is invisible in any single snapshot
+- **trim ratio** falling means the instance grew faster than the dashboards did
+- **certificate days left** is the one here that will page you at 3am if nobody watches it
+
+Counters are `total_increasing` so a restart cannot corrupt the long-term sum; gauges are
+`measurement`. Every sensor declares a `state_class`, because one without it is stored and never
+summarised — which would waste the point of publishing it.
+
+**Certificate expiry is measured by connecting, not by reading a file.** Whatever issues and
+renews it, the question worth answering is what a browser is handed today: a renewal that
+succeeded into the wrong directory looks perfect on disk and still takes the dashboards down. Set
+`cert_monitor_host` to the hostname to watch; leave it empty to skip.
+
+**Three things were wrong on the first deploy and are worth recording**, because each would have
+produced bad data rather than no data:
+
+- The first publish fired synchronously inside `start()`, before the socket had connected, so it
+  was silently skipped and every sensor sat at `unknown` for a minute. It now publishes from the
+  `connect` handler.
+- The state was not retained, so a value published before Home Assistant had processed discovery
+  was simply lost. Retained means HA gets the last known value the instant it subscribes.
+- Publishing on connect then exposed the real problem: at that moment the allowlist does not exist
+  yet, so every metric is zero — and a *retained zero* is both what HA displays and a genuine data
+  point in long-term statistics. Every add-on restart would have put a spurious dip in every
+  graph. Publishing is now gated on `allowlist.ready`, which costs at most one interval.
+
+Best-effort throughout. No broker, bad credentials, or a broker that goes away must never affect
+proxying — publishing runs on a timer beside the request path, availability uses an MQTT LWT so
+the entities go *unavailable* rather than freezing on a stale value, and every failure is
+swallowed after one log line.
+
+
 ## 2026.09.13.19 — 2026-09-13
 
 **New: the add-on asks the network what each client actually is.**

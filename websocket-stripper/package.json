@@ -2,7 +2,7 @@
   "name": "ha-websocket-stripper",
   "private": true,
   "type": "module",
-  "version": "2026.09.13.20",
+  "version": "2026.09.13.24",
   "description": "Reverse proxy that serves the real HA frontend but trims the entity websocket to a dashboard allowlist.",
   "main": "ha_ws_trim_proxy.mjs",
   "scripts": {
@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "http-proxy": "^1.18.1",
+    "mqtt": "^5.15.2",
     "multicast-dns": "^7.2.5",
     "ws": "^8.18.0"
   }
