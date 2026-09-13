@@ -5,9 +5,11 @@
 ### Your Home Assistant dashboards are slow because every page loads *your entire house*.
 
 Open a dashboard — even one showing four lights — and Home Assistant sends the browser
-**every entity you own**, then streams every change to all of them, forever. On a big
-install that is megabytes before a single card appears. On a wall panel or an old tablet,
-it is the difference between a dashboard and a loading screen.
+**every entity you own**, plus a full catalogue of every entity, device and area in the
+house, plus every custom card you have ever installed. Then it streams every change to all
+of it, forever. On a big install that is tens of megabytes before a single card appears. On
+a wall panel or an old tablet, it is the difference between a dashboard and a loading
+screen.
 
 This add-on sits in front of Home Assistant and sends each dashboard **only what it
 actually shows**. Same Home Assistant. Same dashboards. Same cards. Just not the other
@@ -24,11 +26,17 @@ with **9,751 entities**:
 |---|---|---|
 | **Dashboard appears in** | 60 seconds | **16 seconds** |
 | Entities sent to the page | 9,751 | **104** |
-| Data per page load | 2.5 MB | **112 KB** |
+| 📇 Name/device/area catalogue | 12.7 MB | **~200 KB** |
+| 🎨 Custom card code | 21 MB | **3 MB** |
+| 🔌 Entity states | 2.5 MB | **112 KB** |
+| ⚙️ Service list | 196 KB | **~43 KB** |
 | Data per hour, just sitting there | ~17 MB | **~0.5 MB** |
-| Custom card code sent | 21 MB | **3 MB** |
 
 **≈ 4× faster**, and the panel stops thrashing.
+
+The surprise for most people is the catalogue row: on a large install the *catalogue* — the
+names and areas, not the values — is the biggest thing a dashboard downloads. It is sent in
+full, for the whole house, on every single page load.
 
 ---
 
@@ -54,17 +62,24 @@ with **9,751 entities**:
 flowchart LR
     B["📱 Your panel<br/>or phone"] --> S["🚿 Stripper"]
     S --> H["🏠 Home<br/>Assistant"]
-    H -. "everything you own<br/>9,751 entities" .-> S
-    S -. "just this dashboard<br/>104 entities" .-> B
+    H -. "the whole house<br/>9,751 entities + 12.7MB catalogue<br/>+ 21MB of cards" .-> S
+    S -. "just this dashboard<br/>104 entities, ~200KB, 3MB" .-> B
 ```
 
 Home Assistant has no way to tell one dashboard *"only subscribe to what I show"*. This
 adds exactly that, as a transparent proxy — so you point your kiosk at it instead of at
 Home Assistant, and everything else stays the same.
 
-It trims four things: the **entity stream**, the **entity/device/area registries** (on a
-big install, quietly the biggest download of the lot), the **custom-card list**, and it
-**turns compression back on**.
+It trims four separate payloads, and they are genuinely different things:
+
+- 🔌 **Entity states** — what your things are doing, and the endless stream of changes
+- 📇 **The catalogue** — the entity/device/area registries: what everything is *called* and
+  where it lives. On a big install, quietly the largest download of the lot
+- 🎨 **Custom cards** — so a panel stops parsing every card you ever installed
+- ⚙️ **The service list** — every action every integration can perform *(opt-in)*
+
+It also **turns compression back on**, which the add-on had previously been removing. Each
+one is explained with examples further down.
 
 ---
 
