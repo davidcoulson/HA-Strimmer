@@ -90,6 +90,9 @@ export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, ho
     // here would bake in an assumption nobody can see or correct.
     ua: typeof ua === 'string' ? ua.slice(0, 200) : null,
     user: null,
+    // How long this connection took to become useful, and how much of that was the link.
+    // Null until the first full entity payload has actually gone out; see connTiming.
+    msToEntityData: null, initialPayloadBytes: null, initialDrainMs: null,
     since: Date.now(), fromHA: 0, toBrowser: 0, eventBytes: 0, msgs: 0,
   });
   return id;
@@ -106,6 +109,29 @@ export function connIdentity(id, { allowSize, user } = {}) {
   if (!c) return;
   if (Number.isFinite(allowSize)) c.allowSize = allowSize;
   if (user) c.user = String(user).slice(0, 80);
+}
+
+// How long this connection took to deliver the payload a dashboard cannot render without.
+//
+// This is the add-on's own answer to "is it actually snappier", measured for EVERY client
+// including native apps that cannot be instrumented from outside. Three numbers:
+//
+//   msToEntityData      websocket upgrade -> the first full entity payload written to the
+//                       socket. Most of what a user experiences as the dashboard "coming up".
+//   initialPayloadBytes how big that payload was, which is the part this add-on shrinks.
+//   initialDrainMs      how long that write took to leave the machine. On a fast LAN this is
+//                       ~0; on a phone over cellular it is the link, and it is the difference
+//                       between the two that the trimming buys.
+//
+// Recorded once per connection — the FIRST payload only. A later re-subscribe is a different
+// event, and averaging them together would quietly hide the cold-start number this exists to
+// report.
+export function connTiming(id, { msToEntityData, initialPayloadBytes, initialDrainMs } = {}) {
+  const c = conns.get(id);
+  if (!c || c.msToEntityData !== null) return;
+  if (Number.isFinite(msToEntityData)) c.msToEntityData = msToEntityData;
+  if (Number.isFinite(initialPayloadBytes)) c.initialPayloadBytes = initialPayloadBytes;
+  if (Number.isFinite(initialDrainMs)) c.initialDrainMs = initialDrainMs;
 }
 
 export function connTraffic(id, inBytes, outBytes, isEvent) {
@@ -140,6 +166,9 @@ export function snapshot(extra = {}) {
       id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize, ua: c.ua,
       user: c.user,
       origin: c.origin, route: c.route, host: c.host, hop: c.hop, hops: c.hops,
+      msToEntityData: c.msToEntityData,
+      initialPayloadBytes: c.initialPayloadBytes,
+      initialDrainMs: c.initialDrainMs,
       connectedSec: Math.round((now - c.since) / 1000), messages: c.msgs,
       fromHA: c.fromHA, toBrowser: c.toBrowser,
       eventBytes: c.eventBytes,

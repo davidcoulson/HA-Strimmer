@@ -196,4 +196,59 @@ describe('stats API over HTTP', () => {
     const res = await httpGet(`http://127.0.0.1:${statsPort}/lovelace`);
     assert.equal(res.status, 404);
   });
+
+  // The point of this measurement is to answer "is it actually faster" with something other
+  // than an opinion — and to do it for clients like the iOS companion app, which opens a
+  // native socket and cannot be instrumented from outside at all.
+  it('times the first entity payload from connect to on-the-wire', async () => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    c.send({ type: 'subscribe_entities', id: 90 });
+    await new Promise((r) => setTimeout(r, 200));
+
+    // `a` is HA's "added" block: the full state of every subscribed entity, sent once when the
+    // subscription opens. This is the payload a dashboard cannot render without.
+    mock.pushEntityEvent({ a: { 'light.living_room': { s: 'on' }, 'sensor.temperature': { s: '21' } } });
+    await new Promise((r) => setTimeout(r, 400));
+
+    const s = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body);
+    const me = s.clients.list.find((x) => x.msToEntityData != null);
+    assert.ok(me, `no connection reported a timing; clients: ${JSON.stringify(s.clients.list)}`);
+    assert.ok(me.msToEntityData >= 0, 'time from connect to payload delivered');
+    assert.ok(me.initialPayloadBytes > 0, 'the payload size is reported');
+    assert.ok(me.initialDrainMs >= 0, 'and how long it took to leave the machine');
+    // Loopback, so the write drains immediately. The number only becomes interesting over a
+    // real link — which is the entire reason it is measured separately from the total.
+    assert.ok(me.initialDrainMs <= me.msToEntityData,
+      'drain is part of the total, so it cannot exceed it');
+    c.close();
+  });
+
+  it('reports the cold-start payload only, not every later diff', async () => {
+    // A re-subscribe or a later `a` block is a different event. Averaging them into the same
+    // field would quietly destroy the cold-start number this exists to report — which is the
+    // one a user actually experiences as "the dashboard came up".
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    c.send({ type: 'subscribe_entities', id: 91 });
+    await new Promise((r) => setTimeout(r, 200));
+    mock.pushEntityEvent({ a: { 'light.living_room': { s: 'on' } } });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const first = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body)
+      .clients.list.find((x) => x.msToEntityData != null);
+    assert.ok(first, 'a first payload was timed');
+
+    // A much larger second payload on the same connection must not overwrite it.
+    const big = {};
+    for (let i = 0; i < 200; i++) big[`light.filler_${i}`] = { s: 'on', a: { friendly_name: 'x'.repeat(80) } };
+    mock.pushEntityEvent({ a: big });
+    await new Promise((r) => setTimeout(r, 400));
+
+    const after = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body)
+      .clients.list.find((x) => x.id === first.id);
+    assert.equal(after.initialPayloadBytes, first.initialPayloadBytes,
+      'the cold-start payload size must be immutable once recorded');
+    c.close();
+  });
 });

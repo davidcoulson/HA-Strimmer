@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026.09.13.07 — 2026-09-13
+
+**Every connection now reports how long it took to become useful.** Three numbers per client,
+in `stats.json` and on the panel:
+
+- `initialPayloadBytes` — the first full entity dump, i.e. the payload a dashboard cannot
+  render without, and the part this add-on shrinks.
+- `msToEntityData` — websocket upgrade to that payload written out. Most of what a person
+  experiences as the dashboard coming up.
+- `initialDrainMs` — how much of that was the link itself. Near zero on a LAN; the dominant
+  term on a phone over cellular.
+
+This exists so "is it actually faster" has an answer that is not an opinion, and so it can be
+answered for clients that cannot be instrumented from outside at all — the iOS and Android
+companion apps open a native websocket and never load a page, so no browser tooling can see
+them. The add-on already sits in the middle of that socket, so it measures it directly.
+
+Recorded once per connection, on the cold-start payload only: a later re-subscribe is a
+different event, and averaging them together would destroy the number this exists to report.
+
+First measurement from a live instance, same dashboard and the same ~44KB payload over two
+different paths: **28ms on the LAN, 134ms arriving over the internet through Cloudflare.** The
+payload is identical, so the difference is entirely the link — which is the whole argument for
+trimming it before it goes out.
+
+One honest limitation, also stated on the panel: "on the wire" means handed to the network
+stack, not acknowledged by the device. It tracks link speed and backpressure well, and it is
+not a round-trip measurement.
+
 ## 2026.09.13.06 — 2026-09-13
 
 **Fixed: a per-user rule was applied to an allowlist that was never sent.**

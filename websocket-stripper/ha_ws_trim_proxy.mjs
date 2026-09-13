@@ -46,7 +46,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.06';
+const VERSION = '2026.09.13.07';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1252,6 +1252,10 @@ server.on('upgrade', (req, socket, head) => {
 // couldn't be attributed. Captured per bridge rather than read from the global, so two
 // kiosks on different dashboards get genuinely different subscriptions.
 function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
+  // When this connection was accepted, i.e. the moment the client started waiting. Everything
+  // the timing report says is relative to this.
+  const tOpen = Date.now();
+  let timedInitial = false;
   const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0 });
   const connId = stats.connOpen({
     ip: meta.ip, dash, via: meta.via, allowSize: baseAllow.size, ua: meta.ua,
@@ -1416,6 +1420,19 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       stats.connTraffic(connId, n, n, false);
       return safeSend(raw);
     }
+    // Does this frame carry the connection's initial entity state?
+    //
+    // `a` is HA's "added" block — the full state of every subscribed entity, sent once when a
+    // subscribe_entities subscription opens. `c` ("changed") is every diff after it. Checked
+    // through batched arrays too: HA packs messages together, and the initial payload is
+    // routinely bundled with other replies, so testing only the top-level object would miss it
+    // on exactly the connections that are busiest at startup.
+    const isInitialState = (x) => Boolean(
+      x && x.type === 'event' && subEntityIds.has(x.id)
+      && x.event && x.event.a && Object.keys(x.event.a).length,
+    );
+    const carriesInitialState = (msg) => (Array.isArray(msg) ? msg.some(isInitialState) : isInitialState(msg));
+
     let s = raw.toString(); let m;
     // Sizes are measured on the decoded JSON, i.e. what the browser has to parse. The wire is
     // smaller when permessage-deflate is on, and deliberately not what the panel reports.
@@ -1443,6 +1460,26 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         // unknown — so dump the keys and a sample rather than filing it under a label that
         // says nothing. Throttled to one line.
         stats.recordTraffic('(no type field)', outBytes);
+      }
+      // The first full entity payload is the one a dashboard cannot render without, so it is
+      // the honest "time to useful". HA sends the initial state as an `a` (added) block on the
+      // subscribe_entities subscription; every later one is `c` (changed) and is not this.
+      // Measured once per connection — see stats.connTiming.
+      if (!timedInitial && carriesInitialState(m)) {
+        timedInitial = true;
+        const queuedAt = Date.now();
+        const bytes = Buffer.byteLength(s);
+        return safeSend(s, () => {
+          const sentAt = Date.now();
+          stats.connTiming(connId, {
+            msToEntityData: sentAt - tOpen,
+            initialPayloadBytes: bytes,
+            initialDrainMs: sentAt - queuedAt,
+          });
+          log(`entity payload delivered to ${meta.ip ?? '?'}${dash ? ` (${dash})` : ''}: `
+            + `${(bytes / 1024).toFixed(0)}KB in ${sentAt - tOpen}ms from connect `
+            + `(${sentAt - queuedAt}ms on the wire)`);
+        });
       }
       return safeSend(s);
     };
@@ -1572,7 +1609,11 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     return done();
   });
 
-  function safeSend(s) { try { if (browserWs.readyState === 1) browserWs.send(s); } catch {} }
+  // The callback is what makes drain time measurable: ws invokes it once the frame has been
+  // handed to the socket, so the gap between calling send() and the callback firing IS the
+  // time the payload spent going out. On a LAN that is ~0; on a phone over cellular it is the
+  // link, which is exactly the number worth reporting.
+  function safeSend(s, cb) { try { if (browserWs.readyState === 1) browserWs.send(s, cb); } catch {} }
   const close = () => { openBridges.delete(close); stats.connClose(connId); try { browserWs.close(); } catch {} try { haWs.close(); } catch {} };
   openBridges.add(close);            // so a grown allowlist can recycle this connection (#7)
   browserWs.on('close', close); browserWs.on('error', close);
