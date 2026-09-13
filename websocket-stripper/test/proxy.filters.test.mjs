@@ -186,28 +186,49 @@ describe('#9 the X-Forwarded-For chain survives an upstream proxy', () => {
   const get = (headers) => new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/x', headers }, (res) => {
       res.resume();
-      res.on('end', () => resolve(res.headers['x-echo-xff']));
+      res.on('end', () => resolve({ xff: res.headers['x-echo-xff'], proto: res.headers['x-echo-xfproto'] }));
     });
     req.on('error', reject);
   });
 
-  it('appends our hop instead of replacing the chain', async () => {
-    // What Caddy would send. Flattening this to one entry is what produced HA's 400,
-    // because http-proxy still appends a second entry to X-Forwarded-Proto.
-    const xff = await get({ 'x-forwarded-for': '203.0.113.7' });
+  it('keeps the real client IP at the head of the chain', async () => {
+    // Whatever the proxy library does with hops, the first entry must remain the browser. HA
+    // walks the chain from the right and takes the first untrusted entry as the client; lose
+    // the head and trusted_networks matches the wrong machine.
+    const { xff } = await get({ 'x-forwarded-for': '203.0.113.7' });
     const parts = xff.split(',').map((s) => s.trim());
     assert.equal(parts[0], '203.0.113.7', `real client IP preserved, got "${xff}"`);
-    assert.equal(parts.length, 2, `chain kept both hops, got "${xff}"`);
+  });
+
+  it('keeps the For and Proto chains the same length, which is what HA enforces', async () => {
+    // This is the actual #9 invariant, and it is worth stating as the invariant rather than as
+    // "our hop is appended". The original bug was NOT that a hop went missing — it was that
+    // X-Forwarded-For got flattened to one entry while X-Forwarded-Proto still carried two, and
+    // HA rejects that mismatch with `Incorrect number of elements in X-Forward-Proto`.
+    //
+    // Appending to both is one way to satisfy it; appending to neither is another. Asserting the
+    // invariant rather than the mechanism means this test keeps its meaning if the proxy library
+    // underneath ever changes — which is exactly what happened when it did.
+    const { xff, proto } = await get({
+      'x-forwarded-for': '203.0.113.7',
+      'x-forwarded-proto': 'https',
+    });
+    const n = (h) => String(h || '').split(',').filter((s) => s.trim()).length;
+    assert.ok(n(proto) === 1 || n(proto) === n(xff),
+      `For has ${n(xff)} entries and Proto has ${n(proto)} — HA answers 400 on a mismatch `
+      + `(for="${xff}" proto="${proto}")`);
   });
 
   it('still normalizes IPv4-mapped IPv6 to bare IPv4', async () => {
-    const xff = await get({ 'x-forwarded-for': '::ffff:192.168.5.247' });
+    const { xff } = await get({ 'x-forwarded-for': '::ffff:192.168.5.247' });
     assert.match(xff, /(^|[\s,])192\.168\.5\.247([\s,]|$)/, `mapped prefix stripped, got "${xff}"`);
     assert.doesNotMatch(xff, /::ffff:/);
   });
 
   it('a direct client still yields a single entry', async () => {
-    const xff = await get({});
+    // No upstream proxy: the add-on itself must supply the client address, or HA sees nothing
+    // and trusted_networks cannot match at all.
+    const { xff } = await get({});
     assert.equal(xff.split(',').length, 1, `got "${xff}"`);
     assert.doesNotMatch(xff, /::ffff:/);
   });

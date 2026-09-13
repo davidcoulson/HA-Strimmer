@@ -28,7 +28,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import httpProxy from 'http-proxy';
+import { createProxyServer } from 'httpxy';
 import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
@@ -777,7 +777,7 @@ function startController() {
 // autoRewrite is deliberately OFF: it rewrites a redirect's HOST but never its SCHEME, which
 // is an infinite redirect loop behind TLS termination (see rewriteLocation below). We do the
 // whole job in a proxyRes handler instead — same condition, plus scheme and query params.
-const proxy = httpProxy.createProxyServer({ target: HA_BASE, changeOrigin: true, ws: false, xfwd: true });
+const proxy = createProxyServer({ target: HA_BASE, changeOrigin: true, ws: false, xfwd: true });
 
 // The origin as the BROWSER sees it, which is not necessarily the one we were reached on.
 // Note xfwd APPENDS our own hop to x-forwarded-proto (so Caddy's "https" becomes
@@ -1612,7 +1612,9 @@ const server = http.createServer((req, res) => {
   // and a service log do not belong in the same stream.
   httpLog.observe(req, res, clientIp);
   noteClientDash(req);
-  proxy.web(req, res);
+  // httpxy returns a promise. The 'error' listener below already handles failures and resolves
+  // them, but an unhandled rejection would still be a process-level crash, so swallow here too.
+  proxy.web(req, res).catch(() => {});
 });
 
 // ---- websocket upgrades ----
@@ -1700,7 +1702,10 @@ server.on('upgrade', (req, socket, head) => {
     logThrottled(`passthrough:${req.url.split('?')[0]}`,
       `ws upgrade passthrough -> HA: ${req.url} (from ${pt.ip ?? '?'}${pt.origin ? `, ${pt.origin}` : ''}`
       + `${pt.route ? ` via ${pt.route}` : ''})`);
-    proxy.ws(req, socket, head);
+    // NOTE the argument order: httpxy is `ws(req, socket, options, head)` where node-http-proxy
+    // was `ws(req, socket, head)`. Passing `head` third would spread a Buffer into the request
+    // options and break the upgrade — silently, since the socket simply never completes.
+    proxy.ws(req, socket, undefined, head).catch(() => {});
   }
 });
 

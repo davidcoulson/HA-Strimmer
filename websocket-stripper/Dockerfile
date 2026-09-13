@@ -5,7 +5,18 @@
 # Home Assistant Container or Core, who cannot install add-ons at all. The proxy detects which
 # it is by the presence of SUPERVISOR_TOKEN and reads its config from /data/options.json or
 # from environment variables accordingly.
-FROM node:20-alpine
+# ARG BUILD_FROM is the Home Assistant add-on convention: Supervisor can inject a per-arch base
+# from build.yaml. The DEFAULT is what matters here though, because the same Dockerfile also
+# builds the plain container published to GHCR, where nothing injects anything.
+#
+# node:24-alpine, for two reasons. Node 20 reached end-of-life on 2026-03-24 — no security
+# patches — and httpxy requires Node >= 22. Alpine because that is what the whole add-on
+# ecosystem uses: both the official Home Assistant bases and the community hassio-addons bases
+# are Alpine, and Node-RED (the most-installed Node add-on) runs Alpine with Node 24. Nothing
+# here compiles, so a Debian base would buy nothing and cost image size — every dependency is
+# pure JavaScript with no native bindings.
+ARG BUILD_FROM=node:24-alpine
+FROM ${BUILD_FROM}
 
 # Points the GHCR package at this repo and its README.
 LABEL org.opencontainers.image.source="https://github.com/davidcoulson/HA-Websocket-Stripper" \

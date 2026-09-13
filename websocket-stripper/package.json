@@ -10,7 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "http-proxy": "^1.18.1",
+    "httpxy": "^0.5.5",
     "mqtt": "^5.15.2",
     "multicast-dns": "^7.2.5",
     "ws": "^8.18.0"
