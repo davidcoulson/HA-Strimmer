@@ -16,6 +16,13 @@ The gate now fires only when some rule could actually match this connection's da
 test where the lookup is artificially slowed to 400 ms, an unmatchable connection went from
 **408 ms to 17 ms**.
 
+**The real-world effect is larger than that suggests.** Measured end-to-end in a browser on an
+unthrottled LAN — full page load, timed to the first rendered card, median of five runs — the same
+dashboard went from **2,043 ms to 429 ms**, a 4.8× improvement. It also flipped the verdict on
+that link: the add-on had measured 2.2× *slower* than going straight to Home Assistant, and now
+measures 1.5× faster. A per-user rule scoped to a dashboard the client never opens was costing
+roughly a second and a half on every connection.
+
 An **unattributed** connection still gates, deliberately. Without knowing which dashboard it is
 showing we cannot rule anything out, and the asymmetry runs the usual way: a needless gate costs
 milliseconds, a skipped one serves the wrong allowlist.

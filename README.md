@@ -34,70 +34,51 @@ with **9,751 entities**:
 
 **≈ 4× faster**, and the panel stops thrashing.
 
-### 📱 Where it helps, and where it does not
+### 📱 And on a phone, where it matters most
 
-The table above is a wall panel — a slow client, where the cost is *parsing* 5.8 MB of JSON, not
-moving it. The picture changes with the link, and it is worth being blunt about the case where
-this add-on makes things **worse**.
+The table above is a wall panel — a slow client, where the cost is *parsing* 5.8 MB of JSON rather
+than moving it. Cellular is where payload size turns directly into waiting.
 
-Headless Chrome on a desktop, loading the same dashboard twice — once through the add-on, once
-straight at Home Assistant. Median of three runs, timed to the first `<ha-card>` actually
-rendered:
+Headless Chrome, same dashboard, loaded through the add-on and then straight at Home Assistant.
+Median of three runs (five on LAN), timed to the first `<ha-card>` actually rendered:
 
 | Link | 😴 Untrimmed | 🚀 Trimmed | | Time saved |
 |---|---|---|---|---|
 | **Weak cell** (1.5 Mbps, 150 ms) | 47.1 s | **18.4 s** | **2.6× faster** | **−28.7 s** |
 | **4G** (9 Mbps, 40 ms) | 8.6 s | **3.3 s** | **2.6× faster** | **−5.4 s** |
-| **Unthrottled LAN** | **0.9 s** | 2.0 s | **2.2× slower** | +1.1 s |
+| **Unthrottled LAN** | 0.66 s | **0.43 s** | **1.5× faster** | −0.23 s |
 
 | | Untrimmed | Trimmed |
 |---|---|---|
-| WebSocket payload | 5,865 KB | **863 KB** (85% less) |
-| HTTP payload (frontend bundle) | 2,367 KB | 2,353 KB (unchanged) |
+| WebSocket payload | 5,799 KB | **844 KB** (85% less) |
+| HTTP payload (frontend bundle) | ~2.6 MB | ~2.3 MB (untouched) |
 
-**On a slow link it is a large win** — 5.4 seconds off a 4G load, nearly 30 off a weak one,
-because 5 MB of entity data has to cross the link before anything renders and this deletes most
-of it.
+**The ratio is the same 2.6× on both cellular profiles.** That is not a coincidence: the ratio is
+set by the byte counts, which do not change with the link. What the link decides is how many
+seconds that ratio is worth — 5 on 4G, 29 on a weak cell. Slower link, same multiple, more waiting
+removed. Both cellular rows land just above their theoretical transfer time at the stated bitrate,
+which is the check that they are measuring the link and not the harness.
 
-Notice the **ratio is the same 2.6× on both cellular profiles.** That is not a coincidence: the
-ratio is set by the byte counts, which do not change with the link. What the link decides is how
-many seconds that ratio is worth — 5 on 4G, 29 on a weak cell. Slower link, same multiple, more
-waiting removed.
+**On a fast LAN the margin narrows, as it must** — when the link is not the bottleneck, deleting
+5 MB from it buys less. The add-on is still ahead, and noticeably steadier: across five runs the
+trimmed loads sat between 412 and 630 ms while the untrimmed ones ranged from 474 to 2,028 ms.
 
-Both cellular rows also land just above their theoretical transfer time at the stated bitrate,
-which is the sanity check that they are measuring the link rather than the harness.
+> **A cautionary tale, kept here because it cost a real second.** An earlier version of this table
+> showed the add-on **2.2× slower** on LAN. That was real, and the cause was a per-user rule scoped
+> to a dashboard the benchmark never opened: every connection was held while the add-on resolved
+> the user, to reach a conclusion that could not change anything. Skipping that lookup when no rule
+> could match took the same load from **2,043 ms to 429 ms**. If you use `user_overrides`, scope
+> them to a dashboard — it is a correctness feature and a speed feature at once.
 
-**On a fast link to a fast client it is a net loss**, and the three runs did not overlap — the
-fastest trimmed run was still slower than the slowest untrimmed one.
-
-The cause is **not** the extra HTTP hop, which is the intuitive explanation and is wrong. Measured
-directly against this instance, the add-on serves the frontend *faster* than Home Assistant does:
-0.029 s versus 0.043 s for the same 564 KB bundle, and 31 ms versus 75 ms per request across 40
-sequential requests. Proxying the bundle is a small net win, not a cost.
-
-What remains is the websocket path — the add-on receives Home Assistant's full answer and trims
-it, so the parsing that the browser used to do now happens in the middle, as a blocking step
-rather than in parallel with rendering. On a slow link that is an excellent trade, because the
-link is the bottleneck and the proxy is not. On gigabit to a fast browser there is no bottleneck
-left for it to remove. That explanation is consistent with the measurements but has not itself
-been isolated, and it is stated here as the open question it is.
-
-Between those extremes there is a crossover. The trimming saves ~5 MB while the proxy hop costs
-about a second, so the two cancel somewhere in the **tens of Mbps** — call it a fast home
-broadband connection. Treat that as arithmetic from the three measured points, not a fourth
-measurement.
-
-So the rule of thumb is: **point the add-on at clients that are slow, or on slow links.** Wall
-panels, tablets, phones away from home, anything on cellular. For a desktop browser on the same
-LAN, go straight to Home Assistant — it is already faster, and a direct hostname alongside the
-proxied one costs nothing to set up.
-
-The HTTP row is the control throughout: the add-on does not touch the frontend bundle, and it
-stays put across every run. Only the websocket moved.
+Two things worth knowing if you are reasoning about where the time goes. Proxying the frontend is
+**not** a cost: measured against this instance the add-on serves it *faster* than Home Assistant
+does — 0.029 s versus 0.043 s for the same 564 KB bundle, and 31 ms versus 75 ms per request over
+40 sequential requests. And the HTTP column is the control throughout: the add-on does not trim
+the frontend bundle, and it stays put.
 
 Reproduce any of it with
-[`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs) — it needs
-no configuration change, because it compares the add-on's port against Home Assistant's own.
+[`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs) — it needs no
+configuration change, because it compares the add-on's port against Home Assistant's own.
 
 ### 📅 Now scale that to a day
 
