@@ -450,9 +450,23 @@ http:
     - 192.168.1.5             # your Caddy / nginx host, if it's a different machine
 ```
 
-> **Note:** versions before 0.2.3 flattened that chain, which made HA reject every proxied
-> request with **400 Bad Request** (`Incorrect number of elements in X-Forward-Proto`) while
-> a direct connection to `:8123` worked fine. If you hit that, update.
+Redirects are rewritten to point back at the origin your **browser** actually used — scheme
+and host together, plus absolute URLs carried in `redirect_uri` and `hass_url`. Relative
+redirects stay relative and genuinely third-party ones are left alone. The companion apps'
+custom-scheme callback (`homeassistant://…`) is preserved rather than rewritten, so app login
+works through the proxy too.
+
+> **Two bugs to know about if you are upgrading:**
+>
+> - Versions before 0.2.3 **flattened the `X-Forwarded-For` chain**, which made HA reject every
+>   proxied request with **400 Bad Request** (`Incorrect number of elements in
+>   X-Forward-Proto`) while a direct connection to `:8123` worked fine.
+> - Versions before 2026.09.13.08 rewrote a redirect's **host but not its scheme**, so an
+>   HTTPS terminator in front produced an **infinite redirect loop** — the URL degenerating
+>   into `.../:8123./:8123./:8123./...` — and remote login failed because the auth
+>   `redirect_uri` still pointed at HA's internal LAN address.
+>
+> If you hit either, update.
 
 ## 💻 Run it locally (for developers)
 
@@ -523,6 +537,23 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
   instead of making Home Assistant build them all over again
 - 🏷️ **Every setting now explains itself** right in the add-on's Configuration tab
 - 📊 **A stats panel in your HA sidebar.** See what it is actually saving you — connected panels, before/after sizes per dashboard, live traffic — instead of only finding out when something looks wrong. There is a `stats.json` behind it too, so you can graph any of it with a `rest` sensor
+- 🔁 **Your own HTTPS proxy works properly now.** Caddy, nginx or Traefik in front used to send
+  pages into an endless redirect loop and break remote login. Fixed — including the
+  custom-scheme callback the iOS and Android companion apps use to sign in
+- 🚿 **A hidden 490 MB/hour firehose got shut off.** One subscription type bypassed the
+  trimming entirely, and it hid because Home Assistant *batches* messages into arrays that
+  every type check quietly ignored
+- 🖼️ **Camera and media frames are no longer corrupted.** Binary frames were being decoded as
+  text in transit. On a wall panel they were 90% of everything received
+- 👤 **Per-user and per-dashboard rules.** `always_forward` / `never_forward` can now be scoped
+  to a specific person or a specific dashboard, not just applied globally
+- 📱 **Companion-app connections get attributed properly**, by User-Agent, since the native
+  socket doesn't carry the cookie a browser does
+- 🌐 **You can see how each client reaches you** — LAN or internet, and whether it came via
+  Cloudflare, a reverse proxy, Ingress or directly. Purely observational; it never gates access
+- 🐳 **Runs on plain Docker**, no Supervisor needed —
+  `ghcr.io/davidcoulson/ha-websocket-stripper`, amd64 and arm64
+- 🔌 **Default port moved to 9123**, because 8099 collides with Zigbee2MQTT
 
 ### 0.2.3
 
