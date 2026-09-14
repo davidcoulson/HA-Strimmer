@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026.09.13.38 — 2026-09-13
+
+**Removes the "card needed but no resource provides it" warning added in `.37`. It could never
+fire.**
+
+The idea was sound and the need is real — that warning would have made the navbar-card episode a
+ten-second diagnosis instead of a hand diff of the proxy's reply against Home Assistant's stored
+collection. The implementation was not sound.
+
+It asked "does any KEPT resource provide this card type?" using `cardMatchesBody` — **the same
+lenient matcher that decided to keep the resource in the first place**. If that matcher says a
+resource provides the card, the resource is kept; and because it was kept, the warning then
+concludes the card is provided. It can only ever answer "all good". Measured with a dashboard
+referencing `custom:totally-absent-card` against an instance that has no such card: two unrelated
+resources were kept and **no warning fired**.
+
+It cannot be fixed by tightening the match either. Fragment matching exists precisely because
+real bundles never contain the literal element name — Mushroom builds
+`` `${prefix}-${type}-card` `` at runtime, so the string `mushroom-cover-card` appears nowhere in
+the file. A stricter test would start warning about cards that work perfectly well, and a warning
+that cries wolf is worse than no warning at all.
+
+So it is gone rather than shipped as decoration. The raw material for the same judgement is
+already in the stats API and has been all along: `resources.byDashboard` (kept vs dropped per
+dashboard) and `resources.droppedByDashboard` (exactly which URLs were dropped). What is missing
+is a reliable automatic link between a card type and the file that defines it, and that is a
+harder problem than a log line.
+
+Everything else from `.37` — path-based resource identity, and watching the resource collection
+— is unaffected and stays.
+
 ## 2026.09.13.37 — 2026-09-13
 
 **A custom card disappeared whenever HACS updated it. Reported by the lovelace-navbar-card

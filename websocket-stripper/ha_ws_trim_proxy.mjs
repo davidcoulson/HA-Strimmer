@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.37';
+const VERSION = '2026.09.13.38';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1313,22 +1313,6 @@ async function buildResources(rpc, keysByDash) {
       kept: keep.size, dropped: rows.length - keep.size,
       keptKB: Math.round(keptB / 1024), droppedKB: Math.round(dropB / 1024),
     });
-    // A card this dashboard NEEDS whose resource did not survive the trim. This is the failure
-    // that is otherwise completely silent: no console error, no network request, no HA log —
-    // the custom element simply never registers and the dashboard renders `hui-error-card`
-    // with empty text. Diagnosing one instance meant reading the proxy's own
-    // `lovelace/resources` reply and diffing it against HA's stored collection.
-    //
-    // Cheap to detect here, because both halves are in hand: what the dashboard asked for, and
-    // what survived. Logged per dashboard rather than throttled, since it is rare and each
-    // occurrence names a specific broken card.
-    const unmet = [...keys.cards].filter((c) => !rows.some((r) =>
-      keep.has(resourcePath(r.url)) && cardMatchesBody(c, RESOURCE_CACHE.get(r.url) || {}))).sort();
-    if (unmet.length) {
-      log(`  !! resources ${dash}: ${unmet.length} card type(s) NEEDED but no kept resource provides them: `
-        + `${unmet.join(', ')} — these will render as an error card with no message. `
-        + `Add a matching fragment to resources_always_forward, or set trim_resources: false.`);
-    }
     const needs = [...[...keys.cards].sort(), ...[...keys.icons].sort().map((i) => i + ':')];
     log(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
     log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
