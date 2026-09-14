@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.3';
+const VERSION = '2026.09.14.4';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2178,10 +2178,23 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // phantom "(no type field)" entries carrying 2.78MB that was never a separate payload.
     let batchedKinds = null;
     let eventCount = 0;        // entity events in THIS frame; bytes are attributed in done()
+    // Per-MESSAGE trim accounting. done() only knows the whole frame's size, and HA batches —
+    // so a 9KB area registry sharing a frame with the 10MB entity registry was billed for the
+    // entire frame. Measured on a live instance the area registry reported 2,762KB against 30
+    // real areas, an overstatement of roughly 300x. Same family as the batched double-count
+    // fixed in .14, which corrected recordTraffic and left recordTrim on the frame total.
+    //
+    // Serialising per message is affordable HERE and nowhere else: these are registries,
+    // services and resources — a handful per page load — not the thousands-per-second event
+    // stream, where exactly this pattern was removed for being wasteful.
+    const frameTrims = [];
+    const sized = (v) => { try { return Buffer.byteLength(JSON.stringify(v)); } catch { return 0; } };
     let isEvent = false;
     const done = () => {
       const outBytes = Buffer.byteLength(s);
-      if (cat) stats.recordTrim(cat, inBytes, outBytes);
+      // Per-message where we measured it; the frame total is only right for a lone message.
+      if (frameTrims.length) for (const t of frameTrims) stats.recordTrim(t.cat, t.before, t.after);
+      else if (cat) stats.recordTrim(cat, inBytes, outBytes);
       // One call per FRAME, carrying however many events it held — see eventCount above.
       if (eventCount) stats.recordEvent(outBytes, eventCount);
       // Strictly `type === "event"`. This used to be `cat === null`, i.e. "not one of the
@@ -2257,11 +2270,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       if (dropStateChanged(msg)) return null;
 
       if (STRIP && msg.type === 'result' && getStatesIds.has(msg.id) && Array.isArray(msg.result)) {
+        const beforeB = sized(msg.result);
         const before = msg.result.length;
         msg.result = msg.result.filter((e) => allow.has(e.entity_id));
         getStatesIds.delete(msg.id);
         changed = true;
         cat = 'states';
+        frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
         if (before > INSTANCE_ENTITIES) INSTANCE_ENTITIES = before;
         log(`get_states trimmed ${before} -> ${msg.result.length}${dash ? ` (${dash})` : ''}`);
       }
@@ -2269,6 +2284,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       const kind = registryIds.get(msg.id);
       registryIds.delete(msg.id);
       const rowsOf = (r) => (Array.isArray(r) ? r.length : (Array.isArray(r?.entities) ? r.entities.length : -1));
+      const beforeB = sized(msg.result);
       const before = rowsOf(msg.result);
       msg.result = trimRegistry(kind, msg.result, allow);
       const after = rowsOf(msg.result);
@@ -2277,6 +2293,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         logThrottled(`reg:${kind}`, `${kind} registry trimmed ${before} -> ${after}${dash ? ` (${dash})` : ''}`);
       }
       cat = `registry:${kind}`;
+      frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
       // Keep the trimmed rows for the next connection on this allowlist. Stored as a JSON
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
@@ -2287,6 +2304,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       serviceIds.delete(msg.id);
       const keep = new Set(['homeassistant']);
       for (const id of allow) keep.add(String(id).split('.')[0]);
+      const beforeB = sized(msg.result);
       const before = Object.keys(msg.result).length;
       const next = {};
       for (const [domain, svcs] of Object.entries(msg.result)) if (keep.has(domain)) next[domain] = svcs;
@@ -2297,6 +2315,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         logThrottled('services', `get_services trimmed ${before} -> ${after} domains${dash ? ` (${dash})` : ''}`);
       }
       cat = 'services';
+      frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
       // Cache whatever is actually being SENT, not `next` — when the trim keeps nothing
       // (`after === 0`) the block above deliberately forwards the untrimmed result rather than
       // handing the frontend an empty service list, and the cache has to agree with that
@@ -2308,6 +2327,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       resourceIds.delete(msg.id);
       const keep = dash ? RESOURCES_BY_DASH.get(dash) : null;
       if (keep?.size) {
+        const beforeB = sized(msg.result);
         const before = msg.result.length;
         msg.result = msg.result.filter((r) => keep.has(resourcePath(r?.url)));
         if (msg.result.length !== before) {
@@ -2315,6 +2335,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
           logThrottled('resources', `lovelace resources trimmed ${before} -> ${msg.result.length} (${dash})`);
         }
         cat = 'resources';
+        frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
       }
     }
     if (STRIP && msg && msg.type === 'event' && subEntityIds.has(msg.id) && msg.event) {

@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026.09.14.4 — 2026-09-14
+
+**The savings table was billing small payloads for frames they merely shared.**
+
+`registry:area` reported **2,762 KB** trimmed to 552 KB. The instance has **30 areas**. At a few
+hundred bytes a row the real registry is about **9 KB** — the figure was overstated roughly
+**300x**, and the 80% "saving" next to the entity registry's 99.3% looked like a tuning
+opportunity when it was an accounting error.
+
+`done()` knows only the size of the whole websocket frame, and Home Assistant batches: a 9 KB area
+registry arriving in the same frame as the 10 MB entity registry was charged for all of it,
+under whichever category the last trimmed message in that frame happened to set.
+
+This is the same family as the batched double-count fixed in `.14` — that one corrected
+`recordTraffic` and left `recordTrim` sitting on the frame total.
+
+Each trimmed payload is now measured on its own, before and after, and `done()` records those
+instead of the frame's bytes. The frame total is still used when a message arrives alone, where
+it is correct.
+
+Serialising per message is affordable **here and nowhere else**: registries, services, resources
+and `get_states` are a handful per page load. The same pattern was deliberately removed from the
+event path in `.35`, where it ran thousands of times a second.
+
+No synthetic test: reproducing it needs two pending request ids answered in one batched frame,
+which the mock cannot currently construct. Verified on the live instance instead, which is where
+the wrong number was found.
+
 ## 2026.09.14.3 — 2026-09-14
 
 **`log_level` — the service log finally has a volume control, and a way to ask for more.**
