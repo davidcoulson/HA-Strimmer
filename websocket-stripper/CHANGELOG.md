@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026.09.14.5 — 2026-09-14
+
+**`trim_repairs` — empties the admin Repairs backlog for trimmed connections.**
+
+`repairs/list_issues` is the Repairs panel's list of outstanding issues. A kiosk never renders it,
+and it costs about **27KB on every page load** — measured at 26,894 bytes per call on a live
+instance.
+
+**Off by default**, like the other lossy trims. It is genuinely lossy in one direction: an admin
+browsing a trimmed dashboard stops seeing repair notifications there. That is a real thing to
+lose, and not a decision to make on someone's behalf.
+
+The list is **emptied, not withheld**. The frontend asks for this and waits for the answer, so
+dropping the reply would leave that request pending forever; an empty issue list is a valid
+answer meaning "nothing to report".
+
 ## 2026.09.14.4 — 2026-09-14
 
 **The savings table was billing small payloads for frames they merely shared.**

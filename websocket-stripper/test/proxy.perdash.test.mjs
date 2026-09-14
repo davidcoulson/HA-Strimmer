@@ -465,6 +465,38 @@ describe('websocket compression', () => {
 
 // Lovelace resources are instance-wide in HA, so every kiosk parses every custom card in the
 // install — the largest remaining cost once states and registries are trimmed.
+// repairs/list_issues is ~27KB on every page load and a kiosk never renders it. Lossy in one
+// direction though — an admin on a trimmed dashboard stops seeing repair notices — so it is off
+// by default, and both halves of that are pinned here.
+describe('repairs trimming', () => {
+  const issues = async (p2, extraEnv) => {
+    const m2 = await startMockHa();
+    const port = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port, extraEnv });
+    try {
+      await px.waitForLog(READY);
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+      await c.authed;
+      const r = (await c.rpc({ type: 'repairs/list_issues' })).result;
+      c.close();
+      return r;
+    } finally { px.kill(); await m2.close(); }
+  };
+
+  it('empties the issue list when trim_repairs is on', async () => {
+    const r = await issues(null, { TRIM_REPAIRS: '1' });
+    assert.deepEqual(r.issues, [], 'a kiosk gets an empty backlog');
+    // Emptied, NOT dropped: the frontend waits on this reply, so the shape must survive.
+    assert.ok(r && typeof r === 'object' && 'issues' in r,
+      'the result must still be a well-formed answer, or the request hangs forever');
+  });
+
+  it('leaves the backlog alone by default', async () => {
+    const r = await issues(null, {});
+    assert.equal(r.issues.length, 2, 'off by default — an admin must not silently lose repairs');
+  });
+});
+
 describe('resource trimming', () => {
   let mock, proxy, port;
   // A dashboard whose only custom card is `custom:my-fancy-card`.

@@ -169,6 +169,11 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
       if (m.type in registries) return ok(registries[m.type]);   // config/*_registry/list
       switch (m.type) {
         case 'get_states': return ok(states);
+        // The admin Repairs backlog. Two issues is enough to tell "emptied" from "untouched".
+        case 'repairs/list_issues': return ok({ issues: [
+          { issue_id: 'i1', domain: 'hassio', severity: 'warning', ignored: false },
+          { issue_id: 'i2', domain: 'cloud', severity: 'error', ignored: false },
+        ] });
         case 'get_services': return ok({
           light: { turn_on: {} }, sensor: { x: {} }, camera: { snapshot: {} },
           switch: { turn_on: {} }, binary_sensor: { y: {} },

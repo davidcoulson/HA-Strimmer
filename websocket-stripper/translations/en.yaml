@@ -58,6 +58,15 @@ configuration:
       every integration and is sent on every page load — 193KB across 115 domains on a large
       install. Off by default: the frontend uses it for service pickers and the automation
       editor, so this is fine for a kiosk and visibly lossy in the admin UI.
+  trim_repairs:
+    name: Trim the Repairs backlog
+    description: >-
+      Empties `repairs/list_issues`, the admin Repairs panel's list of outstanding issues. A kiosk
+      never renders it, and it costs about 27KB on every single page load. Off by default because
+      it is genuinely lossy in one direction: an admin browsing a trimmed dashboard stops seeing
+      repair notifications there. The list is emptied rather than withheld — the frontend asks for
+      it and waits for an answer, so it gets a valid "nothing to report" instead of a request that
+      never completes.
   user_agent_dashboards:
     name: Dashboard by client app (fallback)
     description: >-

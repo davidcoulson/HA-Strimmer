@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.4';
+const VERSION = '2026.09.14.5';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -90,6 +90,11 @@ const COMPRESS_WS = OPT.compress_websocket !== undefined ? !!OPT.compress_websoc
 // had any entity at all. The frontend needs it for service pickers and the automation
 // editor, so trimming it to the domains a connection can see is the same trade as
 // trim_resources — fine for a kiosk, visibly lossy in the admin UI. Off by default.
+// repairs/list_issues is the admin "Repairs" panel's backlog. A kiosk never renders it, and it
+// costs ~27KB on every page load. Off by default like the other lossy trims: an admin browsing a
+// trimmed dashboard would stop seeing repair notifications, which is a real thing to lose.
+const TRIM_REPAIRS = OPT.trim_repairs !== undefined ? !!OPT.trim_repairs
+  : (process.env.TRIM_REPAIRS ?? '0') !== '0';
 const TRIM_SERVICES = OPT.trim_services !== undefined ? !!OPT.trim_services
   : (process.env.TRIM_SERVICES ?? '0') !== '0';
 
@@ -1934,6 +1939,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const registryIds = new Map();    // request id -> which registry, to trim its result
   const resourceIds = new Set();    // lovelace/resources requests, to trim their result
   const serviceIds = new Set();     // get_services requests, to trim their result
+  const repairIds = new Set();      // repairs/list_issues requests, to empty their result
   // `subscribe_events` subscriptions that will deliver state_changed. These bypass the
   // allowlist entirely: the egress filter below only ever covered subscribe_entities, so a
   // card using the older subscribe_events path received the WHOLE firehose — the exact thing
@@ -2037,6 +2043,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // the registries — identical for every client on a given allowlist. It was the last of the
     // big instance-wide payloads still being rebuilt by HA and re-parsed here once per
     // connection, while the registries beside it were being served from memory.
+    if (STRIP && TRIM_REPAIRS && m && m.type === 'repairs/list_issues') repairIds.add(m.id);
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
       const hit = REG_RESPONSE_CACHE.get(regCacheKey('services', dash, cacheSig()));
       if (hit !== undefined) {
@@ -2298,6 +2305,22 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
       regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
+    }
+    // Emptied rather than dropped. The frontend asks for this and waits; a missing reply would
+    // leave that request pending forever, while an empty issue list is a perfectly valid answer
+    // meaning "nothing to report".
+    if (STRIP && TRIM_REPAIRS && msg && msg.type === 'result' && repairIds.has(msg.id)
+        && msg.result && typeof msg.result === 'object') {
+      repairIds.delete(msg.id);
+      const beforeB = sized(msg.result);
+      const n = Array.isArray(msg.result?.issues) ? msg.result.issues.length : -1;
+      if (n > 0) {
+        msg.result = { ...msg.result, issues: [] };
+        changed = true;
+        logThrottled('repairs', `repairs/list_issues trimmed ${n} -> 0 issues${dash ? ` (${dash})` : ''}`);
+      }
+      cat = 'repairs';
+      frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
     }
     if (STRIP && TRIM_SERVICES && msg && msg.type === 'result' && serviceIds.has(msg.id)
         && msg.result && typeof msg.result === 'object' && !Array.isArray(msg.result)) {
