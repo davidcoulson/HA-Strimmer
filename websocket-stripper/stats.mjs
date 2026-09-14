@@ -15,9 +15,36 @@
 // All byte counts are UNCOMPRESSED payload — what the browser must parse. With
 // compress_websocket on, fewer bytes than this cross the wire.
 
+// The only import this module has, and only for the one-shot OS read below. Everything else
+// here is a pure counter on purpose — no I/O, no clock beyond Date.now(), nothing to mock.
+import fs from 'node:fs';
+
 const MAX_CATS = 64;          // guards the category map against an unbounded key space
 
 export const startedAt = Date.now();
+
+// The OS this process is running on, resolved ONCE at boot.
+//
+// Read from the filesystem rather than accepted as a parameter, for the same reason
+// `process.version` is: a value the caller supplies is a value that can be wrong. The base
+// image is a floating tag (`node:26-alpine`), so the Alpine release genuinely moves without
+// anything in this repo changing — and on a Home Assistant OS host there is no way to inspect
+// the running container from outside it (no Supervisor token over SSH, docker socket denied).
+//
+// Alpine first because that is what ships. `/etc/os-release` is the fallback so a Debian-based
+// or plain-container user gets something useful too, and null rather than a guess when neither
+// exists — running from a dev checkout on macOS, say, where there is no container at all.
+const OS_RELEASE = (() => {
+  try {
+    const alpine = fs.readFileSync('/etc/alpine-release', 'utf8').trim();
+    if (alpine) return `Alpine ${alpine}`;
+  } catch { /* not Alpine */ }
+  try {
+    const m = fs.readFileSync('/etc/os-release', 'utf8').match(/^PRETTY_NAME="?([^"\n]+)"?/m);
+    if (m) return m[1].trim();
+  } catch { /* no os-release either */ }
+  return null;
+})();
 
 // category -> { count, before, after }. Categories: states, registry:<kind>, services,
 // resources. "before" is HA's answer, "after" is what the browser got.
@@ -215,6 +242,11 @@ export function snapshot(extra = {}) {
     // socket is denied. After a base-image change, "did the rebuild actually take?" was
     // answerable only by trusting that it did. Now it is answerable by reading it.
     node: process.version,
+    // The OS underneath, for the same reason and with the same caveat as `node` above:
+    // `node:26-alpine` is a FLOATING tag, so the Alpine release moves without anything in this
+    // repo changing. Read once at boot (see OS_RELEASE) rather than per request — it cannot
+    // change while the process lives.
+    os: OS_RELEASE,
     uptimeSec: Math.round((now - startedAt) / 1000),
     startedAt: new Date(startedAt).toISOString(),
     generatedAt: new Date(now).toISOString(),

@@ -435,8 +435,21 @@ describe('runtime version reporting', () => {
   });
 
   it('is not overridable by the caller', () => {
-    const snap = stats.snapshot({ version: 'x', node: 'v0.0.0-fake' });
+    const snap = stats.snapshot({ version: 'x', node: 'v0.0.0-fake', os: 'Fake Linux 1.0' });
     assert.equal(snap.node, process.version, 'extra.node must not win over the real runtime');
+    assert.notEqual(snap.os, 'Fake Linux 1.0', 'extra.os must not win over the real OS either');
+  });
+
+  // The OS field is present on every platform; only its VALUE is platform-dependent. Asserting
+  // a specific distro would make this test pass only inside the image — which is precisely
+  // where it is least needed, since that is the environment it exists to describe.
+  it('reports an OS string in a container and null where there is no container', () => {
+    const snap = stats.snapshot({ version: 'x' });
+    assert.ok('os' in snap, 'the field must always exist, so the panel can branch on it');
+    if (snap.os !== null) {
+      assert.equal(typeof snap.os, 'string');
+      assert.ok(snap.os.length > 0 && snap.os.length < 120, `implausible os string: ${snap.os}`);
+    }
   });
 });
 

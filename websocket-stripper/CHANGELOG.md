@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026.09.13.34 — 2026-09-13
+
+**`stats.json` now reports the OS too**, completing what `.33` started:
+
+```json
+{ "version": "2026.09.13.34", "node": "v26.8.2", "os": "Alpine 3.24.1", ... }
+```
+
+`node:26-alpine` is a **floating tag**, so both of those move without anything in this repo
+changing — and they already have: the image shipped Node 26.8.2 while development happened on
+26.8.1. Neither was observable from outside the container on a Home Assistant OS host, where
+there is no Supervisor token over SSH and the docker socket is denied.
+
+Establishing the Alpine version without this took reading the image config out of the registry,
+after two more obvious approaches gave wrong answers: `node:26-alpine` is **not** an alias of
+`26-alpine3.23` (it is its own index with a distinct digest), and its base layer matches **no**
+stock `alpine:X.Y` image, because Node builds from the minirootfs tarball rather than
+`FROM alpine`. That is a lot of work to answer "what is this running on", and it is now a field.
+
+Read from `/etc/alpine-release`, falling back to `PRETTY_NAME` in `/etc/os-release` so a
+Debian-based or plain-container user gets something useful, and `null` rather than a guess when
+neither exists — a dev checkout on macOS, where there is no container at all. Resolved once at
+boot, and like `node` it cannot be overridden by the caller: a value passed in is a value that
+can be wrong.
+
 ## 2026.09.13.33 — 2026-09-13
 
 **`stats.json` now reports the Node version the process is actually running on**, and the panel

@@ -335,6 +335,7 @@ async function tick() {
   // confirm from outside the container that the rebuild actually took.
   $('sub').innerHTML = 'v' + (s.version || '?')
     + (s.node ? ' · node ' + s.node : '')
+    + (s.os ? ' · ' + s.os : '')
     + ' · up ' + dur(s.uptimeSec) + ' · ' + pills;
 
   $('savedPct').textContent = (s.savings.savedPct || 0) + '%';
