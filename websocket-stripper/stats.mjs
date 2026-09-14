@@ -89,7 +89,13 @@ export function recordTrim(category, before, after) {
   t.count += 1; t.before += before; t.after += after;
 }
 
-export function recordEvent(bytes) { events.count += 1; events.bytes += bytes; }
+// `count` exists because one frame can carry many events. HA batches, so a single websocket
+// frame routinely holds dozens of entity diffs: the COUNT has to advance per event (that is
+// what "events seen" means) while the BYTES are attributed once, from the frame that actually
+// went out. Measuring each message separately would mean re-serialising every one of them just
+// to weigh it — on the hottest path in the proxy — and would still miss the frame's own array
+// overhead. Same reasoning as the batched-frame trim accounting.
+export function recordEvent(bytes, count = 1) { events.count += count; events.bytes += bytes; }
 
 export function recordTraffic(kind, bytes) {
   let e = traffic.get(kind);

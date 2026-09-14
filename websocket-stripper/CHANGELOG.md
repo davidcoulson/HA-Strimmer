@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026.09.13.35 — 2026-09-13
+
+**The proxy no longer re-serialises every entity event just to measure it.**
+
+The event branch ended with:
+
+```js
+stats.recordEvent(Buffer.byteLength(JSON.stringify(msg)));
+```
+
+`transform()` runs **per message**, and Home Assistant batches — so a single frame carrying
+forty entity diffs paid for **forty extra full `JSON.stringify` calls** over the largest objects
+on the hottest path in the proxy, on top of the one `done()` already performs to send them. It
+also measured a *reconstruction* of the message rather than the bytes that actually went out.
+
+`done()` already computes the real outgoing size. The only thing it could not know was how many
+events a frame held, so that is now all the event branch tracks: it counts, `done()` weighs.
+`recordEvent(bytes, count = 1)` keeps "events seen" advancing per event while the bytes are
+attributed once, from the frame. Exactly the reasoning behind the earlier batched-frame trim
+accounting fix.
+
+**And the instrument is now tested end to end.** Deleting the `recordEvent` call outright broke
+**no test** before this release — the counters were only ever exercised as a unit, never through
+the proxy. That is precisely the failure mode this project has already been bitten by, twice, in
+its own instruments. A new integration test pushes a real batched frame through a spawned proxy
+and reads the numbers back off the stats endpoint; it fails when the call is removed.
+
 ## 2026.09.13.34 — 2026-09-13
 
 **`stats.json` now reports the OS too**, completing what `.33` started:

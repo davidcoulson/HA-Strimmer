@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.34';
+const VERSION = '2026.09.13.35';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2022,10 +2022,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // label the array branch already recorded. Measured live: 165 batched frames produced 165
     // phantom "(no type field)" entries carrying 2.78MB that was never a separate payload.
     let batchedKinds = null;
+    let eventCount = 0;        // entity events in THIS frame; bytes are attributed in done()
     let isEvent = false;
     const done = () => {
       const outBytes = Buffer.byteLength(s);
       if (cat) stats.recordTrim(cat, inBytes, outBytes);
+      // One call per FRAME, carrying however many events it held — see eventCount above.
+      if (eventCount) stats.recordEvent(outBytes, eventCount);
       // Strictly `type === "event"`. This used to be `cat === null`, i.e. "not one of the
       // four trimmed categories", which swept up lovelace/config and every other untrimmed
       // reply and reported the lot as live update traffic.
@@ -2173,7 +2176,15 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         ev.r = ev.r.filter((eid) => allow.has(eid));
         if (ev.r.length !== before) changed = true;
       }
-      stats.recordEvent(Buffer.byteLength(JSON.stringify(msg)));
+      // Counted here, WEIGHED in done(). This used to be
+      // `recordEvent(Buffer.byteLength(JSON.stringify(msg)))`, which re-serialised the message
+      // purely to measure it — and transform() runs per message, so a batched frame carrying
+      // fifty entity diffs paid for fifty extra full serialisations of the largest objects on
+      // the hottest path, on top of the one done() already performs to send them. It also
+      // measured a RECONSTRUCTION rather than the bytes that actually went out. done() already
+      // knows the real outgoing size; the only thing it cannot know is how many events the
+      // frame held, so that is all this tracks.
+      eventCount += 1;
       isEvent = true;
     }
       return msg;

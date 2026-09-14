@@ -154,6 +154,47 @@ describe('proxy integration (strip on)', () => {
     c.close();
   });
 
+  // The event counters are an INSTRUMENT, and this project has been bitten before by an
+  // instrument that silently recorded nothing (batched frames were double-counted and sized
+  // wrong). Weighing moved into done() so the proxy stops re-serialising every message just to
+  // measure it — which means nothing outside done() would notice if the call vanished. So this
+  // walks the whole path: a real batched frame in, the stats endpoint read back out.
+  it('reports batched entity events on the stats endpoint: every event, one weighing', async () => {
+    const m2 = await startMockHa();
+    const p2 = await getFreePort();
+    const sp = await getFreePort();                 // a KNOWN stats port, so it is reachable
+    const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port: p2, statsPort: sp });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`);
+      await c.authed;
+      c.send({ type: 'subscribe_entities' });
+      await delay(200);
+
+      const before = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
+
+      // One frame carrying three allowlisted entity diffs, alongside an unrelated message —
+      // which is the shape HA actually sends.
+      m2.pushEntityEventBatched(
+        { a: { 'light.living_room': { s: 'on' }, 'sensor.temperature': { s: '21' }, 'switch.fan': { s: 'off' } } },
+        { id: 999, type: 'result', success: true, result: null },
+      );
+      await delay(400);
+
+      const after = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
+      c.close();
+
+      assert.ok(after.eventStream.count > before.eventStream.count,
+        'the event must reach the counters at all — this is the assertion that catches a dead instrument');
+      assert.ok(after.eventStream.bytes > before.eventStream.bytes,
+        'and carry a byte weight');
+      // Weighed from the frame that went out, so the bytes recorded cannot exceed it by much.
+      // A per-message re-serialisation would over-count; a missing call would under-count.
+      const grew = after.eventStream.bytes - before.eventStream.bytes;
+      assert.ok(grew > 0 && grew < 10000, `implausible event byte delta: ${grew}`);
+    } finally { px.kill(); await m2.close(); }
+  });
+
   it('passes non-/api/websocket ws upgrades straight through (e.g. /api/webrtc/ws)', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/webrtc/ws`);
     const hello = await new Promise((resolve, reject) => {

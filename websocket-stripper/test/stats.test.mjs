@@ -52,6 +52,26 @@ describe('stats counters', () => {
     assert.ok(!('saved' in s.eventStream), 'the event stream must never report a saving');
   });
 
+  // Home Assistant batches: one websocket frame routinely carries dozens of entity diffs. The
+  // count must advance per EVENT while the bytes are attributed once, from the frame that
+  // actually went out — otherwise the only way to weigh each message is to re-serialise it,
+  // which is what this signature exists to avoid on the proxy's hottest path.
+  it('counts every event in a batched frame but weighs the frame once', () => {
+    stats.reset();
+    stats.recordEvent(9000, 40);       // one frame, forty entity diffs
+    const s = stats.snapshot();
+    assert.equal(s.eventStream.count, 40, 'forty events happened, not one');
+    assert.equal(s.eventStream.bytes, 9000, 'and the frame is weighed once, not forty times');
+  });
+
+  it('still counts a single unbatched event as one', () => {
+    stats.reset();
+    stats.recordEvent(120);
+    const s = stats.snapshot();
+    assert.equal(s.eventStream.count, 1, 'the count argument must default to 1');
+    assert.equal(s.eventStream.bytes, 120);
+  });
+
   it('tracks open connections and forgets closed ones', () => {
     stats.reset();
     const a = stats.connOpen({ ip: '10.0.0.1', dash: 'kitchen', via: 'cookie', allowSize: 12 });
