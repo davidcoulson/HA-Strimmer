@@ -424,6 +424,7 @@ are JSON.
 | `TRIM_RESOURCES` | `trim_resources` | **Off by default** — read the tuning notes before enabling. |
 | `TRIM_SERVICES` | `trim_services` | **Off by default** — visibly lossy in the admin UI. |
 | `TRIM_REPAIRS` | `trim_repairs` | **Off by default.** Empties the admin Repairs backlog (~27 KB per load). |
+| `TRIM_THEMES` | `trim_themes` | **Off by default.** Sends only the themes your dashboards name, plus HA's defaults (~28 KB per load). |
 | `TRIM_TRANSLATIONS` | `trim_translations` | **Off by default, and the most lossy option here** — a missing translation renders its raw key on the dashboard. ~190 KB saved per load when it fits. |
 | `LOG_LEVEL` | `log_level` | `warn` / `info` (default) / `debug`. |
 | `PROXY_TIMEOUT_MS` | — | How long to wait on Home Assistant before returning 502 (default `120000`). `0` disables. |
@@ -610,6 +611,16 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
 
 **The big ones, in plain English:**
 
+- 🔎 **Find a missing entity from the panel, and send it without restarting.** When a card is
+  blank, the entity it needs is usually outside the allowlist — and that entity appeared
+  *nowhere* in the stats, because everything there describes what is being sent. The panel now
+  has a search box over every entity on the instance, showing which are currently sent, with an
+  **Always send** button on the ones that are not. Pinning applies **immediately**: the allowlist
+  rebuilds and panels pick it up on their own reconnect, with nothing to restart
+- 🧹 **Each connection gets only the devices and areas its own entities reach.** The entity
+  registry always worked this way; devices and areas were being cut to the union of *every*
+  dashboard, so a panel showing 48 entities received every device reachable by all 418. Fixing it
+  took the device registry from 87% trimmed to 92%
 - 🌍 **Translations are the biggest thing left, and can now be trimmed.** Home Assistant sends
   the browser translations for *every installed integration* on every page load — measured here
   at **5,359 keys / 432 KB across 69 integrations**, of which `tuya_local` alone contributed 823
