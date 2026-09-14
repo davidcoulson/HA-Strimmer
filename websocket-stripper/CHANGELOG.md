@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026.09.14.17 — 2026-09-14
+
+**Fixes a restart loop introduced by the port move in `2026.09.14.16`.**
+
+The container healthcheck carried its own copy of the stats port as a shell default,
+`${STATS_PORT:-8100}`. As an add-on that copy is the **only one that ever runs**: Supervisor
+passes configuration in `/data/options.json`, so `STATS_PORT` is never present in the container's
+environment and the shell default is always what gets probed. The env branch only ever applied to
+standalone `docker-compose` users.
+
+So when the port moved to `9122`, the probe kept asking `8100`. Nothing was listening there.
+Docker marked the container unhealthy, the Supervisor watchdog restarted it roughly every 85
+seconds, and because the add-on never reached `started`, **Ingress served "The app is starting,
+this can take some time…" indefinitely** — while the proxy itself was working perfectly the whole
+time, trimming and serving every dashboard on 9123. Nothing in the add-on's own log said
+otherwise, because from inside the process nothing was wrong.
+
+The fix removes the duplicate rather than correcting it. The proxy writes the port it actually
+bound to `/tmp/stats-port`, and the probe reads that file — the two can no longer disagree about
+where the server is. A missing file means the stats server never bound, which is genuinely
+unhealthy, so failing there is correct.
+
+**Two guards, because a passing suite had already missed this once.** A unit test pins the probe
+to the file the source writes and rejects any bare port literal in it. More to the point, the
+container smoke test in CI now waits for Docker to report the container `healthy` — asserting that
+`/stats.json` responds was never the same assertion, since `curl` is *told* which port to use
+while the probe has to work it out. Nothing in CI had ever read container health.
+
+Also corrected to `9122`: the `docker-compose.yml` example and the port mapping used by the CI
+smoke test, which had been publishing a port the image no longer binds.
+
 ## 2026.09.14.16 — 2026-09-14
 
 **The stats port is configurable, and moves from 8100 to 9122.**

@@ -113,3 +113,32 @@ test('ingress_port matches the INGRESS_PORT the proxy compiles in', () => {
   const dflt = Number((cfg.match(/^  stats_port:\s*(\d+)/m) || [])[1]);
   assert.equal(dflt, declared, `stats_port default ${dflt} must equal ingress_port ${declared}`);
 });
+
+// The healthcheck used to carry its own copy of the stats port as a shell default. As an add-on
+// that copy is the ONLY one that runs — Supervisor passes config in /data/options.json, so
+// STATS_PORT is never in the container's environment. When the port moved 8100 -> 9122 the copy
+// stayed behind, and a container that served every request correctly was marked unhealthy,
+// restarted by the watchdog every ~85 seconds, and never reported `started` — so Ingress showed
+// "The app is starting" forever. No test saw it, because every test asks the server directly on a
+// port it was told. The fix was to delete the duplicate: the proxy writes the port it bound and
+// the probe reads that file. This keeps it deleted.
+test('the Dockerfile healthcheck reads the bound port instead of hardcoding one', () => {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const dockerfile = fs.readFileSync(path.join(dir, '..', 'Dockerfile'), 'utf8');
+  const src = fs.readFileSync(path.join(dir, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
+
+  const portFile = (src.match(/^const STATS_PORT_FILE = '([^']+)';/m) || [])[1];
+  assert.ok(portFile, 'the proxy must define STATS_PORT_FILE');
+  // ...and must actually write it, or the probe has nothing to read.
+  assert.match(src, new RegExp(`writeFileSync\\(STATS_PORT_FILE`),
+    'the proxy must write STATS_PORT_FILE once the stats server binds');
+
+  const probe = (dockerfile.match(/^HEALTHCHECK[\s\S]*?\n(?:\s+CMD[\s\S]*?)(?=\n\n|\n#|$)/m) || [])[0];
+  assert.ok(probe, 'the Dockerfile must declare a HEALTHCHECK');
+  assert.ok(probe.includes(portFile),
+    `the healthcheck must read the port from ${portFile}, got: ${probe}`);
+  // Any bare 4-5 digit number in the probe is a second source of truth for the port.
+  const literal = probe.split(portFile).join('').match(/\b\d{4,5}\b/);
+  assert.equal(literal, null,
+    `the healthcheck must not hardcode a port (found ${literal && literal[0]})`);
+});

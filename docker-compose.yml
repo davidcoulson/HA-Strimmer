@@ -21,7 +21,7 @@ services:
 
     ports:
       - "9123:9123"     # what browsers and kiosks connect to
-      - "8100:8100"     # stats panel + JSON API (optional; drop this line to keep it internal)
+      - "9122:9122"     # stats panel + JSON API (optional; drop this line to keep it internal)
 
     volumes:
       # Keeps the 24h statistics history across restarts. Without it the add-on still works
@@ -38,7 +38,7 @@ services:
 
       # ---- ports (must match the `ports:` mapping above) ----
       PORT: "9123"
-      STATS_PORT: "8100"
+      STATS_PORT: "9122"
 
       # ---- entity scoping ----
       # Entities to forward even when no card names them. Literal ids or /regex/, comma

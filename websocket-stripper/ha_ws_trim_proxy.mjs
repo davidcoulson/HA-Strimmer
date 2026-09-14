@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.16';
+const VERSION = '2026.09.14.17';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -73,6 +73,16 @@ const PORT = parseInt(process.env.PORT || OPT.port || '9123', 10);
 const INGRESS_PORT = 9122;
 // Configurable, but only the default can be reached over Ingress — see the warning at listen().
 const STATS_PORT = parseInt(process.env.STATS_PORT || OPT.stats_port || INGRESS_PORT, 10);
+// Where the Dockerfile's HEALTHCHECK learns which port to probe. It cannot work it out for
+// itself: as an add-on the config arrives in /data/options.json, so STATS_PORT is NOT in the
+// container's environment and a shell default in the Dockerfile is the ONLY value that ever
+// applies. That default was a second copy of the one above, and when this moved 8100 -> 9122 the
+// copy stayed behind: the probe hit a closed port, Docker marked the container unhealthy, and the
+// watchdog restarted it every ~85 seconds while Supervisor never reported `started` — so Ingress
+// served "The app is starting" indefinitely. Writing the bound port removes the duplicate rather
+// than correcting it. Absent file means the stats server never bound, which is genuinely
+// unhealthy, so the probe is right to fail on it.
+const STATS_PORT_FILE = '/tmp/stats-port';
 // Deliberately env-only, not a config.yaml option: adding to the schema forces users through
 // a Supervisor store refresh before the new key is even accepted, which is a lot of friction for
 // a value almost nobody should change. The default suits every normal setup; this exists so the
@@ -2919,6 +2929,11 @@ statsServer.on('error', (e) => warn(`stats server could not start on :${STATS_PO
   + ' — the panel and JSON API are unavailable, including over Ingress. Proxying is unaffected;'
   + ' set STATS_PORT (and ingress_port) to move it.'));
 statsServer.listen(STATS_PORT, () => {
+  // Publish the port the healthcheck should probe. Best-effort: a container whose /tmp is not
+  // writable still proxies and still serves the panel, and failing the probe over that would be
+  // a worse outcome than the unhealthy state it reports.
+  try { fs.writeFileSync(STATS_PORT_FILE, String(STATS_PORT)); }
+  catch (e) { warn(`could not write ${STATS_PORT_FILE} (${e.message}) — the container healthcheck will fail`); }
   const viaIngress = STATS_PORT === INGRESS_PORT;
   log(`stats panel on :${STATS_PORT}${viaIngress ? ' (ingress)' : ''} — JSON at :${STATS_PORT}/stats.json`);
   // Moving the port off the default is allowed and sometimes necessary, but Supervisor still

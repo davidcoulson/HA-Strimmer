@@ -73,11 +73,11 @@ jobs:
             -e HA_BASE=http://127.0.0.1:9 \
             -e ALLOW_WS_URL=ws://127.0.0.1:9/api/websocket \
             -e DASH_PATHS=demo \
-            -p 18100:8100 \
+            -p 19122:9122 \
             stripper:smoketest
 
           for i in $(seq 1 30); do
-            if curl -fsS --max-time 3 http://127.0.0.1:18100/stats.json >/tmp/stats.json 2>/dev/null; then
+            if curl -fsS --max-time 3 http://127.0.0.1:19122/stats.json >/tmp/stats.json 2>/dev/null; then
               ok=1; break
             fi
             sleep 1
@@ -99,6 +99,22 @@ jobs:
           sleep 5
           [ "$(docker inspect -f '{{.State.Running}}' smoketest)" = "true" ] \
             || { echo "::error::container exited after startup"; docker logs smoketest; exit 1; }
+
+          # The HEALTHCHECK must actually pass. Serving /stats.json above is NOT the same
+          # assertion: curl is told which port to use, the probe has to work it out. When those
+          # two disagree the container serves every request correctly and Docker still reports
+          # it unhealthy — which on a Supervisor install means the watchdog restarts it on a
+          # loop and Ingress never routes, with nothing in the add-on's own log to say why.
+          # That shipped once, undetected by every test, because nothing here ever read health.
+          for i in $(seq 1 60); do
+            health=$(docker inspect -f '{{.State.Health.Status}}' smoketest 2>/dev/null || echo none)
+            [ "$health" = "healthy" ] && break
+            [ "$health" = "none" ] && { echo "::error::image declares no HEALTHCHECK"; exit 1; }
+            sleep 2
+          done
+          echo "container health: $health"
+          [ "$health" = "healthy" ] \
+            || { echo "::error::HEALTHCHECK never passed (status: $health)"; docker inspect -f '{{json .State.Health}}' smoketest; docker logs smoketest; exit 1; }
 
           docker logs smoketest
           docker rm -f smoketest

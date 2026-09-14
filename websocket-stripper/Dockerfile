@@ -56,9 +56,18 @@ COPY ha_ws_trim_proxy.mjs lovelace_extract.mjs stats.mjs history.mjs route.mjs m
 # not that HA is restarting — which is exactly the distinction a healthcheck should draw.
 #
 # busybox wget, because the image has no curl and adding one for a healthcheck is not worth a
-# layer. Shell form so STATS_PORT is expanded at runtime rather than baked in.
+# layer. Shell form so the port is resolved at runtime rather than baked in.
+#
+# The port comes from a file the proxy writes after its stats server actually binds, NOT from a
+# default written here. A default here is a SECOND COPY of the one in the source, and as an add-on
+# it is the only copy that ever runs: Supervisor passes config in /data/options.json, so
+# STATS_PORT is absent from the environment and the shell default is always what gets probed.
+# When the port moved 8100 -> 9122 that copy stayed behind, the probe hit a closed port, and the
+# watchdog restarted a perfectly healthy container every ~85 seconds — while Supervisor, never
+# seeing `started`, left Ingress showing "The app is starting, this can take some time".
+# Reading the bound port means the probe cannot disagree with the server about where it is.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD wget -qO- "http://127.0.0.1:${STATS_PORT:-8100}/stats.json" >/dev/null 2>&1 || exit 1
+  CMD p="$(cat /tmp/stats-port 2>/dev/null)"; [ -n "$p" ] && wget -qO- "http://127.0.0.1:$p/stats.json" >/dev/null 2>&1 || exit 1
 
 # Deliberately runs as root, like every other HA add-on: Supervisor mounts /data as root, and
 # dropping privileges here would break history persistence for add-on users to buy very little
