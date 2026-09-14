@@ -131,11 +131,22 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   can't reconnect, the proxy keeps serving the last-known allowlist.
 - **Registries (entity/device/area) ARE trimmed and cached** (`trim_registries`, on by
   default), as is `get_services` (`trim_services`, off by default). The shared response cache
-  is keyed by `(kind, dashboard, allowlist version)` — so any connection whose allowlist is
-  *wider* than its dashboard's must skip it in both directions, or it reads rows missing its
-  extra entities and writes another client's rows back for everyone else. Three things widen
-  one: a `client_overrides` pin, a self-identified satellite, and `user_overrides`. That is
-  what `allowDiverged` in `bridge()` is for — do not "optimise" it away.
+  is keyed by **`(kind, dashboard, allowlist version, allowlist SIGNATURE)`**. The signature is
+  the load-bearing part: a connection's allowlist can be *wider* than its dashboard's — a
+  `client_overrides` pin, a self-identified satellite, or `user_overrides` — and without it in
+  the key, such a connection reads rows missing its extra entities and writes another client's
+  rows back for everyone else.
+  - **Do not "simplify" this to skipping the cache for widened connections.** That was tried
+    (`.30`, an `allowDiverged` flag) on the assumption that widened connections are a rare
+    minority. Measured on a live instance, they are the MAJORITY — voice-satellite panels
+    self-identify and the admin user matches a user rule — and the hit rate fell from **97.9%
+    to 9.1%**. Correct and useless. Identity belongs in the key, not in a bypass.
+  - The signature is taken **lazily at the first cacheable request**, not at connection open,
+    because `user_overrides` widens the set after the auth gate resolves.
+  - Note for testing it: every loopback test client is `127.0.0.1`, so a `client_overrides` pin
+    widens all of them or none and the collision case never arises. Use two USERS instead —
+    that is what `two users on one dashboard never share each other's cached registry` does,
+    and dropping the signature from the key must make it fail.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
   is now set (for trusted-network login, below), which can break the internal
   `homeassistant`/`supervisor` DNS names — the `ha_base` / `allow_ws_url` options pin them
@@ -198,6 +209,21 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   request options and the upgrade silently never completes; and `web()`/`ws()` return promises,
   so both call sites need a `.catch()` or a proxy error becomes an unhandled rejection and
   takes the process down.
+- **`proxyTimeout` (120s, `PROXY_TIMEOUT_MS` to override) bounds the wait on HA.** Nothing did
+  before: Node's `server.timeout` is `0` and `requestTimeout` only covers *receiving* a request,
+  so an HA that stalled rather than died held the socket forever and never errored. Safe for
+  camera streams for two reasons worth not re-deriving: it is an **inactivity** timer, so an
+  MJPEG/HLS stream resets it as frames flow; and httpxy applies it in `webIncomingMiddleware`
+  only, so `proxy.ws()` upgrades are untouched.
+- **HTTP/2 and QUIC are settled: NO. Do not revisit without new facts.** httpxy has an `http2`
+  option, but it only affects httpxy's own `listen()` helper (`http2.createSecureServer`) — we
+  build our own server and call `proxy.web()`, so it is inert here, and it serves h2 rather than
+  proxying to an h2 upstream. More fundamentally: WS over HTTP/2 needs RFC 8441 Extended
+  CONNECT, which `ws` does not support server-side and HA's aiohttp does not serve at all, so
+  the HA leg is HTTP/1.1 by necessity. Browsers already get h2/h3 from **NPM and Cloudflare,
+  which sit in front** of this; the NPM→stripper hop is plain HTTP over the LAN, where
+  multiplexing buys nothing. And NPM measured **3.6× faster** than hitting the proxy directly,
+  which is what killed the direct-TLS proposal too. Let the edge own front-end transport.
 
 ## Security
 
