@@ -421,6 +421,25 @@ describe('resource pinning is Ingress-only', () => {
   });
 });
 
+describe('runtime version reporting', () => {
+  // The point of this field is that it cannot be wrong. Reading it from `process` rather than
+  // accepting it in `extra` is what guarantees that — so the test pins the SOURCE, not just the
+  // presence of a string. A future refactor that "tidies" it into a passed-in constant would
+  // reintroduce exactly the drift it exists to prevent.
+  it('reports the running Node version, taken from the process itself', () => {
+    const snap = stats.snapshot({ version: '2026.01.01.1' });
+    assert.equal(snap.node, process.version);
+    assert.match(snap.node, /^v\d+\.\d+\.\d+/);
+    // And it is independent of the add-on version beside it.
+    assert.notEqual(snap.node, snap.version);
+  });
+
+  it('is not overridable by the caller', () => {
+    const snap = stats.snapshot({ version: 'x', node: 'v0.0.0-fake' });
+    assert.equal(snap.node, process.version, 'extra.node must not win over the real runtime');
+  });
+});
+
 describe('registry cache hit rate', () => {
   it('is null before anything has been asked for, not zero', () => {
     // A 0% hit rate on zero requests is a fiction. Publishing it would put a false trough in the

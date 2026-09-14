@@ -206,6 +206,15 @@ export function snapshot(extra = {}) {
 
   return {
     version: extra.version ?? null,
+    // The runtime this process is ACTUALLY executing on, read from the process rather than
+    // passed in — so it cannot drift from reality the way a hand-maintained constant would.
+    //
+    // Worth a line because the alternative is inference. The image is built from a base named
+    // in the Dockerfile, but on a Home Assistant OS host there is no way to check what the
+    // running container holds: the Supervisor token is not available over SSH and the docker
+    // socket is denied. After a base-image change, "did the rebuild actually take?" was
+    // answerable only by trusting that it did. Now it is answerable by reading it.
+    node: process.version,
     uptimeSec: Math.round((now - startedAt) / 1000),
     startedAt: new Date(startedAt).toISOString(),
     generatedAt: new Date(now).toISOString(),

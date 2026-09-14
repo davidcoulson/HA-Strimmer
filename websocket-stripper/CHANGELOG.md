@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026.09.13.33 — 2026-09-13
+
+**`stats.json` now reports the Node version the process is actually running on**, and the panel
+shows it beside the app version.
+
+Small, and it closes a real gap. The image is built `FROM` a base named in the Dockerfile, but on
+a Home Assistant OS host there is no way to check what the running container actually holds — the
+Supervisor token is not available over SSH and the docker socket is denied. So after the base
+image moved 20 -> 24 -> 26 in a single day, "did that rebuild take?" was answerable only by
+trusting that it had.
+
+```json
+{ "version": "2026.09.13.33", "node": "v26.8.1", ... }
+```
+
+Read from `process.version` rather than accepted as a parameter, so it cannot drift from reality
+the way a hand-maintained constant would — and the tests pin that *source*, not merely the
+presence of a string, because a later tidy-up that turned it into a passed-in value would
+reintroduce exactly the drift it exists to prevent.
+
 ## 2026.09.13.32 — 2026-09-13
 
 **The response cache is keyed by the connection's allowlist, not by its dashboard — which took

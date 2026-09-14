@@ -331,7 +331,11 @@ async function tick() {
     .filter(([, v]) => typeof v === 'boolean')
     .map(([k, v]) => '<span class="pill' + (v ? ' on' : '') + '">' + k + (v ? ' on' : ' off') + '</span>')
     .join(' ');
-  $('sub').innerHTML = 'v' + (s.version || '?') + ' · up ' + dur(s.uptimeSec) + ' · ' + pills;
+  // Node version alongside the add-on version: after a base-image change it is the only way to
+  // confirm from outside the container that the rebuild actually took.
+  $('sub').innerHTML = 'v' + (s.version || '?')
+    + (s.node ? ' · node ' + s.node : '')
+    + ' · up ' + dur(s.uptimeSec) + ' · ' + pills;
 
   $('savedPct').textContent = (s.savings.savedPct || 0) + '%';
   $('savedAbs').textContent = kb(s.savings.saved) + ' of ' + kb(s.savings.before) + ' not sent';
