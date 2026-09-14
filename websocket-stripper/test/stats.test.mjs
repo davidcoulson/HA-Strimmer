@@ -424,7 +424,16 @@ describe('resource pinning is Ingress-only', () => {
   });
 
   it('says so in the log, so an attempt is visible rather than silent', async () => {
-    assert.match(out, /refused a resource pin from .* writes are Ingress-only/);
+    // WAIT for the line rather than asserting on `out` immediately. The refusal is logged as
+    // the request is rejected, but `out` is filled asynchronously from the child's stdout pipe
+    // — the HTTP response above can arrive in this process before the log line has been read
+    // off that pipe. Asserting straight away is a race, and it is one that had been passing by
+    // luck: it failed on Node 22 in CI while 24 and 26 went green, which looks like a runtime
+    // difference and is really just a slower runner losing a coin toss.
+    const re = /refused a resource pin from .* writes are Ingress-only/;
+    const deadline = Date.now() + 5000;
+    while (!re.test(out) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.match(out, re);
   });
 
   it('rejects a fragment too short to mean anything, even via Ingress', async () => {
