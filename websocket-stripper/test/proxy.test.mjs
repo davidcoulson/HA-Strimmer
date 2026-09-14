@@ -195,6 +195,38 @@ describe('proxy integration (strip on)', () => {
     } finally { px.kill(); await m2.close(); }
   });
 
+  // A STALLED upstream, which is not the same as a dead one. Nothing bounded this before:
+  // Node's server.timeout is 0 and requestTimeout only covers RECEIVING a request, so an HA
+  // that accepted the connection and then went silent held the socket indefinitely and never
+  // produced an error for the handler to catch.
+  //
+  // PROXY_TIMEOUT_MS is turned right down here — the real default is 120s, which is not a
+  // duration a test can wait for, and the behaviour is identical either way.
+  it('answers 502 instead of hanging forever when HA stalls', async () => {
+    const m2 = await startMockHa();
+    const p2 = await getFreePort();
+    const px = spawnProxy({
+      mock: m2, dashPaths: 'test-dash', port: p2,
+      extraEnv: { PROXY_TIMEOUT_MS: '400' },
+    });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      // Healthy first, so the test cannot pass just because the proxy is broken generally.
+      const ok = await httpGet(`http://127.0.0.1:${p2}/some/path`);
+      assert.equal(ok.status, 200, 'baseline: a normal request must still work');
+
+      m2.setHangHttp(true);
+      const started = Date.now();
+      const r = await httpGet(`http://127.0.0.1:${p2}/stalls`);
+      const took = Date.now() - started;
+
+      assert.equal(r.status, 502, 'a stalled upstream must become a bounded failure');
+      // Comfortably under the 5s a caller would otherwise wait on Node's own limits, and well
+      // above the 400ms timeout so a loaded runner does not make this flaky.
+      assert.ok(took >= 300 && took < 5000, `502 arrived in ${took}ms, expected ~400ms`);
+    } finally { px.kill(); await m2.close(); }
+  });
+
   it('passes non-/api/websocket ws upgrades straight through (e.g. /api/webrtc/ws)', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/webrtc/ws`);
     const hello = await new Promise((resolve, reject) => {

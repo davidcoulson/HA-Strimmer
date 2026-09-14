@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.35';
+const VERSION = '2026.09.13.36';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -66,6 +66,12 @@ const PORT = parseInt(process.env.PORT || OPT.port || '9123', 10);
 // because Supervisor reads `ingress_port` from config.yaml at install time — an option the
 // user could change would silently break the sidebar panel.
 const STATS_PORT = parseInt(process.env.STATS_PORT || '8100', 10);
+// Deliberately env-only, not a config.yaml option: adding to the schema forces users through
+// a Supervisor store refresh before the new key is even accepted, which is a lot of friction for
+// a value almost nobody should change. The default suits every normal setup; this exists so the
+// timeout is testable at a sane duration, and as an escape hatch for a pathologically slow
+// upstream. 0 disables it.
+const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS || '120000', 10);
 const DASH_PATHS = toList(OPT.dashboards ?? (process.env.DASH_PATHS || process.env.DASH_PATH));
 // strip_entities: true (default) = inject the allowlist so HA streams only needed entities.
 //   false = pass the websocket straight through (full firehose) for A/B comparison.
@@ -777,7 +783,27 @@ function startController() {
 // autoRewrite is deliberately OFF: it rewrites a redirect's HOST but never its SCHEME, which
 // is an infinite redirect loop behind TLS termination (see rewriteLocation below). We do the
 // whole job in a proxyRes handler instead — same condition, plus scheme and query params.
-const proxy = createProxyServer({ target: HA_BASE, changeOrigin: true, ws: false, xfwd: true });
+// proxyTimeout bounds how long we wait on HOME ASSISTANT, which nothing else did. Node's
+// defaults leave that open-ended: `server.timeout` is 0, and `requestTimeout` only covers
+// RECEIVING a request, not waiting for the upstream answer. So an HA that stalls rather than
+// dies — a long GC pause, a wedged integration — left the request hanging and the socket held,
+// and the error handler below never fired, because nothing errored. It just went quiet.
+//
+// Two properties make 120s safe rather than a new way to break camera streams:
+//
+//   * It is an INACTIVITY timer, not a total duration (`proxyReq.setTimeout` sets the socket
+//     idle timeout). A long-lived HTTP stream — MJPEG camera, HLS — keeps resetting it as
+//     frames flow, and only trips when the upstream actually goes silent.
+//   * It applies to proxy.web() ONLY. httpxy wires it in webIncomingMiddleware; the ws path has
+//     no timeout handling, so camera-signalling and Assist-pipeline upgrades are untouched.
+//
+// On fire httpxy calls proxyReq.destroy(), which reaches the 'error' handler below as an
+// ordinary proxy error and answers 502 — turning an indefinite hang into a bounded failure the
+// browser can retry.
+const proxy = createProxyServer({
+  target: HA_BASE, changeOrigin: true, ws: false, xfwd: true,
+  proxyTimeout: PROXY_TIMEOUT_MS,
+});
 
 // The origin as the BROWSER sees it, which is not necessarily the one we were reached on.
 // Note xfwd APPENDS our own hop to x-forwarded-proto (so Caddy's "https" becomes

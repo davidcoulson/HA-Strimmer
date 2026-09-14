@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026.09.13.36 — 2026-09-13
+
+**A stalled Home Assistant is now a 502 instead of a hang.**
+
+Nothing bounded how long the proxy waited on HA. Node's defaults do not: `server.timeout` is
+`0`, and `requestTimeout` only covers *receiving* a request, not waiting for the upstream answer.
+So an HA that stalled rather than died — a long GC pause, a wedged integration — left the request
+open and the socket held, and the error handler never fired, because nothing errored. It just
+went quiet.
+
+`proxyTimeout` is now set to **120s**, which httpxy already supported and the previous library's
+option was never wired up. Two properties make that safe rather than a new way to break camera
+streams, both checked in the library source before shipping:
+
+- it is an **inactivity** timer (`proxyReq.setTimeout` sets the socket idle timeout), so a
+  long-lived HTTP stream — MJPEG, HLS — keeps resetting it as frames flow and only trips when the
+  upstream genuinely goes silent;
+- it applies to `proxy.web()` **only**. httpxy wires it in `webIncomingMiddleware`; the websocket
+  path has no timeout handling at all, so camera-signalling and Assist-pipeline upgrades are
+  untouched.
+
+On fire httpxy calls `proxyReq.destroy()`, which arrives at the existing `error` handler as an
+ordinary proxy error and answers 502 — a bounded failure the browser retries, instead of a socket
+that never comes back.
+
+`PROXY_TIMEOUT_MS` overrides it, env-only and deliberately not a `config.yaml` option: adding a
+schema key forces users through a Supervisor store refresh before it is even accepted, which is
+real friction for a value almost nobody should change. `0` disables it.
+
+The mock gained a `hangHttp` mode — it accepts the request and then never responds and never
+closes, so the proxy sees no error at all, which is what makes it a hang rather than a failure.
+Without `proxyTimeout` the new test does not fail, it **hangs**, which is precisely the bug.
+
 ## 2026.09.13.35 — 2026-09-13
 
 **The proxy no longer re-serialises every entity event just to measure it.**

@@ -87,12 +87,18 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     renderedTemplates: [],       // template sources the proxy asked HA to render
     unsubscribed: [],            // subscription ids the proxy released
     hangTemplates: false,        // accept render_template, never push the event
+    hangHttp: false,           // accept the HTTP request, never answer it — a STALLED upstream,
+                               // which is different from a dead one and is the case nothing
+                               // used to bound
     hangUpgrades: false,       // accept the TCP connection, never answer the upgrade
     rawUpgrades: new Set(),
     sockets: new Set(),        // EVERY accepted socket, so close() can't hang (see close())
   };
 
   const server = http.createServer((req, res) => {
+    // Deliberately never responds and never closes: the connection stays open and silent, so
+    // the proxy sees no error at all. That is what makes it a hang rather than a failure.
+    if (state.hangHttp) return;
     state.lastXFF = req.headers['x-forwarded-for'] ?? null;
     state.httpHits.push({ url: req.url, xff: state.lastXFF });
     res.setHeader('x-echo-xff', state.lastXFF ?? '');
@@ -236,6 +242,7 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     renderedTemplates: () => state.renderedTemplates,
     unsubscribed: () => state.unsubscribed,
     setHangTemplates(v) { state.hangTemplates = v; },
+    setHangHttp(v) { state.hangHttp = v; },
     setCurrentUserDelay(ms) { state.currentUserDelayMs = ms; },
     // Push an entity event on every active subscribe_entities subscription.
     pushEntityEvent(payload) {
