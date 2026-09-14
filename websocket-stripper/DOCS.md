@@ -164,8 +164,8 @@ Two JSON endpoints back it, both read-only:
 
 | URL | What |
 |---|---|
-| `http://<host>:8100/stats.json` | Current snapshot |
-| `http://<host>:8100/history.json` | Rolling 24h, 5-minute buckets |
+| `http://<host>:9122/stats.json` | Current snapshot |
+| `http://<host>:9122/history.json` | Rolling 24h, 5-minute buckets |
 
 Point a `rest` sensor at either to graph it in Home Assistant itself:
 
@@ -173,7 +173,7 @@ Point a `rest` sensor at either to graph it in Home Assistant itself:
 sensor:
   - platform: rest
     name: Stripper entities served
-    resource: http://homeassistant.local:8100/stats.json
+    resource: http://homeassistant.local:9122/stats.json
     value_template: "{{ value_json.allowlist.union }}"
     json_attributes_path: "$.savings"
     json_attributes: [before, after, savedPct]

@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.14.15"
+version: "2026.09.14.16"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -28,7 +28,10 @@ host_network: true
 # proxy), separate from the proxy port, so a dashboard url_path can never collide with a
 # stats path. Read-only — it reports, it cannot change anything.
 ingress: true
-ingress_port: 8100
+# Must match the STATS_PORT default in ha_ws_trim_proxy.mjs — Supervisor reads this at install
+# time and routes Ingress to it, while the process binds the other. If they drift apart the panel
+# breaks over Ingress while the direct port still works. A test pins them together.
+ingress_port: 9122
 panel_icon: mdi:filter-variant
 panel_title: Stripper
 panel_admin: false
@@ -116,6 +119,9 @@ options:
   # debug = per-connection and per-decision detail, for when you are hunting something.
   log_level: info
   port: 9123
+  # Where the stats panel and JSON API listen. Only the default is reachable over Ingress —
+  # Supervisor routes the sidebar panel to ingress_port above, which is fixed at install time.
+  stats_port: 9122
   ha_base: ""
   allow_ws_url: ""
 schema:
@@ -171,5 +177,6 @@ schema:
     - str
   log_level: "list(warn|info|debug)?"
   port: "int(1,65535)?"
+  stats_port: "int(1,65535)?"
   ha_base: "str?"
   allow_ws_url: "str?"

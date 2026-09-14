@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.15';
+const VERSION = '2026.09.14.16';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -65,7 +65,14 @@ const PORT = parseInt(process.env.PORT || OPT.port || '9123', 10);
 // with a stats path would be a genuinely confusing failure. Fixed rather than an option
 // because Supervisor reads `ingress_port` from config.yaml at install time — an option the
 // user could change would silently break the sidebar panel.
-const STATS_PORT = parseInt(process.env.STATS_PORT || '8100', 10);
+// The port Supervisor routes Ingress to. It is add-on METADATA, fixed in config.yaml at install
+// time, and this process cannot read it — so it is duplicated here and pinned by a test in
+// test/config.test.mjs. 9122 sits next to the proxy's own 9123; 8100 (the old value) is a popular
+// enough port to collide with, and under host_network a collision is not cosmetic: the server
+// cannot bind, so Ingress has nothing to reach either.
+const INGRESS_PORT = 9122;
+// Configurable, but only the default can be reached over Ingress — see the warning at listen().
+const STATS_PORT = parseInt(process.env.STATS_PORT || OPT.stats_port || INGRESS_PORT, 10);
 // Deliberately env-only, not a config.yaml option: adding to the schema forces users through
 // a Supervisor store refresh before the new key is even accepted, which is a lot of friction for
 // a value almost nobody should change. The default suits every normal setup; this exists so the
@@ -2906,8 +2913,23 @@ const statsServer = http.createServer((req, res) => {
 });
 // A stats port that will not bind is an inconvenience, NOT a reason to take the proxy down
 // with it — the add-on's actual job is unaffected. Log it and carry on, unlike PORT below.
-statsServer.on('error', (e) => logThrottled(`stats:${e.code || e.message}`, `stats server unavailable (${e.message}) — proxying is unaffected`));
-statsServer.listen(STATS_PORT, () => log(`stats panel on :${STATS_PORT} (ingress) — JSON at :${STATS_PORT}/stats.json`));
+// Worth being explicit that Ingress goes with it: under host_network the panel is reached
+// THROUGH this same listener, so a bind failure costs the panel and the JSON API both.
+statsServer.on('error', (e) => warn(`stats server could not start on :${STATS_PORT} (${e.message})`
+  + ' — the panel and JSON API are unavailable, including over Ingress. Proxying is unaffected;'
+  + ' set STATS_PORT (and ingress_port) to move it.'));
+statsServer.listen(STATS_PORT, () => {
+  const viaIngress = STATS_PORT === INGRESS_PORT;
+  log(`stats panel on :${STATS_PORT}${viaIngress ? ' (ingress)' : ''} — JSON at :${STATS_PORT}/stats.json`);
+  // Moving the port off the default is allowed and sometimes necessary, but Supervisor still
+  // routes Ingress to `ingress_port`. Saying so here is the difference between a deliberate
+  // choice and a sidebar panel that mysteriously stopped working.
+  if (!viaIngress) {
+    warn(`stats_port is ${STATS_PORT} but Ingress routes to ${INGRESS_PORT} — the sidebar panel`
+      + ` will NOT work. Reach it directly at http://<host>:${STATS_PORT}/, or set stats_port back`
+      + ` to ${INGRESS_PORT}.`);
+  }
+});
 
 // 24h history. /data is the add-on's persistent volume, so a restart costs one 5-minute
 // bucket rather than the whole day — which matters because the counters themselves reset.

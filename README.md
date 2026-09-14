@@ -352,7 +352,7 @@ user (bottom left) → **Security** → **Create token**.
 
 ```bash
 docker run -d --name websocket-stripper --restart unless-stopped \
-  -p 9123:9123 -p 8100:8100 \
+  -p 9123:9123 -p 9122:9122 \
   -v stripper-data:/data \
   -e HA_BASE="http://homeassistant:8123" \
   -e HA_TOKEN="<your-long-lived-token>" \
@@ -361,13 +361,13 @@ docker run -d --name websocket-stripper --restart unless-stopped \
 ```
 
 Then point your kiosks at **`http://<this-host>:9123`** instead of your HA URL, and open
-**`http://<this-host>:8100`** for the stats panel. Home Assistant stays on its own port and
+**`http://<this-host>:9122`** for the stats panel. Home Assistant stays on its own port and
 nothing about your HA install changes — this sits in front of it.
 
 Check it came up:
 
 ```bash
-curl -s http://localhost:8100/stats.json | head -20
+curl -s http://localhost:9122/stats.json | head -20
 ```
 
 ### docker compose
@@ -382,7 +382,7 @@ services:
     restart: unless-stopped
     ports:
       - "9123:9123"     # what your browsers and kiosks connect to
-      - "8100:8100"     # stats panel + JSON API
+      - "9122:9122"     # stats panel + JSON API
     volumes:
       - stripper-data:/data       # keeps the 24h stats across restarts
     environment:
@@ -414,7 +414,7 @@ are JSON.
 | `HA_TOKEN` | — | Long-lived access token. Required; the app uses `SUPERVISOR_TOKEN` instead. |
 | `DASH_PATHS` | `dashboards` | `url_path` of each dashboard to serve. **Required** — empty means the proxy refuses websockets rather than serving the untrimmed firehose. |
 | `PORT` | `port` | Listen port (default `9123`). |
-| `STATS_PORT` | — | Stats panel + JSON API (default `8100`). Served over Ingress in the app; a plain port here. |
+| `STATS_PORT` | `stats_port` | Stats panel + JSON API (default `9122`). Only the default is reachable from the HA sidebar — Ingress routes to `ingress_port`, fixed at install. |
 | `ALWAYS_FORWARD` | `always_forward` | Literal ids or `/regex/`. |
 | `NEVER_FORWARD` | `never_forward` | Wins over everything. |
 | `STRIP_ENTITIES` | `strip_entities` | `0` = plain passthrough, for an A/B comparison. |

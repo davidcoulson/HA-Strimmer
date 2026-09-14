@@ -91,3 +91,25 @@ test('the stats options block reports every simple option the schema declares', 
   const missing = simple.filter((k) => !block.includes(`${k}:`));
   assert.deepEqual(missing, [], `options missing from the stats block: ${missing.join(', ')}`);
 });
+
+// ingress_port is metadata Supervisor reads at install time; INGRESS_PORT is a constant compiled
+// into the proxy, because the running process cannot see config.yaml. If they drift apart the
+// sidebar panel breaks over Ingress while the direct port keeps working — a failure that looks
+// like Ingress being broken rather than like a configuration mismatch.
+test('ingress_port matches the INGRESS_PORT the proxy compiles in', () => {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const cfg = fs.readFileSync(path.join(dir, '..', 'config.yaml'), 'utf8');
+  const src = fs.readFileSync(path.join(dir, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
+
+  const declared = Number((cfg.match(/^ingress_port:\s*(\d+)/m) || [])[1]);
+  const compiled = Number((src.match(/^const INGRESS_PORT = (\d+);/m) || [])[1]);
+  assert.ok(declared, 'config.yaml must declare an ingress_port');
+  assert.ok(compiled, 'the proxy must compile in an INGRESS_PORT');
+  assert.equal(compiled, declared,
+    `INGRESS_PORT ${compiled} does not match config.yaml ingress_port ${declared}`);
+
+  // And the option's default must be the same, or a fresh install has a panel that cannot be
+  // reached from the sidebar out of the box.
+  const dflt = Number((cfg.match(/^  stats_port:\s*(\d+)/m) || [])[1]);
+  assert.equal(dflt, declared, `stats_port default ${dflt} must equal ingress_port ${declared}`);
+});

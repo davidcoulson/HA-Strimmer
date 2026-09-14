@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.09.14.16 — 2026-09-14
+
+**The stats port is configurable, and moves from 8100 to 9122.**
+
+`8100` is a popular enough port to collide with, and under `host_network` a collision is not
+cosmetic: the server cannot bind, so the panel and the JSON API are both unavailable —
+**including over Ingress**, because the sidebar panel is reached through that same listener.
+Proxying is unaffected either way, which was already the case and is now said explicitly in the
+log rather than left implied.
+
+`9122` sits next to the proxy's own `9123`. New `stats_port` option, `STATS_PORT` env.
+
+**Only the default is reachable from the sidebar**, and that is the part worth knowing.
+`ingress_port` is add-on metadata Supervisor reads at install time; the running process cannot
+see it. Move `stats_port` and the panel is still served, but only directly at
+`http://<host>:<port>/` — so the app now says exactly that at startup when the two differ,
+instead of leaving a sidebar panel that mysteriously stopped working.
+
+Because those two values live in different files and cannot see each other, a test pins them
+together: `ingress_port`, the `INGRESS_PORT` constant compiled into the proxy, and the
+`stats_port` default must all agree. Verified by changing one and watching it fail.
+
+An existing guard caught the missing `translations/en.yaml` entry for the new option before it
+shipped — the second time this cycle a test has caught an option added in only half the places it
+belongs.
+
 ## 2026.09.14.15 — 2026-09-14
 
 **Pinning from the panel applies immediately. No restart.**
