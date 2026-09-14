@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.12';
+const VERSION = '2026.09.14.13';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1121,7 +1121,12 @@ function trimRegistry(kind, rows, allow) {
   // "Kitchen — Ceiling Light" secondary text still resolves. The reachable sets come from
   // REG_CACHE, built alongside the allowlist; if it's empty we haven't got a registry yet and
   // pass everything through rather than blanking names.
-  const keep = kind === 'device' ? REG_CACHE.devices : REG_CACHE.areas;
+  // Per-connection where possible, falling back to the union set when the lookups are not built
+  // yet — passing everything through rather than blanking names is the existing safety rule.
+  const reach = reachFor(allow);
+  const keep = reach
+    ? (kind === 'device' ? reach.devices : reach.areas)
+    : (kind === 'device' ? REG_CACHE.devices : REG_CACHE.areas);
   if (!keep.size) return rows;
   const idOf = (r) => (kind === 'device' ? r?.id : (r?.area_id ?? r?.id));
   return rows.filter((r) => keep.has(idOf(r)));
@@ -1132,6 +1137,28 @@ function trimRegistry(kind, rows, allow) {
 // gets a correct answer. Areas come from the entities directly AND from the devices those
 // entities belong to, because an entity with no area_id of its own inherits its device's.
 const REG_CACHE = { devices: new Set(), areas: new Set() };
+// entity -> its device / its own area, and device -> its area. Lookups, so the device and area
+// registries can be cut to what ONE CONNECTION reaches instead of what every dashboard reaches.
+//
+// REG_CACHE below is built from the UNION allowlist, and using it to trim meant a panel with 48
+// entities received every device and area reachable by all 418 union entities. That is why the
+// device registry trimmed to 87% while the entity registry — which has always used the
+// per-connection set — managed 99.3% on the same principle.
+const REG_BY_ENTITY = { device: new Map(), area: new Map() };
+const AREA_BY_DEVICE = new Map();
+// Reachable devices/areas for one connection's allowlist. O(|allow|), run a few times per page
+// load, against a registry answer that is measured in hundreds of kilobytes.
+function reachFor(allow) {
+  if (!REG_BY_ENTITY.device.size && !REG_BY_ENTITY.area.size) return null;   // not built yet
+  const devices = new Set(); const areas = new Set();
+  for (const id of allow) {
+    const d = REG_BY_ENTITY.device.get(id); if (d) devices.add(d);
+    const a = REG_BY_ENTITY.area.get(id); if (a) areas.add(a);
+  }
+  // An entity with no area of its own inherits its device's — the same rule rebuildRegCache uses.
+  for (const d of devices) { const a = AREA_BY_DEVICE.get(d); if (a) areas.add(a); }
+  return { devices, areas };
+}
 function rebuildRegCache(registries, allow) {
   const devices = new Set();
   const areas = new Set();
@@ -1145,6 +1172,15 @@ function rebuildRegCache(registries, allow) {
   }
   REG_CACHE.devices = devices;
   REG_CACHE.areas = areas;
+
+  REG_BY_ENTITY.device = new Map();
+  REG_BY_ENTITY.area = new Map();
+  AREA_BY_DEVICE.clear();
+  for (const r of registries?.entities ?? []) {
+    if (r.device_id) REG_BY_ENTITY.device.set(r.entity_id, r.device_id);
+    if (r.area_id) REG_BY_ENTITY.area.set(r.entity_id, r.area_id);
+  }
+  for (const d of registries?.devices ?? []) if (d.area_id) AREA_BY_DEVICE.set(d.id, d.area_id);
 }
 
 // ---- per-dashboard Lovelace resources ----

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026.09.14.13 — 2026-09-14
+
+**The device and area registries were trimmed to the union of every dashboard, not to the
+connection.**
+
+The entity registry has always used the per-connection allowlist and reaches **99.3%**. Devices
+and areas used `REG_CACHE`, which `rebuildRegCache` builds from the **union** — so a panel showing
+48 entities received every device and area reachable by all 418 union entities, and the device
+registry managed only **87%** on the same principle. That gap is what prompted the look, and it
+turned out to be the answer rather than a limit.
+
+Both now derive their keep-set from the connection's own allowlist, via entity -> device and
+entity -> area lookups built alongside it. An entity with no area of its own still inherits its
+device's, exactly as before. The union set remains the fallback for the window before the lookups
+exist, where passing everything through beats blanking names.
+
+O(|allow|) per call — a few hundred iterations, a handful of times per page load, against a
+registry answer measured in hundreds of kilobytes.
+
+**The first test for this was vacuous**, which is worth recording because it is the third today.
+It asserted that a device was absent, but chose one that *no* dashboard reached — so the union and
+per-connection answers were identical and it passed with the fix removed. The fixtures now use two
+dashboards that deliberately reach different devices, and both directions fail when the fix is
+reverted.
+
 ## 2026.09.14.12 — 2026-09-14
 
 **`trim_themes` — Home Assistant sends every installed theme to every client.**

@@ -511,6 +511,51 @@ describe('translation trimming', () => {
 });
 
 // HA sends every installed theme to every client on every load. A panel renders one.
+// The device and area registries were trimmed to the UNION allowlist while the entity registry
+// used the per-connection one — so a panel showing one dashboard received every device and area
+// reachable by every other dashboard too. Measured live: the device registry trimmed 87% against
+// the entity registry's 99.3% on the same principle.
+//
+// The fixtures matter here. An earlier draft asserted on a device that no dashboard reached, so
+// the union and per-connection answers were identical and the test passed with the fix removed.
+// These two dashboards deliberately reach DIFFERENT devices: sensor.temperature -> dev_thermo,
+// light.kitchen -> dev_kitchen_light.
+describe('device and area registries are cut to the CONNECTION, not the union', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa({ configs: {
+      'dash-thermo': { views: [{ cards: [{ type: 'entities', entities: ['sensor.temperature'] }] }] },
+      'dash-kitchen': { views: [{ cards: [{ type: 'entities', entities: ['light.kitchen'] }] }] },
+    } });
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'dash-thermo,dash-kitchen', port });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  const devicesFor = async (pageUrl) => {
+    await httpGet(`http://127.0.0.1:${port}${pageUrl}`);
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    const rows = (await c.rpc({ type: 'config/device_registry/list' })).result;
+    c.close();
+    return rows.map((r) => r.id);
+  };
+
+  it('a dashboard gets only the devices its own entities reach', async () => {
+    const ids = await devicesFor('/dash-thermo');
+    assert.ok(ids.includes('dev_thermo'), 'the device behind a visible entity must be kept');
+    assert.ok(!ids.includes('dev_kitchen_light'),
+      'a device reachable only through the OTHER dashboard must not be sent');
+  });
+
+  it('and the other dashboard gets its own, not the first one\'s', async () => {
+    const ids = await devicesFor('/dash-kitchen');
+    assert.ok(ids.includes('dev_kitchen_light'), 'its own device is kept');
+    assert.ok(!ids.includes('dev_thermo'), 'and the other dashboard\'s is not');
+  });
+});
+
 describe('theme trimming', () => {
   const themes = async (extraEnv, cfg) => {
     const m2 = await startMockHa(cfg ? { configs: { 'res-dash': cfg } } : undefined);
