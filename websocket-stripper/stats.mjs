@@ -69,9 +69,14 @@ let connTotal = 0;
 // the interesting question is "how does traffic reach this instance over a day", and `conns`
 // only ever holds what is connected right this second — a wall panel that reconnects hourly
 // and a laptop that visited once look identical there.
-const byRoute = new Map();      // direct | proxy | cloudflare | ingress -> count
-const byOrigin = new Map();     // lan | internet -> count
-const byHost = new Map();       // the hostname dialled -> count
+// The JOINT distribution: one counter per (origin, route, host) combination actually seen,
+// rather than three independent tallies. Three marginals cannot answer "which front door did the
+// internet traffic come through" — each sums to the same total separately, and the pairing that
+// carries the answer is exactly what separate counting discards. They also cannot be drawn as a
+// flow diagram at all, because a Sankey's links ARE the pairings. The marginals below are derived
+// from this, so the table and the diagram can never disagree.
+const byFlow = new Map();       // "origin\0route\0host" -> count
+const FLOW_SEP = '\u0000';      // a byte no hostname or route label can contain
 
 const bump = (map, key) => {
   if (!key) return;
@@ -125,9 +130,7 @@ export function recordCacheMiss() { cache.misses += 1; }
 export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, hop, hops, device }) {
   const id = nextConnId++;
   connTotal += 1;
-  bump(byRoute, route);
-  bump(byOrigin, origin);
-  bump(byHost, host);
+  bump(byFlow, [origin || 'unknown', route || 'unknown', host || 'unknown'].join(FLOW_SEP));
   conns.set(id, {
     id, ip: ip || null, dash: dash || null, via: via || null, allowSize: allowSize || 0,
     // How this connection reached the add-on. Observational only — see route.mjs on why none
@@ -154,7 +157,62 @@ export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, ho
   return id;
 }
 
-export function connClose(id) { conns.delete(id); }
+// Sessions that have closed, kept for a day.
+//
+// The live list answers "what is connected right now", which is the wrong question when a panel
+// has gone dark — the row you need to look at is precisely the one that disappeared. Keyed by
+// the client's identity rather than by connection id, because a wall panel reconnects constantly
+// and 300 rows for one device is not a list anyone reads: repeat connections fold into one row
+// carrying the count and the last time it was seen.
+const SESSION_WINDOW_MS = 24 * 3600 * 1000;
+const SESSION_MAX = 500;
+const recent = new Map();
+
+const sessionKey = (c) => [c.ip || '?', c.dash || '?', c.device?.name || ''].join('\u0000');
+
+export function connClose(id) {
+  const c = conns.get(id);
+  conns.delete(id);
+  if (!c) return;
+  const key = sessionKey(c);
+  const prior = recent.get(key);
+  const closedAt = Date.now();
+  if (prior) {
+    prior.sessions += 1;
+    prior.lastSeen = closedAt;
+    prior.totalSec += Math.round((closedAt - c.since) / 1000);
+    prior.msgs += c.msgs;
+    // Keep the most recently observed values: a device that was renamed, moved dashboards or
+    // resolved a user midway is better described by what it looks like NOW than at first sight.
+    prior.user = c.user ?? prior.user;
+    prior.device = c.device ?? prior.device;
+    prior.allowSize = c.allowSize || prior.allowSize;
+    prior.origin = c.origin ?? prior.origin;
+    prior.route = c.route ?? prior.route;
+    prior.host = c.host ?? prior.host;
+    // Best of the timings rather than the last: the question a timing answers here is "can this
+    // client be fast", and a reconnect storm's worth of degraded numbers hides that it can.
+    if (Number.isFinite(c.msToEntityData)
+      && (!Number.isFinite(prior.msToEntityData) || c.msToEntityData < prior.msToEntityData)) {
+      prior.msToEntityData = c.msToEntityData;
+    }
+  } else {
+    if (recent.size >= SESSION_MAX) recent.delete(recent.keys().next().value);
+    recent.set(key, {
+      ip: c.ip, dash: c.dash, device: c.device, user: c.user, allowSize: c.allowSize,
+      origin: c.origin, route: c.route, host: c.host, via: c.via,
+      msToEntityData: c.msToEntityData,
+      firstSeen: c.since, lastSeen: closedAt,
+      totalSec: Math.round((closedAt - c.since) / 1000), sessions: 1, msgs: c.msgs,
+    });
+  }
+  pruneSessions(closedAt);
+}
+
+function pruneSessions(now = Date.now()) {
+  const cutoff = now - SESSION_WINDOW_MS;
+  for (const [k, v] of recent) if (v.lastSeen < cutoff) recent.delete(k);
+}
 
 // A connection's allowlist is not fixed at open: per-user rules resolve a moment later and can
 // widen it. Reporting the size captured at open meant the panel under-reported exactly the
@@ -299,15 +357,65 @@ export function snapshot(extra = {}) {
     byMessage: Object.fromEntries(
       [...traffic.entries()].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 15),
     ),
-    clients: { open: conns.size, total: connTotal, list: clients },
+    clients: {
+      open: conns.size,
+      total: connTotal,
+      list: clients,
+      // Clients seen in the last 24 hours that are NOT connected now. Live ones are excluded
+      // rather than merged: a device appearing in both lists with different numbers is the kind
+      // of ambiguity this panel exists to remove, and the live list is already authoritative for
+      // anything currently connected.
+      recent: (() => {
+        pruneSessions(now);
+        const liveKeys = new Set([...conns.values()].map(sessionKey));
+        return [...recent]
+          .filter(([k]) => !liveKeys.has(k))
+          .map(([, v]) => ({
+            ip: v.ip, dashboard: v.dash, user: v.user, allowSize: v.allowSize,
+            origin: v.origin, route: v.route, host: v.host, attributedVia: v.via,
+            device: deviceFor ? (deviceFor(v.ip) ?? v.device) : v.device,
+            msToEntityData: v.msToEntityData,
+            sessions: v.sessions, messages: v.msgs, connectedSec: v.totalSec,
+            firstSeen: v.firstSeen, lastSeen: v.lastSeen,
+            lastSeenSec: Math.round((now - v.lastSeen) / 1000),
+          }))
+          .sort((a, b) => b.lastSeen - a.lastSeen);
+      })(),
+    },
     // Lifetime tallies of how connections arrived. Counted at open, so these keep counting
     // devices that have since disconnected — which is the whole point of having them next to
     // a list that only shows what is live.
-    paths: {
-      byRoute: Object.fromEntries([...byRoute].sort((a, b) => b[1] - a[1])),
-      byOrigin: Object.fromEntries([...byOrigin].sort((a, b) => b[1] - a[1])),
-      byHost: Object.fromEntries([...byHost].sort((a, b) => b[1] - a[1])),
-    },
+    paths: pathsSnapshot(),
+  };
+}
+
+// Turns the joint counter into the shape the panel reads: the flows themselves, plus the three
+// marginals SUMMED FROM THEM rather than counted alongside them. Deriving is not a tidiness
+// preference — two counters for the same quantity are two things that can disagree, and the
+// disagreement shows up as a diagram and a table that contradict each other with no way to tell
+// which is right.
+//
+// `flows` is exported as an array of explicit {origin, route, host, n} objects rather than the
+// packed map key, so no consumer has to know the separator.
+export function pathsSnapshot(flows = byFlow) {
+  const marginal = (idx) => {
+    const m = new Map();
+    for (const [key, n] of flows) {
+      const part = key.split(FLOW_SEP)[idx];
+      m.set(part, (m.get(part) || 0) + n);
+    }
+    return Object.fromEntries([...m].sort((a, b) => b[1] - a[1]));
+  };
+  return {
+    flows: [...flows]
+      .sort((a, b) => b[1] - a[1])
+      .map(([key, n]) => {
+        const [origin, route, host] = key.split(FLOW_SEP);
+        return { origin, route, host, n };
+      }),
+    byOrigin: marginal(0),
+    byRoute: marginal(1),
+    byHost: marginal(2),
   };
 }
 
@@ -318,6 +426,7 @@ export function reset() {
   cache.hits = 0; cache.misses = 0; cache.bytes = 0;
   traffic.clear();
   conns.clear();
-  byRoute.clear(); byOrigin.clear(); byHost.clear();
+  byFlow.clear();
+  recent.clear();
   nextConnId = 1; connTotal = 0;
 }

@@ -93,6 +93,7 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     hangUpgrades: false,       // accept the TCP connection, never answer the upgrade
     rawUpgrades: new Set(),
     sockets: new Set(),        // EVERY accepted socket, so close() can't hang (see close())
+    mainSockets: [],           // client sockets, oldest first — see sendRaw below
   };
 
   const server = http.createServer((req, res) => {
@@ -140,11 +141,19 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     }
   });
 
+  // The newest socket that is a real client rather than an identity probe.
+  const lastMain = () => state.mainSockets[state.mainSockets.length - 1] ?? state.lastSocket;
+
   function haProtocol(ws) {
     const conn = { ws, eventSubs: new Map(), entitySubIds: new Set() };
     state.conns.add(conn);
     state.lastSocket = ws;      // so a test can push a raw binary frame at the proxy
-    ws.on('close', () => state.conns.delete(conn));
+    state.mainSockets.push(ws);
+    ws.on('close', () => {
+      state.conns.delete(conn);
+      const i = state.mainSockets.indexOf(ws);
+      if (i >= 0) state.mainSockets.splice(i, 1);
+    });
     ws.send(JSON.stringify({ type: 'auth_required', ha_version: '2026.7.0' }));
     ws.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
@@ -158,6 +167,11 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
       if (m.type) state.rpcCounts.set(m.type, (state.rpcCounts.get(m.type) || 0) + 1);
       const ok = (result) => ws.send(JSON.stringify({ id: m.id, type: 'result', success: true, result }));
       if (m.type === 'auth/current_user') {
+        // This socket is an identity probe, not a browser connection — the proxy opens it purely
+        // to ask who a token belongs to and closes it again. Take it out of the push list so a
+        // raw frame meant for the browser is not delivered to a socket nobody is reading.
+        const probeIdx = state.mainSockets.indexOf(ws);
+        if (probeIdx >= 0) state.mainSockets.splice(probeIdx, 1);
         // Optionally answer slowly. The proxy holds a connection's messages until the user is
         // known, so how long this takes decides whether the frontend's first
         // subscribe_entities is queued or sails straight through — the race that made
@@ -241,8 +255,16 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
   return {
     // Push a raw binary frame at the most recent client, mimicking HA's media frames.
     // Push a raw text frame (used to emit a BATCHED array, which HA really does send).
-    sendRaw: (str) => { try { state.lastSocket?.send(str); } catch {} },
-    sendBinaryToLastClient: (buf) => { try { state.lastSocket?.send(buf, { binary: true }); } catch {} },
+    // Push at the newest socket that is a real CLIENT connection.
+    //
+    // `lastSocket` alone was only ever accidentally right: it assumed the proxy opens exactly one
+    // socket to HA per browser, which stopped being true once the proxy began resolving a user's
+    // identity on a second, short-lived connection. That probe would arrive last and quietly
+    // become the push target, so a frame meant for the browser went somewhere else — which reads
+    // exactly like the proxy dropping an allowed entity. An identity probe identifies itself by
+    // asking `auth/current_user` and nothing else, so it is removed from the list below.
+    sendRaw: (str) => { try { lastMain()?.send(str); } catch {} },
+    sendBinaryToLastClient: (buf) => { try { lastMain()?.send(buf, { binary: true }); } catch {} },
     rpcCount: (type) => state.rpcCounts.get(type) || 0,
     port,
     base: `http://127.0.0.1:${port}`,

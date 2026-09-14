@@ -37,6 +37,54 @@
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
   .pill.on { color: var(--good); border-color: var(--good); }
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  /* Range toggle. Sits in the h2, so it inherits the uppercase treatment and has to opt out. */
+  .seg { float: right; text-transform: none; letter-spacing: 0; }
+  .seg button { font: inherit; font-size: 11px; color: var(--muted); background: var(--bg);
+    border: 1px solid var(--line); padding: 2px 8px; cursor: pointer; }
+  .seg button:first-child { border-radius: 4px 0 0 4px; }
+  .seg button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+  .seg button.on { color: var(--card); background: var(--accent); border-color: var(--accent); }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Sankey. Bands are SVG paths; the labels are real text so they stay selectable and legible
+     at any zoom. min-width keeps three columns readable on a phone — .scroll handles the rest. */
+  #sankey svg { display: block; }
+  #sankey .node { fill: var(--muted); }
+  #sankey .lbl { fill: var(--fg); font-size: 11px; }
+  #sankey .sub { fill: var(--muted); font-size: 10px; }
+  #sankey .band { opacity: .42; }
+  #sankey .band:hover { opacity: .75; }
+  #sankey .col { fill: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+  #paths-detail { margin-top: 12px; }
+  #paths-detail summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+  /* Route colours. The route is the question the diagram exists to answer — "which front door
+     did this come through" — so it is what carries the colour; origin and hostname nodes stay
+     neutral rather than competing with it. Hues are separated enough to stay distinct for the
+     common forms of colour blindness, and each has a dark-theme variant because the light-theme
+     values go muddy on a dark ground. */
+  :root {
+    --r-direct: #2e7d32; --r-proxy: #0277bd; --r-cloudflare: #ef6c00;
+    --r-ingress: #6a1b9a; --r-unknown: #78909c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --r-direct: #81c784; --r-proxy: #4fc3f7; --r-cloudflare: #ffb74d;
+      --r-ingress: #ce93d8; --r-unknown: #90a4ae;
+    }
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .filter { width: 100%; margin-bottom: 10px; padding: 7px 10px; font: inherit; font-size: 13px;
+    color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  .filter:focus { outline: none; border-color: var(--accent); }
+  /* Sortable headers. The arrow is a ::after so it never shifts the column width when it
+     appears — a header that reflows the table on click is worse than no indicator at all. */
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--fg); }
+  th.sortable::after { content: '↕'; opacity: .25; margin-left: 5px; font-size: 10px; }
+  th.sortable.up::after { content: '↑'; opacity: 1; color: var(--accent); }
+  th.sortable.down::after { content: '↓'; opacity: 1; color: var(--accent); }
+  th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .err { color: var(--warn); }
   a { color: var(--accent); }
   .chart { margin-bottom: 14px; }
@@ -127,10 +175,18 @@
   </div>
 
   <div class="card">
-    <h2>Connected now</h2>
+    <h2>Clients
+      <span class="seg" id="cl-range" role="group" aria-label="Time range">
+        <button type="button" data-range="live" class="on">Connected now</button><button
+          type="button" data-range="day">Seen in 24h</button>
+      </span>
+    </h2>
+    <input id="cl-filter" class="filter" type="search" autocomplete="off"
+      placeholder="Filter — type any part of a row (10.2.4, office, cloudflare…)">
     <div class="scroll"><table id="cl"><thead>
       <tr><th>Client</th><th>Device</th><th>From</th><th>Front door</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
     </thead><tbody></tbody></table></div>
+    <div id="cl-msg" class="note" style="display:none"></div>
     <div class="note"><b>Payload</b> is the first entity block this connection received, with the
       number of entities in it — the dump a dashboard cannot render without, and the part this
       app shrinks. The entity count is shown so the byte figure can be checked: a small
@@ -182,11 +238,21 @@
   </div>
 
   <div class="card">
-    <h2>How clients reach this</h2>
-    <div class="scroll"><table id="paths"><thead>
-      <tr><th>Category</th><th>Value</th><th>Connections</th><th>Share</th></tr>
-    </thead><tbody></tbody></table></div>
-    <div class="note">Counted for every connection since start, including ones that have since
+    <h2>How clients reach this
+      <span class="seg" id="paths-range" role="group" aria-label="Time range">
+        <button type="button" data-range="live" class="on">Since restart</button><button
+          type="button" data-range="day">Last 24h</button>
+      </span>
+    </h2>
+    <div class="scroll"><div id="sankey"></div></div>
+    <details id="paths-detail"><summary>Show as a table</summary>
+      <div class="scroll"><table id="paths"><thead>
+        <tr><th>Origin</th><th>Route</th><th>Hostname</th><th>Connections</th><th>Share</th></tr>
+      </thead><tbody></tbody></table></div>
+    </details>
+    <div class="note">Each band is one connection path, read left to right: where the client was,
+      how the request arrived, and which name it dialled. Band thickness is the number of
+      connections. Counted for every connection, including ones that have since
       closed — unlike the live list above. <b>Origin</b> is whether the client's address is
       inside RFC1918 or outside it; a device on your own LAN that connects through an external
       hostname leaves the network and comes back, so it correctly reads as
@@ -195,7 +261,8 @@
       <code>cloudflare</code>, or over Supervisor <code>ingress</code>. <b>Hostname</b> is the
       name the client dialled, which is usually the clearest statement of which front door it
       used. This is reporting only: every signal except the peer address is a request header,
-      so none of it is trustworthy enough to make access decisions with.</div>
+      so none of it is trustworthy enough to make access decisions with.
+      <span id="paths-span"></span></div>
   </div>
 
   <div class="sub">Raw JSON: <a href="./stats.json" target="_blank">stats.json</a> — point a Home
@@ -226,6 +293,345 @@ const rows = (tbl, data, cells) => {
     for (const v of cells(d)) tr.insertCell().textContent = v;
   }
 };
+
+// ---- the clients table ---------------------------------------------------------------------
+//
+// One table, two sources: connections open right now, and clients seen in the last 24 hours that
+// are not open now. The columns deliberately stay the same across both, so switching range does
+// not also rearrange the page — the few that cannot apply to a closed session render as "—".
+let liveClients = [];
+let dayClients = [];
+let clRange = 'live';
+let clSort = { col: null, dir: 1 };
+let clFilter = '';
+
+// Each column: its label, the display value, and the value to SORT on. Sorting on the displayed
+// string would order "2 min" before "9 s" and 1,024 before 512 — the sort key has to be the
+// underlying number, which is why these are separate.
+const CL_COLS = [
+  { th: 'Client', get: (c) => c.ip || '?', key: (c) => ipKey(c.ip) },
+  { th: 'Device', get: (c) => (c.device ? (c.device.name || c.device.kind)
+      + (c.device.kind && c.device.name ? ` (${c.device.kind})` : '') : '—') },
+  { th: 'From', get: (c) => (c.origin && c.route ? c.origin + ' · ' + c.route : c.origin || c.route || '—') },
+  { th: 'Front door', get: (c) => c.host || '—' },
+  { th: 'User', get: (c) => c.user || '—' },
+  { th: 'Dashboard', get: (c) => c.dashboard || '(union — not attributed)' },
+  { th: 'Matched by', get: (c) => c.attributedVia || '—' },
+  { th: 'Entities', get: (c) => c.allowSize, key: (c) => c.allowSize || 0 },
+  { th: 'Payload', get: (c) => (c.initialPayloadBytes != null
+      ? kb(c.initialPayloadBytes) + (c.initialEntityCount != null ? ` / ${c.initialEntityCount}` : '') : '—'),
+    key: (c) => c.initialPayloadBytes ?? -1 },
+  { th: 'Ready in', get: (c) => (c.msToEntityData != null ? ms(c.msToEntityData) : '—'),
+    key: (c) => c.msToEntityData ?? -1 },
+  { th: 'On the wire', get: (c) => (c.initialDrainMs != null ? ms(c.initialDrainMs) : '—'),
+    key: (c) => c.initialDrainMs ?? -1 },
+  // "Connected" is time still connected for a live row and total time connected for a closed
+  // one; both are durations, so the column keeps one meaning.
+  { th: 'Connected', get: (c) => dur(c.connectedSec), key: (c) => c.connectedSec || 0 },
+  { th: 'Msgs', get: (c) => c.messages, key: (c) => c.messages || 0 },
+  // The last column is the one genuinely different between the two ranges: a live connection has
+  // a current rate, a closed one has a last-seen time and a session count.
+  { th: 'Updates/min', dayTh: 'Last seen',
+    get: (c) => (clRange === 'day'
+      ? dur(c.lastSeenSec) + ' ago' + (c.sessions > 1 ? ` · ${c.sessions} sessions` : '')
+      : kb(c.eventBytesPerMin)),
+    key: (c) => (clRange === 'day' ? -(c.lastSeenSec ?? 0) : (c.eventBytesPerMin || 0)) },
+];
+
+// Sort IP addresses numerically, so 10.2.4.9 comes before 10.2.4.113 rather than after it.
+// Anything that is not a dotted quad falls back to its own text.
+function ipKey(ip) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(String(ip || ''));
+  if (!m) return String(ip || '');
+  return ((+m[1] * 256 + +m[2]) * 256 + +m[3]) * 256 + +m[4];
+}
+
+function renderClients() {
+  const src = clRange === 'day' ? dayClients : liveClients;
+  const head = $('cl').querySelector('thead tr');
+  head.textContent = '';
+  CL_COLS.forEach((col, i) => {
+    const th = document.createElement('th');
+    th.textContent = (clRange === 'day' && col.dayTh) ? col.dayTh : col.th;
+    th.tabIndex = 0;
+    th.dataset.col = i;
+    th.className = 'sortable' + (clSort.col === i ? (clSort.dir > 0 ? ' up' : ' down') : '');
+    head.appendChild(th);
+  });
+
+  // Filter on what the row SHOWS, not on the raw object: the user is typing what they can see,
+  // and matching hidden fields would select rows for reasons nothing on screen explains.
+  const cells = (c) => CL_COLS.map((col) => String(col.get(c) ?? ''));
+  let list = src.map((c) => ({ c, txt: cells(c) }));
+  if (clFilter) {
+    const q = clFilter.toLowerCase();
+    list = list.filter((r) => r.txt.join(' ').toLowerCase().includes(q));
+  }
+  if (clSort.col != null) {
+    const col = CL_COLS[clSort.col];
+    const keyOf = (r) => (col.key ? col.key(r.c) : r.txt[clSort.col].toLowerCase());
+    list.sort((a, b) => {
+      const x = keyOf(a), y = keyOf(b);
+      if (typeof x === 'number' && typeof y === 'number') return (x - y) * clSort.dir;
+      return String(x).localeCompare(String(y)) * clSort.dir;
+    });
+  }
+
+  rows('cl', list, (r) => r.txt);
+  const msg = $('cl-msg');
+  if (!src.length) {
+    msg.style.display = '';
+    msg.textContent = clRange === 'day'
+      ? 'No client has disconnected in the last 24 hours. Everything seen is still connected.'
+      : 'Nothing connected right now.';
+  } else if (!list.length) {
+    msg.style.display = '';
+    msg.textContent = `No row matches "${clFilter}".`;
+  } else {
+    msg.style.display = 'none';
+  }
+}
+
+$('cl-range').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-range]');
+  if (!btn) return;
+  clRange = btn.dataset.range;
+  for (const b of $('cl-range').querySelectorAll('button')) b.classList.toggle('on', b === btn);
+  renderClients();
+});
+$('cl-filter').addEventListener('input', (e) => { clFilter = e.target.value.trim(); renderClients(); });
+// Delegated, because the header cells are rebuilt on every render.
+$('cl').querySelector('thead').addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-col]');
+  if (!th) return;
+  const i = Number(th.dataset.col);
+  clSort = clSort.col === i ? { col: i, dir: -clSort.dir } : { col: i, dir: 1 };
+  renderClients();
+});
+$('cl').querySelector('thead').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.target.click(); }
+});
+
+// ---- "How clients reach this" -------------------------------------------------------------
+//
+// A Sankey rather than a table because the question is about PAIRINGS: "the internet traffic —
+// which front door does it use?" The old table stacked three independent distributions in one
+// column, each summing to the same total separately, which is why it read as three unrelated
+// lists bolted together. Bands carry the pairing; the table underneath is kept for exact numbers
+// and is now one row per real path rather than three sets of marginals.
+//
+// Hand-rolled SVG, no charting library: a CDN script cannot load here anyway, and a three-column
+// Sankey with no crossing-minimisation to do is about sixty lines.
+let liveFlows = [];      // since restart, from stats.json
+let dayFlows = null;     // last 24h, from history.json (null until the first fetch lands)
+let pathsRange = 'live';
+let histSpanLabel = '24-hour';
+
+const svgEl = (name, attrs) => {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+};
+
+function drawSankey(host, flows) {
+  host.textContent = '';
+  const total = flows.reduce((a, f) => a + f.n, 0);
+  if (!total) {
+    const p = document.createElement('div');
+    p.className = 'note';
+    p.style.marginTop = '0';
+    p.textContent = pathsRange === 'day'
+      ? 'No connections recorded in the last 24 hours.'
+      : 'No connections yet.';
+    host.appendChild(p);
+    return;
+  }
+
+  const COLS = ['origin', 'route', 'host'];
+  // Draw at the container's real pixel width so the viewBox maps 1:1 to the screen. A fixed
+  // viewBox plus width:100% letterboxes instead: preserveAspectRatio fits the whole box into
+  // the smaller dimension, so a short wide diagram sat in the middle of the card with empty
+  // space either side, and every label was scaled rather than rendered at its own size.
+  const W = Math.max(460, Math.round(host.clientWidth || 720));
+  const PAD = 8, NODE_W = 10, GAP = 6, TOP = 22;
+  // Column x positions: a node bar, then room for its label before the next column.
+  const colX = [PAD, W / 2 - NODE_W / 2, W - PAD - NODE_W];
+
+  // Group flows into nodes per column, preserving first-seen order within a descending sort so
+  // the thickest band sits at the top and bands cross as little as possible.
+  const nodes = COLS.map(() => new Map());
+  for (const f of flows) {
+    COLS.forEach((key, i) => {
+      const v = f[key] || 'unknown';
+      nodes[i].set(v, (nodes[i].get(v) || 0) + f.n);
+    });
+  }
+  const ordered = nodes.map((m) => [...m].sort((a, b) => b[1] - a[1]));
+  const tallest = Math.max(...ordered.map((c) => c.length));
+  // Tall enough that a one-in-thirty path is still a band you can point at. Driven by the
+  // busiest column, because that is what has to fit.
+  const H = TOP + PAD + Math.max(170, 52 * tallest);
+  const usable = H - TOP - PAD;
+
+  // Every node gets a floor of MIN_H before anything is shared out proportionally.
+  //
+  // Strict proportionality is the obvious way to draw this and it is unreadable on real data: one
+  // route carrying 97% leaves the other two at a pixel each, with their labels landing on top of
+  // one another. Guaranteeing a minimum and distributing only the REMAINDER by share keeps every
+  // path visible and legible while the big ones still dominate. The numbers next to each label
+  // are what should be read for exact proportions — the bands are for shape.
+  const MIN_H = 15;
+  const pos = ordered.map((col, i) => {
+    const gaps = GAP * Math.max(col.length - 1, 0);
+    const avail = Math.max(usable - gaps, col.length * MIN_H);
+    const share = Math.max(avail - MIN_H * col.length, 0);
+    const m = new Map();
+    let y = TOP;
+    for (const [name, n] of col) {
+      const h = MIN_H + (total ? (n / total) * share : 0);
+      m.set(name, { y, h, n, cursorIn: y, cursorOut: y, x: colX[i] });
+      y += h + GAP;
+    }
+    return m;
+  });
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H,
+    role: 'img', 'aria-label': 'Connection paths from origin through route to hostname' });
+
+  ['Origin', 'Route', 'Hostname'].forEach((label, i) => {
+    const t = svgEl('text', { x: i === 2 ? W - PAD : colX[i], y: 11, class: 'col' });
+    if (i === 2) t.setAttribute('text-anchor', 'end');
+    t.textContent = label;
+    svg.appendChild(t);
+  });
+
+  // One band per link, drawn per adjacent column pair. Every band takes its colour from the
+  // ROUTE — the middle column — so for the left pair that is the band's target and for the right
+  // pair its source. Colouring both halves of a path the same way is what lets you follow "the
+  // Cloudflare traffic" across the whole diagram rather than only into the middle of it.
+  for (let i = 0; i < COLS.length - 1; i++) {
+    const links = new Map();
+    for (const f of flows) {
+      const k = `${f[COLS[i]] || 'unknown'}\u0000${f[COLS[i + 1]] || 'unknown'}`;
+      links.set(k, (links.get(k) || 0) + f.n);
+    }
+    for (const [k, n] of [...links].sort((a, b) => b[1] - a[1])) {
+      const [a, b] = k.split('\u0000');
+      const from = pos[i].get(a), to = pos[i + 1].get(b);
+      if (!from || !to) continue;
+      // A band is a share of the node at each END, and the two nodes are scaled independently
+      // once minimum heights are in play — so it is thicker where it leaves a small node than
+      // where it joins a large one. Drawing it with one thickness would make bands overflow
+      // their node or leave a gap inside it; a tapering ribbon is what actually fits.
+      const h0 = (n / from.n) * from.h;
+      const h1 = (n / to.n) * to.h;
+      const y0 = from.cursorOut, y1 = to.cursorIn;
+      from.cursorOut += h0; to.cursorIn += h1;
+      const x0 = from.x + NODE_W, x1 = to.x;
+      const mid = (x0 + x1) / 2;
+      const band = svgEl('path', {
+        class: 'band',
+        fill: routeColour(i === 0 ? b : a),
+        d: `M${x0},${y0} C${mid},${y0} ${mid},${y1} ${x1},${y1}`
+         + ` L${x1},${y1 + h1} C${mid},${y1 + h1} ${mid},${y0 + h0} ${x0},${y0 + h0} Z`,
+      });
+      const title = svgEl('title', {});
+      title.textContent = `${a} → ${b}: ${n} connection${n === 1 ? '' : 's'}`;
+      band.appendChild(title);
+      svg.appendChild(band);
+    }
+  }
+
+  // Nodes and labels last, so they sit above the bands.
+  pos.forEach((col, i) => {
+    for (const [name, p] of col) {
+      const rect = svgEl('rect', { class: 'node', x: p.x, y: p.y, width: NODE_W,
+        height: p.h, rx: 2 });
+      // Only the route column is coloured; the other two stay neutral so the colour means one
+      // thing on the whole diagram instead of three unrelated things.
+      if (i === 1) rect.setAttribute('fill', routeColour(name));
+      svg.appendChild(rect);
+      const anchor = i === 2 ? 'end' : 'start';
+      const tx = i === 2 ? p.x - 6 : p.x + NODE_W + 6;
+      const label = svgEl('text', { class: 'lbl', x: tx, y: p.y + p.h / 2 + 1,
+        'text-anchor': anchor, 'dominant-baseline': 'middle' });
+      label.textContent = name;
+      const pct = svgEl('tspan', { class: 'sub' });
+      pct.textContent = `  ${p.n} · ${Math.round((p.n / total) * 100)}%`;
+      label.appendChild(pct);
+      svg.appendChild(label);
+    }
+  });
+
+  host.appendChild(svg);
+
+  // Legend. Built from the routes actually present rather than from the palette, so it never
+  // advertises a front door this instance does not have.
+  const counts = new Map();
+  for (const f of flows) counts.set(f.route || 'unknown', (counts.get(f.route || 'unknown') || 0) + f.n);
+  const legend = document.createElement('div');
+  legend.className = 'legend';
+  for (const [route, n] of [...counts].sort((a, b) => b[1] - a[1])) {
+    const item = document.createElement('span');
+    const sw = document.createElement('i');
+    sw.style.background = routeColour(route);
+    item.appendChild(sw);
+    // textContent, not innerHTML: a route label is derived from request headers, and this panel
+    // renders it. Same rule as every other row in here.
+    item.appendChild(document.createTextNode(
+      `${route} — ${n} connection${n === 1 ? '' : 's'} (${Math.round((n / total) * 100)}%)`));
+    legend.appendChild(item);
+  }
+  host.appendChild(legend);
+}
+
+// A route's colour. Named routes get a deliberate one; anything unexpected gets a stable hue
+// derived from its own text, so a route this build has never heard of is still consistently
+// coloured rather than sharing "unknown" with everything else.
+function routeColour(route) {
+  const known = { direct: '--r-direct', proxy: '--r-proxy', cloudflare: '--r-cloudflare',
+    ingress: '--r-ingress', unknown: '--r-unknown' };
+  const varName = known[String(route || 'unknown').toLowerCase()];
+  if (varName) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+    if (v) return v;
+  }
+  let h = 0;
+  for (const ch of String(route || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `hsl(${h % 360} 55% 50%)`;
+}
+
+function renderPaths() {
+  const flows = pathsRange === 'day' ? (dayFlows || []) : liveFlows;
+  drawSankey($('sankey'), flows);
+  const total = flows.reduce((a, f) => a + f.n, 0) || 1;
+  rows('paths', flows, (f) => [f.origin, f.route, f.host, f.n,
+    ((f.n / total) * 100).toFixed(0) + '%']);
+  const span = $('paths-span');
+  if (pathsRange === 'day') {
+    span.textContent = dayFlows === null
+      ? ' Loading the 24-hour window…'
+      : ` Showing a ${histSpanLabel} window, sampled every 5 minutes.`;
+  } else {
+    span.textContent = '';
+  }
+}
+
+// The diagram is drawn at the container's pixel width, so a resized window needs a redraw or it
+// keeps the old one until the next poll. Debounced, because a drag fires this continuously.
+let sankeyResize;
+addEventListener('resize', () => {
+  clearTimeout(sankeyResize);
+  sankeyResize = setTimeout(renderPaths, 150);
+});
+
+$('paths-range').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-range]');
+  if (!btn) return;
+  pathsRange = btn.dataset.range;
+  for (const b of $('paths-range').querySelectorAll('button')) b.classList.toggle('on', b === btn);
+  renderPaths();
+});
 
 const NICE = {
   states: 'Entity states (get_states)',
@@ -446,30 +852,13 @@ async function tick() {
     ];
   });
 
-  rows('cl', s.clients.list, (c) => [
-    c.ip || '?',
-    c.device ? (c.device.name || c.device.kind) + (c.device.kind && c.device.name ? ` (${c.device.kind})` : '') : '—',
-    c.origin && c.route ? c.origin + ' · ' + c.route : c.origin || c.route || '—',
-    c.host || '—',
-    c.user || '—', c.dashboard || '(union — not attributed)', c.attributedVia || '—',
-    c.allowSize,
-    c.initialPayloadBytes != null
-      ? kb(c.initialPayloadBytes) + (c.initialEntityCount != null ? ` / ${c.initialEntityCount}` : '')
-      : '—',
-    c.msToEntityData != null ? ms(c.msToEntityData) : '—',
-    c.initialDrainMs != null ? ms(c.initialDrainMs) : '—',
-    dur(c.connectedSec), c.messages, kb(c.eventBytesPerMin),
-  ]);
+  liveClients = s.clients.list || [];
+  dayClients = s.clients.recent || [];
+  renderClients();
 
-  // Flattened to one table so a single glance answers "inside or outside, and through what".
-  const paths = s.paths || {};
-  const pathRows = [
-    ...Object.entries(paths.byOrigin || {}).map(([k, v]) => ['Origin', k, v]),
-    ...Object.entries(paths.byRoute || {}).map(([k, v]) => ['Route', k, v]),
-    ...Object.entries(paths.byHost || {}).map(([k, v]) => ['Hostname', k, v]),
-  ];
-  const pathTotal = s.clients.total || 1;
-  rows('paths', pathRows, ([cat, k, v]) => [cat, k, v, ((v / pathTotal) * 100).toFixed(0) + '%']);
+  // Kept for the "Since restart" view; the 24h view gets its flows from history.json instead.
+  liveFlows = (s.paths && s.paths.flows) || [];
+  renderPaths();
 }
 tick();
 setInterval(tick, 5000);
@@ -522,6 +911,17 @@ async function tickHistory() {
   } catch { return; }
 
   const s = h.samples || [];
+
+  // The Sankey's 24h view. Done BEFORE the two-sample guard below, because a flow diagram is
+  // perfectly meaningful from a single bucket — unlike a line chart, which needs two points to
+  // be a line at all. Bailing out early here would leave the 24h toggle empty for five minutes
+  // after every restart for no reason.
+  dayFlows = (h.totals && h.totals.flows) || [];
+  const spanH = (h.totals?.spanMs || 0) / 3600000;
+  histSpanLabel = spanH >= 23.5 ? 'full 24-hour'
+    : spanH < 1 ? `${Math.round(spanH * 60)}-minute` : `${spanH.toFixed(1)}-hour`;
+  if (pathsRange === 'day') renderPaths();
+
   // Two samples is the minimum that can draw a line; below that, say so rather than
   // rendering a single point as if it were a trend.
   $('histEmpty').hidden = s.length >= 2;

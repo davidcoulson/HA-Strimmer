@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026.09.14.19 — 2026-09-14
+
+**The stats panel answers "who is connected, from where" properly.**
+
+### "How clients reach this" is a diagram, not three stacked lists
+
+The old table put Origin, Route and Hostname in one column with a Category label. Three
+independent distributions, each summing to 100% separately, which is why it read as three
+unrelated lists bolted together — and it could not answer the obvious question, *"the traffic
+from outside, which front door does it use?"*, because the pairing was thrown away at the point
+of counting.
+
+Connections are now counted as a **joint distribution** — one counter per
+(origin, route, host) actually seen — and drawn as a Sankey, where the links *are* the pairings.
+Bands are coloured by route with a legend, so a front door can be followed across the whole
+diagram. **The three marginals are now summed from the joint rather than counted alongside it**,
+so the diagram and the table under it cannot disagree; the table remains behind "Show as a table"
+with one row per real path.
+
+A **Last 24h** toggle sits next to it. The history file already samples every five minutes and
+handles counters that reset; flows ride along in the same buckets, delta'd per key, so the 24h
+view survives restarts the same way the charts do.
+
+### Clients: 24 hours, sortable, filterable
+
+"Connected now" could not help with a panel that had *gone* — the row worth looking at is exactly
+the one that disappeared. The table now has a **Seen in 24h** range covering clients that have
+disconnected, folded to **one row per client** with a session count and a last-seen time, because
+a wall panel that reconnects every few minutes is one device, not three hundred rows.
+
+Every column **sorts** (on the underlying value, so 1,024 sorts above 512 and addresses sort
+numerically — 10.2.4.9 before 10.2.4.113), and a **filter box** matches on what a row displays.
+
+### The user column was blank on every wall panel
+
+Not a lookup that failed — a lookup that was never made. Identity was resolved only when a
+`user_overrides` rule could apply to that dashboard, which is a deliberate optimisation: it was
+added to fix a measured **1.6 second** per-page-load regression where every connection was held
+while the add-on resolved a user to reach a conclusion that could not change anything. With rules
+scoped to `lovelace`, every panel on another dashboard showed "—".
+
+Identity is now resolved for **reporting** too, but **without the gate** — fire-and-forget,
+cached per token, nothing waits on it. The test that pinned "no lookup at all" now pins the thing
+that actually mattered: the connection must not be *delayed*. It asserts both halves, because
+each alone is trivially satisfied — one by deleting the feature, the other by restoring the bug.
+
+### Also
+
+**A mock-HA bug that made the proxy look broken.** The harness pushed raw frames at whichever
+socket connected last, which was only ever accidentally right: it assumed one HA socket per
+browser. The moment a second socket existed, frames meant for the browser went to it — which
+reads exactly like the proxy dropping an allowed entity. It now tracks client sockets and
+excludes identity probes.
+
+---
+
+269 tests. Seven written this cycle, each verified by reintroducing the bug it was meant to catch.
+
 ## 2026.09.14.17 — 2026-09-14
 
 **Fixes a restart loop introduced by the port move in `2026.09.14.16`.**

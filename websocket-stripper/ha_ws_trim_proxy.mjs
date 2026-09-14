@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.17';
+const VERSION = '2026.09.14.19';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2136,6 +2136,19 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         if (user) stats.connIdentity(connId, { allowSize: allow.size, user: user.name ?? user.id });
       }).catch(() => {}).finally(openGate);
       return;
+    }
+    // No user rule could apply to this dashboard, so nothing about what gets SERVED depends on
+    // who this is — but the panel still has a "user" column, and leaving it blank made every
+    // wall panel look like an anonymous connection when the identity was simply never asked for.
+    // Resolve it for reporting only: no gate, no queue, nothing waits. The answer arrives when it
+    // arrives and updates the row in place, so this cannot add a millisecond to a page load.
+    // Cached per token like the gated path, so a panel that reconnects hourly asks HA once.
+    if (!userChecked && m && m.type === 'auth' && m.access_token && !userRulesCouldApply(dash)) {
+      userChecked = true;
+      resolveUser(m.access_token)
+        .then((user) => { if (user) stats.connIdentity(connId, { user: user.name ?? user.id }); })
+        .catch(() => {});
+      // Deliberately falls through: the auth message still has to reach HA the normal way.
     }
     if (m && m.id != null && m.type) {
       if (pendingTypes.size > 500) pendingTypes.clear();

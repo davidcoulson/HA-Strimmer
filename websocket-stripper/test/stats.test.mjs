@@ -574,3 +574,122 @@ describe('entity search', () => {
   } finally { proxy.kill(); await mock.close(); }
 });
 });
+
+// How connections reached the add-on, as a JOINT distribution.
+//
+// The panel draws this as a Sankey, and a Sankey's links ARE the pairings — which three
+// independently-counted marginals cannot reconstruct. These pin the two properties the diagram
+// depends on: the pairing survives recording, and the marginals are the joint summed, so the
+// diagram and the table underneath it cannot contradict each other.
+describe('connection paths', () => {
+  it('keeps origin, route and host together rather than counting them separately', () => {
+    stats.reset();
+    const open = (origin, route, host) => stats.connOpen({ ip: '10.0.0.1', origin, route, host });
+    open('lan', 'proxy', 'home.example.org');
+    open('lan', 'proxy', 'home.example.org');
+    open('internet', 'cloudflare', 'ha.example.org');
+    open('lan', 'direct', '10.0.0.6');
+
+    const { flows } = stats.snapshot().paths;
+    const find = (o, r, h) => flows.find((f) => f.origin === o && f.route === r && f.host === h);
+
+    assert.equal(find('lan', 'proxy', 'home.example.org').n, 2);
+    assert.equal(find('internet', 'cloudflare', 'ha.example.org').n, 1);
+    assert.equal(find('lan', 'direct', '10.0.0.6').n, 1);
+    // The pairing is the whole point: the internet connection must not be attributable to the
+    // LAN hostname, which is precisely what separate tallies would have allowed.
+    assert.equal(find('internet', 'cloudflare', 'home.example.org'), undefined);
+    assert.equal(flows.length, 3, 'one entry per distinct path, not per connection');
+    // Sorted so the panel can draw the thickest band first without re-sorting.
+    assert.deepEqual(flows.map((f) => f.n), [...flows.map((f) => f.n)].sort((a, b) => b - a));
+  });
+
+  it('derives every marginal from the joint, so none can disagree with it', () => {
+    stats.reset();
+    stats.connOpen({ ip: '1.1.1.1', origin: 'lan', route: 'proxy', host: 'a.example' });
+    stats.connOpen({ ip: '1.1.1.2', origin: 'lan', route: 'direct', host: 'a.example' });
+    stats.connOpen({ ip: '1.1.1.3', origin: 'internet', route: 'proxy', host: 'b.example' });
+
+    const p = stats.snapshot().paths;
+    const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+    const total = p.flows.reduce((a, f) => a + f.n, 0);
+
+    assert.equal(total, 3);
+    // Each marginal is a different partition of the SAME connections, so all three must total
+    // the same number. A separately-counted marginal is free to drift; a derived one is not.
+    assert.equal(sum(p.byOrigin), total, 'byOrigin must sum to the connection count');
+    assert.equal(sum(p.byRoute), total, 'byRoute must sum to the connection count');
+    assert.equal(sum(p.byHost), total, 'byHost must sum to the connection count');
+    assert.deepEqual(p.byOrigin, { lan: 2, internet: 1 });
+    assert.deepEqual(p.byRoute, { proxy: 2, direct: 1 });
+    assert.deepEqual(p.byHost, { 'a.example': 2, 'b.example': 1 });
+  });
+
+  it('labels a missing signal rather than dropping the connection from the diagram', () => {
+    stats.reset();
+    // An Ingress connection has no hostname the client dialled. Counting it as nothing would
+    // make the bands stop summing to the number of connections.
+    stats.connOpen({ ip: '172.30.32.1', origin: 'lan', route: 'ingress', host: null });
+    const p = stats.snapshot().paths;
+    assert.equal(p.flows.length, 1);
+    assert.equal(p.flows[0].host, 'unknown');
+    assert.equal(Object.values(p.byHost).reduce((a, b) => a + b, 0), 1);
+  });
+});
+
+// Clients seen in the last 24 hours but not connected now.
+//
+// The live list answers "what is connected", which is the wrong question when a panel has gone
+// dark — the row worth looking at is exactly the one that vanished. These pin the three things
+// that make that list readable rather than a reconnect log: a device folds into ONE row however
+// often it reconnects, a live client never appears in both lists at once, and a row leaves the
+// list when it ages out of the window.
+describe('clients seen in the last 24h', () => {
+  const openConn = (ip, dash) => stats.connOpen({ ip, dash, origin: 'lan', route: 'proxy', host: 'h' });
+
+  it('folds repeat connections from one client into a single row', () => {
+    stats.reset();
+    for (let i = 0; i < 5; i++) stats.connClose(openConn('10.0.0.9', 'kiosk'));
+    const recent = stats.snapshot().clients.recent;
+    assert.equal(recent.length, 1, 'five reconnects are one client, not five rows');
+    assert.equal(recent[0].sessions, 5, 'the reconnect count is what makes the fold honest');
+    assert.equal(recent[0].ip, '10.0.0.9');
+  });
+
+  it('never lists a client that is connected right now', () => {
+    stats.reset();
+    const first = openConn('10.0.0.10', 'kiosk');
+    stats.connClose(first);
+    assert.equal(stats.snapshot().clients.recent.length, 1, 'closed: it belongs in the 24h list');
+    // The same client comes back. It is now live, so it must leave the 24h list entirely rather
+    // than appear in both with two different sets of numbers.
+    const again = openConn('10.0.0.10', 'kiosk');
+    const snap = stats.snapshot();
+    assert.equal(snap.clients.recent.length, 0, 'a live client must not also be listed as recent');
+    assert.equal(snap.clients.list.length, 1);
+    stats.connClose(again);
+    assert.equal(stats.snapshot().clients.recent.length, 1, 'and returns to it once closed again');
+  });
+
+  it('keeps the identity details a closed row is looked up by', () => {
+    stats.reset();
+    const id = stats.connOpen({ ip: '10.0.0.11', dash: 'office', origin: 'internet',
+      route: 'cloudflare', host: 'ha.example.org' });
+    stats.connIdentity(id, { user: 'David Coulson', allowSize: 42 });
+    stats.connClose(id);
+    const r = stats.snapshot().clients.recent[0];
+    assert.equal(r.user, 'David Coulson', 'the user must survive into the 24h list');
+    assert.equal(r.dashboard, 'office');
+    assert.equal(r.route, 'cloudflare');
+    assert.equal(r.allowSize, 42);
+    assert.ok(Number.isFinite(r.lastSeenSec), 'a closed row is ordered and read by when it was last seen');
+  });
+
+  it('separates clients that share an address but not a dashboard', () => {
+    stats.reset();
+    stats.connClose(openConn('10.0.0.12', 'kiosk'));
+    stats.connClose(openConn('10.0.0.12', 'office'));
+    const recent = stats.snapshot().clients.recent;
+    assert.equal(recent.length, 2, 'one browser on two dashboards is two things worth seeing');
+  });
+});

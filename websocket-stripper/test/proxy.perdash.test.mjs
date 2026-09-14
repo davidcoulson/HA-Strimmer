@@ -1186,8 +1186,13 @@ describe('per-user gate is skipped when no rule could match', () => {
 
   after(() => { proxy?.kill(); mock?.close(); });
 
-  it('does not resolve the user for a dashboard no rule is scoped to', async () => {
-    mock.setCurrentUserDelay?.(400);           // a lookup, if it happens, is unmissable
+  // The identity of a connection no rule can match is still worth KNOWING — the stats panel has
+  // a user column, and leaving it blank made every wall panel look anonymous when the truth was
+  // that nobody had asked. So the lookup happens; what must not happen is the connection WAITING
+  // for it. That distinction is the whole point: the original 1.6s-per-load regression was not
+  // caused by looking the user up, it was caused by holding the client until the answer arrived.
+  it('resolves the user for reporting without making the connection wait for it', async () => {
+    mock.setCurrentUserDelay?.(400);           // a gate, if there is one, is unmissable
     // Attribute the connection to test-dash first. Unattributed connections still gate, and
     // deliberately so — we cannot rule a rule out when we do not know the dashboard.
     await httpGet(`http://127.0.0.1:${port}/test-dash/main`);
@@ -1195,10 +1200,21 @@ describe('per-user gate is skipped when no rule could match', () => {
     const seq = mock.subscribeEntitiesSeq();
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
     await c.authed;
+    const t0 = Date.now();
     c.send({ type: 'subscribe_entities', id: 60 });
     await mock.waitForSubscribeEntities(seq);
-    assert.equal(mock.rpcCount('auth/current_user'), before,
-      'a connection no user rule can match must not pay for a user lookup');
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 300,
+      `the subscription must not wait on the 400ms user lookup (took ${elapsed}ms)`);
+
+    // ...and the lookup still happens, off to one side. Without this half the test is satisfied
+    // by never resolving the user at all, which is the behaviour being replaced.
+    const deadline = Date.now() + 5000;
+    while (mock.rpcCount('auth/current_user') === before && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.ok(mock.rpcCount('auth/current_user') > before,
+      'the user must still be resolved, so the panel can report who this is');
     c.close();
   });
 });

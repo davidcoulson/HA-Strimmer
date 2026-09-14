@@ -112,3 +112,60 @@ describe('history persistence', () => {
     history.stop();
   });
 });
+
+// Connection flows over the window, which the panel's "Last 24h" Sankey reads.
+//
+// Flows are a MAP of counters rather than one number, so the restart rule has to be applied per
+// key — and a key can also appear for the first time mid-window, which from the delta's point of
+// view is indistinguishable from a restart and must be treated the same way.
+describe('history flows', () => {
+  beforeEach(() => history.reset());
+
+  const withFlows = (flows) => ({
+    savings: { saved: 0, before: 0 },
+    eventStream: { bytes: 0 },
+    registryCache: { hits: 0 },
+    clients: { open: 1 },
+    paths: { flows },
+  });
+
+  it('sums each path across the window', () => {
+    history.push(withFlows([{ origin: 'lan', route: 'proxy', host: 'a', n: 2 }]), 1000);
+    // Cumulative counter: 5 total means 3 more in this bucket.
+    history.push(withFlows([{ origin: 'lan', route: 'proxy', host: 'a', n: 5 }]), 2000);
+    const { flows } = history.history().totals;
+    assert.deepEqual(flows, [{ origin: 'lan', route: 'proxy', host: 'a', n: 5 }]);
+  });
+
+  it('treats a counter that went backwards as a restart, not a negative bucket', () => {
+    history.push(withFlows([{ origin: 'lan', route: 'proxy', host: 'a', n: 10 }]), 1000);
+    // The add-on restarted: the counter is now counting up from zero again.
+    history.push(withFlows([{ origin: 'lan', route: 'proxy', host: 'a', n: 3 }]), 2000);
+    const { flows } = history.history().totals;
+    // 10 before the restart plus 3 after it. The bug this guards against is 10 + (3 - 10) = 3,
+    // which silently erases everything that happened before the restart.
+    assert.equal(flows[0].n, 13);
+    assert.ok(flows.every((f) => f.n > 0), 'no bucket may contribute a negative count');
+  });
+
+  it('counts a path first seen mid-window from zero rather than from nothing', () => {
+    history.push(withFlows([{ origin: 'lan', route: 'proxy', host: 'a', n: 4 }]), 1000);
+    history.push(withFlows([
+      { origin: 'lan', route: 'proxy', host: 'a', n: 4 },
+      { origin: 'internet', route: 'cloudflare', host: 'b', n: 2 },
+    ]), 2000);
+    const { flows } = history.history().totals;
+    const b = flows.find((f) => f.host === 'b');
+    assert.equal(b.n, 2, 'a newly-seen path contributes its whole count');
+    assert.equal(flows.find((f) => f.host === 'a').n, 4, 'an unchanged path adds nothing');
+  });
+
+  it('keeps flows out of the window once their buckets age out', () => {
+    const DAY = 24 * 3600 * 1000;
+    const now = Date.now();
+    history.push(withFlows([{ origin: 'lan', route: 'proxy', host: 'old', n: 9 }]), now - DAY - 60000);
+    history.push(withFlows([{ origin: 'lan', route: 'proxy', host: 'new', n: 1 }]), now);
+    const hosts = history.history().totals.flows.map((f) => f.host);
+    assert.ok(!hosts.includes('old'), 'a bucket older than the window must not be counted');
+  });
+});
