@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.09.14.14 — 2026-09-14
+
+**Search the whole instance for a missing entity, and send it — from the panel.**
+
+"This card is blank" has always ended the same way: work out which entity it needs, decide the
+allowlist is not carrying it, then hand-edit `always_forward` and restart. The panel could not
+help, because an entity outside the allowlist appears **nowhere in the stats** — by definition.
+
+New card in the stats panel with a search box over every entity on the instance, showing whether
+each is currently being sent, and an **Always send** button next to the ones that are not.
+
+- `GET /entities.json?q=…` — searches entity_id and friendly name, flags what the allowlist
+  already carries, and reports what is already pinned so the button is not offered twice.
+  Read-only, so it is not behind the Ingress gate.
+- `POST /pin-entity` — appends a **literal** entity_id to `always_forward`. Ingress-only, exactly
+  like `/pin-resource`: it changes app configuration. A literal rather than a pattern because the
+  panel offers it from a search result, so the exact id is already known and a regex is only a way
+  to get it wrong. The id is checked against the instance first — pinning a typo would sit in the
+  config matching nothing, which looks identical to the feature not working.
+
+`never_forward` still wins over anything pinned this way, and a restart is still needed to apply
+it — both stated in the panel rather than left to be discovered.
+
+The search debounces at 200ms; ~9,600 entities are held as id and name alone, which is a rounding
+error beside the 10MB entity registry sitting next to them.
+
 ## 2026.09.14.13 — 2026-09-14
 
 **The device and area registries were trimmed to the union of every dashboard, not to the

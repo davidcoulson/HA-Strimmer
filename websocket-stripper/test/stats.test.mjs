@@ -515,3 +515,62 @@ describe('registry cache hit rate', () => {
     assert.equal(stats.snapshot().registryCache.hitRatePct, 0);
   });
 });
+
+// Searching for an entity that was dropped is the answer to "why is this card blank", and it is
+// the one question the panel could not previously answer: an entity outside the allowlist appears
+// nowhere else in the stats, by definition.
+describe('entity search', () => {
+  it('finds entities in and out of the allowlist, and pinning is Ingress-only', async () => {
+  const mock = await startMockHa();
+  const port = await getFreePort();
+  const statsPort = await getFreePort();
+  const proxy = spawn(process.execPath, [PROXY], {
+    cwd: path.join(DIR, '..'),
+    env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
+           PORT: String(port), STATS_PORT: String(statsPort), STRIP_ENTITIES: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  proxy.stdout.on('data', (b) => { out += b.toString(); });
+  proxy.stderr.on('data', (b) => { out += b.toString(); });
+  const deadline = Date.now() + 10000;
+  while (!/union allowlist for/.test(out)) {
+    if (Date.now() > deadline) throw new Error(`proxy never started\n${out}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  const get = (p) => new Promise((resolve, reject) => {
+    const r = http.get({ host: '127.0.0.1', port: statsPort, path: p }, (res) => {
+      let b = ''; res.on('data', (c) => b += c);
+      res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(b) }));
+    });
+    r.on('error', reject);
+  });
+
+  try {
+    // light.decoy exists on the instance and is on no dashboard — precisely the case this is for.
+    const dropped = await get('/entities.json?q=decoy');
+    assert.equal(dropped.status, 200);
+    const decoy = dropped.json.matches.find((m) => m.entity_id === 'light.decoy');
+    assert.ok(decoy, 'an entity outside the allowlist must still be findable');
+    assert.equal(decoy.kept, false, 'and must be reported as not currently sent');
+
+    const kept = await get('/entities.json?q=living_room');
+    const lr = kept.json.matches.find((m) => m.entity_id === 'light.living_room');
+    assert.ok(lr && lr.kept === true, 'an allowlisted entity is reported as sent');
+
+    // The write is a configuration change, so it carries the same Ingress gate as /pin-resource.
+    const post = await new Promise((resolve, reject) => {
+      const data = JSON.stringify({ entity_id: 'light.decoy' });
+      const r = http.request({ host: '127.0.0.1', port: statsPort, path: '/pin-entity', method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+        let b = ''; res.on('data', (c) => b += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: b }));
+      });
+      r.on('error', reject); r.end(data);
+    });
+    assert.equal(post.status, 403, 'a direct write must be refused, exactly like pin-resource');
+    assert.match(post.body, /Ingress/);
+  } finally { proxy.kill(); await mock.close(); }
+});
+});

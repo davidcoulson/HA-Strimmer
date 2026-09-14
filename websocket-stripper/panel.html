@@ -105,6 +105,27 @@
   </div>
 
   <div class="card">
+    <h2>Find a missing entity</h2>
+    <div class="note">If a card is blank or a value never updates, the entity it needs is probably
+      not in this dashboard's allowlist — the app only sends what it can see a dashboard
+      reference, and some cards name their entities somewhere it cannot read (panel-side
+      JavaScript, a template it cannot resolve, an integration that renames things). Search the
+      whole instance here and send it anyway.
+      <div style="margin-top:.5rem">Pinning writes a literal entity_id to <code>always_forward</code>
+      and needs an app restart to take effect. <code>never_forward</code> still wins over it.</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="ent-q" type="search" placeholder="entity id or name — e.g. assist_satellite, porch, vacuum"
+             autocomplete="off" spellcheck="false"
+             style="flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit">
+    </div>
+    <div id="ent-wrap" class="tblwrap" style="display:none"><table id="ent"><thead>
+      <tr><th>Entity</th><th>Name</th><th>Sent now</th><th></th></tr>
+    </thead><tbody></tbody></table></div>
+    <div id="ent-msg" class="note" style="display:none"></div>
+  </div>
+
+  <div class="card">
     <h2>Connected now</h2>
     <div class="scroll"><table id="cl"><thead>
       <tr><th>Client</th><th>Device</th><th>From</th><th>Front door</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
@@ -214,6 +235,61 @@ const NICE = {
   resources: 'Custom cards (resources)',
   services: 'Service list (get_services)',
 };
+
+let entTimer = null;
+async function searchEntities(q) {
+  const wrap = $('ent-wrap'); const tb = $('ent').tBodies[0];
+  if (!q || q.length < 2) { wrap.style.display = 'none'; return; }
+  let j;
+  try {
+    const r = await fetch('./entities.json?limit=40&q=' + encodeURIComponent(q));
+    j = await r.json();
+  } catch (e) { return; }
+  tb.innerHTML = '';
+  const pinned = new Set(j.pinned || []);
+  for (const m of j.matches) {
+    const tr = tb.insertRow();
+    tr.insertCell().textContent = m.entity_id;
+    tr.insertCell().textContent = m.name || '';
+    // "Sent now" is the union allowlist — the entity may still be absent from the ONE dashboard
+    // you are looking at, which is why the button stays available either way.
+    tr.insertCell().textContent = m.kept ? 'yes' : 'no';
+    const td = tr.insertCell();
+    if (pinned.has(m.entity_id)) { td.textContent = 'pinned'; continue; }
+    const btn = document.createElement('button');
+    btn.textContent = 'Always send';
+    btn.style.cssText = 'padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer';
+    btn.onclick = () => pinEntity(m.entity_id, btn);
+    td.appendChild(btn);
+  }
+  wrap.style.display = j.matches.length ? '' : 'none';
+  const msg = $('ent-msg');
+  if (!j.matches.length) {
+    msg.style.display = ''; msg.textContent = 'No entity matches "' + q + '" on this instance.';
+  } else { msg.style.display = 'none'; }
+}
+
+async function pinEntity(id, btn) {
+  const msg = $('ent-msg');
+  btn.disabled = true; btn.textContent = 'pinning…';
+  try {
+    const r = await fetch('./pin-entity', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ entity_id: id }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    btn.textContent = j.already ? 'already pinned' : 'pinned';
+    msg.style.display = '';
+    msg.innerHTML = j.already
+      ? '<b>' + id + '</b> was already in <code>always_forward</code>.'
+      : '<b>' + id + '</b> added to <code>always_forward</code>. Restart the app to apply it.';
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Always send';
+    msg.style.display = '';
+    msg.innerHTML = '<span class="err">Could not pin ' + id + ': ' + e.message + '</span>';
+  }
+}
 
 async function pinResource(fragment, btn) {
   const msg = $('tuning-msg');
@@ -396,6 +472,14 @@ async function tick() {
 }
 tick();
 setInterval(tick, 5000);
+
+// Debounced so a search over ~9,600 entities is not re-run on every keystroke. 200ms is below
+// the threshold where typing feels laggy and well above a fast typist's inter-key gap.
+$('ent-q').addEventListener('input', (e) => {
+  clearTimeout(entTimer);
+  const q = e.target.value;
+  entTimer = setTimeout(() => searchEntities(q.trim()), 200);
+});
 
 // ---- 24h charts -------------------------------------------------------------------------
 // Inline SVG rather than a charting library: the page must stay self-contained, and three

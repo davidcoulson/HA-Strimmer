@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.13';
+const VERSION = '2026.09.14.14';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -541,6 +541,12 @@ async function buildAllow(rpc, renderTemplate) {
   // Do NOT learn it from a browser's get_states instead: the modern frontend subscribes
   // rather than polling, so that path can go a whole uptime without ever firing.
   INSTANCE_ENTITIES = states.length;
+  // Every entity on the instance, with its friendly name, so the panel can search for one that
+  // was dropped. Held because the alternative is asking HA again on every keystroke, and because
+  // the interesting question — "why is this entity not on my dashboard" — is asked about
+  // entities the allowlist does NOT contain, which by definition appear nowhere else in here.
+  // ~9,600 short strings; the entity registry it sits beside is 10MB.
+  ALL_ENTITIES = states.map((e) => [e.entity_id, e.attributes?.friendly_name ?? null]);
   const byId = new Map(states.map((st) => [st.entity_id, st]));
   const registries = await fetchRegistries(rpc);
   // Resolve client-pinned rules here: the device registry has just been fetched, and doing it
@@ -1205,6 +1211,8 @@ let RESOURCE_UNMET_COVERAGE = { checkable: 0, unknowable: 0 };
 // How big the instance actually is, taken from the control connection's own get_states —
 // which asks for everything by definition. Lets the panel say "104 of 9,751", not just "104".
 let INSTANCE_ENTITIES = 0;
+// [[entity_id, friendly_name]] for the whole instance. See buildAllow.
+let ALL_ENTITIES = [];
 
 // Every token a dashboard might need a resource FOR: `custom:x` card/row/badge/feature types,
 // and icon-pack prefixes (`foo:bar` where foo isn't built in).
@@ -2739,6 +2747,25 @@ async function pinResource(fragment) {
   return { already: false, list };
 }
 
+// The entity equivalent of pinResource. A literal entity_id, not a pattern: the panel offers
+// this from a search result, so the exact id is already known and a regex would be a way to get
+// it wrong. `never_forward` still wins afterwards, as it does over everything.
+async function pinEntity(entityId) {
+  if (!inAddon) throw new Error('not running as an add-on');
+  const headers = { Authorization: `Bearer ${process.env.SUPERVISOR_TOKEN}`, 'content-type': 'application/json' };
+  const cur = await (await fetch('http://supervisor/addons/self/info', { headers, signal: AbortSignal.timeout(8000) })).json();
+  const options = { ...(cur?.data?.options ?? {}) };
+  const list = Array.isArray(options.always_forward) ? [...options.always_forward] : [];
+  if (list.includes(entityId)) return { already: true, list };
+  list.push(entityId);
+  options.always_forward = list;
+  const res = await fetch('http://supervisor/addons/self/options', {
+    method: 'POST', headers, body: JSON.stringify({ options }), signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`supervisor returned ${res.status}`);
+  return { already: false, list };
+}
+
 const statsServer = http.createServer((req, res) => {
   // Ingress rewrites the path prefix, so match on the tail rather than the whole URL.
   const path = String(req.url || '/').split('?')[0].replace(/\/+$/, '') || '/';
@@ -2762,6 +2789,59 @@ const statsServer = http.createServer((req, res) => {
         }
         const out = await pinResource(fragment.trim());
         log(`resource pinned via panel: ${fragment.trim()}${out.already ? ' (already present)' : ''} — restart to apply`);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ...out, restartRequired: !out.already }));
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+  // Search every entity on the instance, flagging which the union allowlist already carries.
+  // Read-only, so it is not behind the Ingress gate that writes are.
+  if (path.endsWith('/entities.json')) {
+    const u = new URL(req.url, 'http://x');
+    const q = (u.searchParams.get('q') || '').trim().toLowerCase();
+    const limit = Math.min(Number(u.searchParams.get('limit')) || 50, 200);
+    const matches = [];
+    for (const [id, name] of ALL_ENTITIES) {
+      if (q && !id.toLowerCase().includes(q) && !(name || '').toLowerCase().includes(q)) continue;
+      matches.push({ entity_id: id, name, kept: ALLOW.has(id) });
+      if (matches.length >= limit) break;
+    }
+    const body = JSON.stringify({
+      query: q, total: ALL_ENTITIES.length, shown: matches.length, matches,
+      // So the panel can say "already pinned" rather than offering the button twice.
+      pinned: ALWAYS.map((r) => r.literal).filter(Boolean),
+    });
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(body);
+  }
+  // Always-forward one entity. Ingress only, exactly like /pin-resource.
+  if (path.endsWith('/pin-entity') && req.method === 'POST') {
+    if (!viaIngress(req)) {
+      logThrottled('pin-denied', `refused an entity pin from ${clientIp(req) ?? '?'} — writes are Ingress-only`);
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
+    }
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { entity_id: id } = JSON.parse(body || '{}');
+        // Must be a real entity_id, and one that actually exists: pinning a typo would sit in
+        // the config forever matching nothing, which is indistinguishable from it not working.
+        if (typeof id !== 'string' || !/^[a-z_]+\.[a-z0-9_]+$/.test(id)) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'not a valid entity_id' }));
+        }
+        if (ALL_ENTITIES.length && !ALL_ENTITIES.some(([e]) => e === id)) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: `no such entity on this instance: ${id}` }));
+        }
+        const out = await pinEntity(id);
+        log(`entity pinned via panel: ${id}${out.already ? ' (already present)' : ''} — restart to apply`);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, ...out, restartRequired: !out.already }));
       } catch (e) {
