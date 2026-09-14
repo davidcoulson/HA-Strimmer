@@ -243,6 +243,14 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     unsubscribed: () => state.unsubscribed,
     setHangTemplates(v) { state.hangTemplates = v; },
     setHangHttp(v) { state.hangHttp = v; },
+    // Rewrite a resource's URL in place, the way a HACS update does: same path, same id, new
+    // cache-busting query string. Deliberately does NOT notify anyone — the whole point of the
+    // bug it reproduces is that the proxy is not told.
+    bumpResourceQuery(pathFragment, qs) {
+      for (const r of resources) {
+        if (r.url.includes(pathFragment)) r.url = r.url.split('?')[0] + qs;
+      }
+    },
     setCurrentUserDelay(ms) { state.currentUserDelayMs = ms; },
     // Push an entity event on every active subscribe_entities subscription.
     pushEntityEvent(payload) {

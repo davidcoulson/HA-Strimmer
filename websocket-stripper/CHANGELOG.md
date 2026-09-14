@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026.09.13.37 — 2026-09-13
+
+**A custom card disappeared whenever HACS updated it. Reported by the lovelace-navbar-card
+author, and it was never specific to that card.**
+
+`trim_resources` decided which Lovelace resources a dashboard needs and kept them **by full
+URL**. HACS appends a cache-busting `?hacstag=<id><version>` and bumps it on *every* update, so
+the moment a card was updated the URL the frontend asked for no longer matched the one the
+allowlist had decided to keep — and the resource was silently dropped. Same path, same file,
+same resource id; one digit of a query string.
+
+The failure is completely silent. No console error, no network request, nothing in the Home
+Assistant log: the custom element simply never registers and the dashboard renders
+`hui-error-card` with empty text. Diagnosing one instance meant reading the proxy's own
+`lovelace/resources` reply and diffing it against HA's stored collection.
+
+Every installed module was queued up behind this, not just the one that happened to update.
+
+Three fixes:
+
+**A resource's identity is its path.** The query string is a cache-buster, not part of what the
+resource *is*, so the keep-set and the serve-time filter both key on the path now. The query is
+passed through to the browser **verbatim** — it is the cache-buster, and serving a stale one
+would defeat the update. The body cache stays keyed by full URL, correctly: a new version tag
+means genuinely different bytes to fetch and re-scan.
+
+The same function was already calling `url.split('?')[0]` — but only to render the dropped-list
+log for humans. It knew the query was not identity when showing a resource, and forgot when
+matching one.
+
+**The proxy now watches the resource collection.** This needed checking rather than assuming:
+Lovelace resources are **not on the event bus**. `hass.bus.async_fire` is never called for
+storage collections, so there is no `subscribe_events` topic — which is why `allowlist_rebuilds`
+sat at `0` through the whole episode. They notify over a per-collection websocket subscription
+instead (`DictStorageCollectionWebsocket._ws_subscribe`), so the control connection subscribes to
+`lovelace/resources/subscribe` and rebuilds on a change. Best-effort: it is not part of the
+documented websocket API, so a failure logs one line and everything else carries on.
+
+**The silent failure is now loud.** When a dashboard needs a card type that no surviving resource
+provides, that is logged at build time with the card named and what to do about it — both halves
+are in hand there, so it costs nothing:
+
+```
+!! resources basement-stairs-panel: 1 card type(s) NEEDED but no kept resource provides them:
+   navbar-card — these will render as an error card with no message.
+```
+
+The regression test bumps a resource's query string **without** telling the proxy, which is the
+real sequence, and was verified to fail when the path-based identity is reverted.
+
 ## 2026.09.13.36 — 2026-09-13
 
 **A stalled Home Assistant is now a 502 instead of a hang.**

@@ -577,6 +577,42 @@ describe('resource trimming', () => {
     } finally { px.kill(); await m2.close(); }
   });
 
+  // Reported by the lovelace-navbar-card author. A HACS update rewrote one resource's
+  // cache-busting query string — `?hacstag=...62` to `...63` — and the card vanished from every
+  // dashboard: no console error, no network request, an error card with empty text. The path
+  // never moved and the file never moved; only the query did.
+  //
+  // The keep-set was built from the FULL url, so a changed query matched nothing and the
+  // resource was dropped. Not specific to that card either: every HACS update of any installed
+  // module was queued up behind the same bug.
+  //
+  // Its OWN mock and proxy, because it mutates a resource URL and must not leak that into the
+  // tests above. The URL is bumped WITHOUT a rebuild, deliberately — not being told is exactly
+  // what happens in the real failure.
+  it('survives a HACS cache-buster change without a rebuild (query string is not identity)', async () => {
+    const m2 = await startMockHa({ configs: { 'res-dash': CFG } });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'res-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const before = await resourcesFor(p2, '/res-dash');
+      assert.ok(before.some((u) => u.startsWith('/res/my-fancy-card.js')),
+        'baseline: the card resource is served before the bump');
+
+      m2.bumpResourceQuery('my-fancy-card', '?hacstag=1361984262163');
+
+      const after = await resourcesFor(p2, '/res-dash');
+      const card = after.find((u) => u.startsWith('/res/my-fancy-card.js'));
+      assert.ok(card, 'the resource must survive a query-string change it was never told about');
+      // The query must reach the frontend verbatim — it is the browser's cache-buster, so
+      // handing back the old one would serve a stale file.
+      assert.equal(card, '/res/my-fancy-card.js?hacstag=1361984262163',
+        'the new query string must be passed through untouched');
+      assert.ok(!after.includes('/res/unrelated-widget.js'),
+        'and trimming still works — this is not a test that everything is now forwarded');
+    } finally { px.kill(); await m2.close(); }
+  });
+
   it('trim_resources off (the default) leaves the list untouched', async () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'res-dash', port: p2 });

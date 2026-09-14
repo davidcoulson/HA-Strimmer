@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.36';
+const VERSION = '2026.09.13.37';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -373,6 +373,9 @@ function registryEventMatters(eventType, data) {
   return false;
 }
 
+// Subscription id for the lovelace resource collection, or null when unavailable. Module scope
+// because the control socket is rebuilt on reconnect and the id must not leak across sockets.
+let resourceSubId = null;
 const WATCH_EVENTS = ['lovelace_updated', 'entity_registry_updated', 'device_registry_updated', 'area_registry_updated', 'label_registry_updated'];
 
 // Allowlist for one dashboard = entities used across ALL its views. Two passes unioned:
@@ -722,6 +725,28 @@ function startController() {
             // to (issue #4). Rebuild (debounced) on any of them.
             for (const ev of WATCH_EVENTS) await rpc({ type: 'subscribe_events', event_type: ev });
             log(`watching ${WATCH_EVENTS.join(', ')} for live allowlist updates`);
+
+            // Lovelace RESOURCES are not on the event bus. Home Assistant's storage collections
+            // notify in-process listeners and over a per-collection websocket subscription —
+            // `hass.bus.async_fire` is never called for them — so no `subscribe_events` topic
+            // exists to watch, and a resource added, removed or re-versioned was invisible here
+            // until the next restart. Verified against helpers/collection.py before relying on
+            // it: the mechanism is DictStorageCollectionWebsocket's `_ws_subscribe`.
+            //
+            // Best-effort on purpose. It is not part of the documented websocket API and could
+            // be renamed, so a failure is logged once and everything else carries on — with the
+            // path-based identity above, the case this still covers is a resource genuinely
+            // being ADDED or REMOVED, not merely re-versioned.
+            if (TRIM_RESOURCES) {
+              try {
+                resourceSubId = await rpc({ type: 'lovelace/resources/subscribe' });
+                log('watching lovelace/resources for added or removed custom cards');
+              } catch (e) {
+                resourceSubId = null;
+                log(`  note: lovelace/resources/subscribe unavailable (${e.message}) — a resource `
+                  + 'added or removed while running needs a restart to be seen');
+              }
+            }
           } catch (e) {
             // HA answered the handshake but died mid-build (a restart in progress). Drop the
             // socket so onGone() schedules a retry — never leave a half-set-up control ws.
@@ -738,6 +763,13 @@ function startController() {
         // An invalid template fails at `result` time and never emits an event.
         if (m.type === 'result' && tplWaiters.has(m.id) && !m.success) {
           settleTpl(m.id, new Error(m.error?.message || 'render_template failed'));
+          return;
+        }
+        // A resource collection change set. Shape is the collection's own, not a bus event, so
+        // it is matched by subscription id rather than by event_type.
+        if (m.type === 'event' && resourceSubId !== null && m.id === resourceSubId) {
+          log('lovelace resources changed — rebuilding');
+          scheduleRecompute('resources');
           return;
         }
         if (m.type === 'event' && WATCH_EVENTS.includes(m.event?.event_type)) {
@@ -1181,6 +1213,19 @@ const bodyHasIcon = (body, ns) => body.includes(ns + ':') || ICON_REG(ns).test(b
 // `/hacsfiles/kiosk-mode/kiosk-mode.js?hacstag=1234567890`; they want to write `kiosk-mode`.
 const matchesUrl = (rules, url) => rules.some((r) => (r.re ? r.re.test(url) : url.includes(r.literal)));
 
+// A resource's IDENTITY is its path. The query string is a cache-buster, not part of what the
+// resource IS: HACS appends `?hacstag=<id><version>` and bumps it on every single update, and
+// other setups use `?v=`. Keying the keep-set on the full URL therefore guaranteed a silent
+// breakage on EVERY card update — the path never moved, the file never moved, but the URL the
+// frontend asked for no longer matched the one we had decided to keep, so the resource was
+// dropped and the card rendered as an error with no message anywhere.
+//
+// Reported by the lovelace-navbar-card author, found on a HACS bump from ...62 to ...63.
+//
+// Note the body cache (RESOURCE_CACHE) is still keyed by FULL url, and correctly so: a new
+// version tag means genuinely different bytes to fetch and re-scan. Only identity is path-based.
+const resourcePath = (url) => String(url ?? '').split('?')[0];
+
 function keepResource(url, keys) {
   if (matchesUrl(RES_NEVER, url)) return false;
   if (matchesUrl(RES_ALWAYS, url)) return true;
@@ -1256,18 +1301,34 @@ async function buildResources(rpc, keysByDash) {
     let keptB = 0, dropB = 0;
     for (const r of rows) {
       const bytes = RESOURCE_CACHE.get(r.url)?.bytes || 0;
-      if (keepResource(r.url, keys)) { keep.add(r.url); keptB += bytes; }
+      if (keepResource(r.url, keys)) { keep.add(resourcePath(r.url)); keptB += bytes; }
       else dropB += bytes;
     }
     byDash.set(dash, keep);
     RESOURCE_DROPPED_BY_DASH.set(dash, rows
-      .filter((r) => !keep.has(r.url))
+      .filter((r) => !keep.has(resourcePath(r.url)))
       .map((r) => ({ url: r.url.split('?')[0], kb: Math.round((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024) }))
       .sort((a, b) => b.kb - a.kb));
     RESOURCE_STATS.set(dash, {
       kept: keep.size, dropped: rows.length - keep.size,
       keptKB: Math.round(keptB / 1024), droppedKB: Math.round(dropB / 1024),
     });
+    // A card this dashboard NEEDS whose resource did not survive the trim. This is the failure
+    // that is otherwise completely silent: no console error, no network request, no HA log —
+    // the custom element simply never registers and the dashboard renders `hui-error-card`
+    // with empty text. Diagnosing one instance meant reading the proxy's own
+    // `lovelace/resources` reply and diffing it against HA's stored collection.
+    //
+    // Cheap to detect here, because both halves are in hand: what the dashboard asked for, and
+    // what survived. Logged per dashboard rather than throttled, since it is rare and each
+    // occurrence names a specific broken card.
+    const unmet = [...keys.cards].filter((c) => !rows.some((r) =>
+      keep.has(resourcePath(r.url)) && cardMatchesBody(c, RESOURCE_CACHE.get(r.url) || {}))).sort();
+    if (unmet.length) {
+      log(`  !! resources ${dash}: ${unmet.length} card type(s) NEEDED but no kept resource provides them: `
+        + `${unmet.join(', ')} — these will render as an error card with no message. `
+        + `Add a matching fragment to resources_always_forward, or set trim_resources: false.`);
+    }
     const needs = [...[...keys.cards].sort(), ...[...keys.icons].sort().map((i) => i + ':')];
     log(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
     log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
@@ -2180,7 +2241,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       const keep = dash ? RESOURCES_BY_DASH.get(dash) : null;
       if (keep?.size) {
         const before = msg.result.length;
-        msg.result = msg.result.filter((r) => keep.has(r?.url));
+        msg.result = msg.result.filter((r) => keep.has(resourcePath(r?.url)));
         if (msg.result.length !== before) {
           changed = true;
           logThrottled('resources', `lovelace resources trimmed ${before} -> ${msg.result.length} (${dash})`);
