@@ -305,7 +305,13 @@ describe('live allowlist rebuild on lovelace_updated', () => {
     mock.fireLovelaceUpdated('test-dash');
     // #7: the recompute logs the added/removed diff, not just the total. `-removed` is the
     // last line applyAllow emits, so waiting on it guarantees the whole diff was flushed.
-    await proxy.waitForLog(/-removed:[^\n]*sensor\.temperature/, 6000);
+    // 15s, not 6s. A rebuild is debounced and then does several round trips, and buildAllow's
+    // own render_template guard is 10 SECONDS — so a 6s bound was shorter than the worst case
+    // the proxy itself allows for, and failed on a loaded CI runner (Node 26, 2026-09-14) for
+    // no reason connected to what this test checks. The assertion is that the allowlist
+    // rebuilds, not that it rebuilds within six seconds; a longer bound costs nothing when
+    // things are fast because this waits on the line, not on the clock.
+    await proxy.waitForLog(/-removed:[^\n]*sensor\.temperature/, 15000);
     assert.match(proxy.out, /allowlist recomputed \(test-dash\): \d+ entities \(\+1 -5\)/);
     assert.match(proxy.out, /\+added:[^\n]*light\.decoy/);
 
@@ -337,7 +343,9 @@ describe('live allowlist rebuild on lovelace_updated', () => {
       { type: 'entities', entities: ['light.living_room', 'light.decoy', 'light.kitchen'] },
     ] }] });
     mock.fireLovelaceUpdated('test-dash');
-    await proxy.waitForLog(/\+added:[^\n]*light\.kitchen/, 6000);
+    // 15s for the same reason as the rebuild wait above: buildAllow's own render_template
+    // guard is 10s, so any bound below that is shorter than the worst case the proxy allows.
+    await proxy.waitForLog(/\+added:[^\n]*light\.kitchen/, 15000);
 
     const after = haClient(`ws://127.0.0.1:${port}/api/websocket`);
     await after.authed;
