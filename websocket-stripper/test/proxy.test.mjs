@@ -13,6 +13,19 @@ import { WebSocket } from 'ws';
 import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 import { STATES, DASH_TEST } from './fixtures.mjs';
 
+// Readiness is "the control connection has SUBSCRIBED", not "the allowlist is built".
+//
+// Those are different moments, and the proxy logs them in that order — the allowlist line comes
+// FIRST, then `watching ... for live allowlist updates`. A test that waited on the allowlist and
+// then fired a mock event could land it before subscribe_events had been processed, and the
+// proxy would simply never see it: no recompute, no log line, a timeout blamed on duration.
+// Measured at roughly one run in six before this changed, and raising the timeout could never
+// have fixed it.
+//
+// Strictly stronger than the old wait, since the allowlist is already built by the time this
+// line is written — so it is safe everywhere, not just in the suites that fire events.
+const READY = /for live allowlist updates/;
+
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
 
@@ -92,7 +105,7 @@ describe('proxy integration (strip on)', () => {
     proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
     // The proxy now listens BEFORE the allowlist exists, so "listening" no longer means
     // ready — the allowlist line is the real ready signal.
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -165,7 +178,7 @@ describe('proxy integration (strip on)', () => {
     const sp = await getFreePort();                 // a KNOWN stats port, so it is reachable
     const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port: p2, statsPort: sp });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`);
       await c.authed;
       c.send({ type: 'subscribe_entities' });
@@ -210,7 +223,7 @@ describe('proxy integration (strip on)', () => {
       extraEnv: { PROXY_TIMEOUT_MS: '400' },
     });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       // Healthy first, so the test cannot pass just because the proxy is broken generally.
       const ok = await httpGet(`http://127.0.0.1:${p2}/some/path`);
       assert.equal(ok.status, 200, 'baseline: a normal request must still work');
@@ -247,7 +260,7 @@ describe('subscribe_events state_changed is filtered too', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -293,7 +306,7 @@ describe('live allowlist rebuild on lovelace_updated', () => {
     proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
     // The proxy now listens BEFORE the allowlist exists, so "listening" no longer means
     // ready — the allowlist line is the real ready signal.
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -371,7 +384,7 @@ describe('survives an HA restart', () => {
     mock = await startMockHa({ port: haPort });
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -432,7 +445,7 @@ describe('a half-started HA never shrinks the allowlist', () => {
     mock = await startMockHa({ port: haPort, configs: { 'test-dash': DASH_TEST } });
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 

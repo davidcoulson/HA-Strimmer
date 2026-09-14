@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026.09.14.2 — 2026-09-14
+
+**Test suite: fixes the flake at its root rather than by raising timeouts again.**
+
+Measured before touching anything: **one failure in six full runs**, always the same test —
+`rebuilds the allowlist when a dashboard is edited`. It had already been "fixed" once today by
+raising its wait from 6s to 15s, which did not work, because duration was never the problem.
+
+The captured proxy output showed it: `lovelace_updated` **never arrived**. No recompute was
+attempted, nothing was logged. The proxy writes two lines at startup, in this order:
+
+```
+union allowlist for [test-dash]: 6 entities        <- what the tests waited for
+watching lovelace_updated, ... for live allowlist updates   <- what they needed
+```
+
+The suite treated "the allowlist is built" as readiness. But the control connection subscribes
+**after** that, so a test could fire a mock event into a proxy that had not yet subscribed — the
+event went nowhere, and the timeout that followed looked like slowness. No timeout value could
+ever have fixed it.
+
+Readiness now means *subscribed*: all **40** waits across the three integration test files use
+`/for live allowlist updates/`. That line is written after the allowlist exists, so it is
+strictly stronger than the old wait and safe everywhere, not only in the nine places that fire
+events.
+
+Verified by running the suite **8 more times: 240/240 every time.**
+
 ## 2026.09.14.1 — 2026-09-14
 
 **A card that will not render is now reported — proven, not guessed.** This is the third attempt

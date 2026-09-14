@@ -17,6 +17,19 @@ import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 // was removed", and a literal count made adding a fixture resource look like a regression.
 const TOTAL_RESOURCES = 7;
 
+// Readiness is "the control connection has SUBSCRIBED", not "the allowlist is built".
+//
+// Those are different moments, and the proxy logs them in that order — the allowlist line comes
+// FIRST, then `watching ... for live allowlist updates`. A test that waited on the allowlist and
+// then fired a mock event could land it before subscribe_events had been processed, and the
+// proxy would simply never see it: no recompute, no log line, a timeout blamed on duration.
+// Measured at roughly one run in six before this changed, and raising the timeout could never
+// have fixed it.
+//
+// Strictly stronger than the old wait, since the allowlist is already built by the time this
+// line is written — so it is safe everywhere, not just in the suites that fire events.
+const READY = /for live allowlist updates/;
+
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
 
@@ -90,7 +103,7 @@ describe('per-dashboard allowlists', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -137,7 +150,7 @@ describe('User-Agent attribution fallback', () => {
         { match: 'io.robbie.HomeAssistant', dashboard: 'auto-dash' },
       ]) },
     });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -191,7 +204,7 @@ describe('per-user always_forward', () => {
         { user: 'David', dashboard: 'test-dash', always_forward: ['/^sensor\\.decoy_/'] },
       ]) },
     });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -269,7 +282,7 @@ describe('per-user rules survive a slow user lookup', () => {
         { user: 'David', dashboard: 'test-dash', always_forward: ['/^sensor\\.decoy_/'] },
       ]) },
     });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -305,7 +318,7 @@ describe('per-dashboard always_forward', () => {
         { dashboard: 'test-dash', always_forward: ['/^sensor\\.decoy_/'] },
       ]) },
     });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -339,7 +352,7 @@ describe('cookie attribution survives a shared IP', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -388,7 +401,7 @@ describe('an unattributed client still gets the union', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -405,7 +418,7 @@ describe('per_dashboard=0 restores the union for every connection', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port, extraEnv: { PER_DASHBOARD: '0' } });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -423,7 +436,7 @@ describe('websocket compression', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -443,7 +456,7 @@ describe('websocket compression', () => {
   it('compress_websocket=0 turns it off', async () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'test-dash', port: p2, extraEnv: { COMPRESS_WS: '0' } });
-    await px.waitForLog(/union allowlist for/);
+    await px.waitForLog(READY);
     const ext = await negotiated(`ws://127.0.0.1:${p2}/api/websocket`);
     px.kill();
     assert.doesNotMatch(ext, /permessage-deflate/);
@@ -461,7 +474,7 @@ describe('resource trimming', () => {
     mock = await startMockHa({ configs: { 'res-dash': CFG } });
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'res-dash', port, extraEnv: { TRIM_RESOURCES: '1' } });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -493,7 +506,7 @@ describe('resource trimming', () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock: m2, dashPaths: 'ratio-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const urls = await resourcesFor(p2, '/ratio-dash');
       assert.ok(!urls.includes('/res/unrelated-widget.js'),
         'an aspect_ratio must not become a match-everything key');
@@ -507,7 +520,7 @@ describe('resource trimming', () => {
   it('resources_always_forward rescues a global plugin that registers no card', async () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'res-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1', RESOURCES_ALWAYS_FORWARD: 'global-patcher' } });
-    await px.waitForLog(/union allowlist for/);
+    await px.waitForLog(READY);
     const urls = await resourcesFor(p2, '/res-dash');
     px.kill();
     assert.ok(urls.includes('/res/global-patcher.js'), 'always_forward must win over the content match');
@@ -516,7 +529,7 @@ describe('resource trimming', () => {
   it('an unattributed connection still gets every resource', async () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'res-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
-    await px.waitForLog(/union allowlist for/);
+    await px.waitForLog(READY);
     const urls = await resourcesFor(p2, null);   // no page GET -> no dashboard attribution
     px.kill();
     assert.equal(urls.length, TOTAL_RESOURCES, 'a connection we cannot attribute must not have resources removed');
@@ -548,7 +561,7 @@ describe('resource trimming', () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock: m2, dashPaths: 'icon-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const urls = await resourcesFor(p2, '/icon-dash');
       assert.ok(urls.some((u) => u.includes('icon-pack')), 'a body containing "cbi:" must be kept');
       assert.ok(!urls.some((u) => u.includes('cbi-lookalike')),
@@ -568,7 +581,7 @@ describe('resource trimming', () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock: m2, dashPaths: 'bambu-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const urls = await resourcesFor(p2, '/bambu-dash');
       assert.ok(urls.some((u) => u.includes('bambulab-print_status-cards')),
         'all fragments present must count as a match');
@@ -594,7 +607,7 @@ describe('resource trimming', () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock: m2, dashPaths: 'res-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const before = await resourcesFor(p2, '/res-dash');
       assert.ok(before.some((u) => u.startsWith('/res/my-fancy-card.js')),
         'baseline: the card resource is served before the bump');
@@ -627,7 +640,7 @@ describe('resource trimming', () => {
       extraEnv: { TRIM_RESOURCES: '1', RESOURCES_NEVER_FORWARD: 'my-fancy-card' },
     });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const stats = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
       const unmet = (stats.resources || {}).unmetByDashboard || {};
       assert.deepEqual(unmet['res-dash'], ['my-fancy-card'],
@@ -654,7 +667,7 @@ describe('resource trimming', () => {
     const px = spawnProxy({ mock: m2, dashPaths: 'res-dash', port: p2, statsPort: sp,
       extraEnv: { TRIM_RESOURCES: '1' } });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const stats = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
       const res = stats.resources || {};
       assert.deepEqual(res.unmetByDashboard || {}, {},
@@ -668,7 +681,7 @@ describe('resource trimming', () => {
   it('trim_resources off (the default) leaves the list untouched', async () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'res-dash', port: p2 });
-    await px.waitForLog(/union allowlist for/);
+    await px.waitForLog(READY);
     const urls = await resourcesFor(p2, '/res-dash');
     px.kill();
     assert.equal(urls.length, TOTAL_RESOURCES);
@@ -700,7 +713,7 @@ describe('resource matching: a bundle that never names its own cards', () => {
     });
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'mush-dash', port, extraEnv: { TRIM_RESOURCES: '1' } });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -727,7 +740,7 @@ describe('get_services trimming', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash', port, extraEnv: { TRIM_SERVICES: '1' } });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -755,7 +768,7 @@ describe('get_services trimming', () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'test-dash', port: p2 });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const r = await services(p2);
       assert.ok(r.vacuum && r.lawn_mower, 'with the option off nothing is removed');
     } finally { px.kill(); }
@@ -781,7 +794,7 @@ describe('get_services caching', () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port: p2, extraEnv: { TRIM_SERVICES: '1' } });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const before = m2.rpcCount('get_services');
       const first = await ask(p2);
       const mid = m2.rpcCount('get_services');
@@ -821,7 +834,7 @@ describe('get_services caching', () => {
       },
     });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const before = m2.rpcCount('get_services');
       await ask(p2);
       const afterFirst = m2.rpcCount('get_services');
@@ -868,7 +881,7 @@ describe('get_services caching', () => {
       ]) },
     });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const registryFor = async (token) => {
         // Needed for the rule's `dashboard: 'test-dash'` scope to match: without a page fetch
         // the connection is unattributed, dash is null, and no scoped user rule can apply.
@@ -898,7 +911,7 @@ describe('registry trimming', () => {
     mock = await startMockHa();
     port = await getFreePort();
     proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
-    await proxy.waitForLog(/union allowlist for/);
+    await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });
 
@@ -946,7 +959,7 @@ describe('registry trimming', () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port: p2 });
     try {
-      await px.waitForLog(/union allowlist for/);
+      await px.waitForLog(READY);
       const ask = async () => {
         const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`);
         await c.authed;
@@ -969,7 +982,7 @@ describe('registry trimming', () => {
   it('trim_registries=0 leaves the registry untouched', async () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'test-dash', port: p2, extraEnv: { TRIM_REGISTRIES: '0' } });
-    await px.waitForLog(/union allowlist for/);
+    await px.waitForLog(READY);
     await httpGet(`http://127.0.0.1:${p2}/test-dash`);
     const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`);
     await c.authed;
