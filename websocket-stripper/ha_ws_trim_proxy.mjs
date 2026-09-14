@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.31';
+const VERSION = '2026.09.13.32';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -925,7 +925,47 @@ proxy.on('error', (e, req, res) => {
 // stale generations cannot accumulate.
 let ALLOW_VERSION = 0;
 const REG_RESPONSE_CACHE = new Map();
-const regCacheKey = (kind, dash) => `${kind}|${dash ?? '(union)'}|${ALLOW_VERSION}`;
+// Keyed by the connection's ACTUAL allowlist, not by its dashboard.
+//
+// Keying on the dashboard alone is wrong whenever a connection carries more than its dashboard
+// does — a `client_overrides` pin, a self-identified satellite, `user_overrides` — because two
+// connections on one dashboard can then hold different sets and would share an entry built from
+// the wrong one. The first fix for that was to make widened connections skip the cache, on the
+// assumption they were a rare minority.
+//
+// That assumption was measured and found false: on a live instance MOST connections were
+// widened (voice-satellite panels self-identify, and the admin user matches a user rule), and
+// the hit rate fell from 97.9% to 9.1%. Correct, and nearly useless.
+//
+// So identity goes IN the key instead. Connections sharing an identical allowlist share an
+// entry — including the same panel across its many reconnects, which is where the hits
+// actually come from — and connections with different sets can never collide by construction.
+const allowSignature = (allow) => {
+  // FNV-1a over the sorted ids. Sorting is what makes it order-independent, and it runs ONCE
+  // per connection (see allowSig in bridge), against re-serialising a ~10MB registry per
+  // connection if it misses — so the cost is not close to mattering.
+  let h = 0x811c9dc5;
+  for (const id of [...allow].sort()) {
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    h ^= 0x2c; h = Math.imul(h, 0x01000193);      // separator, so ["ab","c"] != ["a","bc"]
+  }
+  return `${allow.size}:${(h >>> 0).toString(36)}`;
+};
+const regCacheKey = (kind, dash, sig) => `${kind}|${dash ?? '(union)'}|${ALLOW_VERSION}|${sig}`;
+// Distinct allowlists are few in practice (one per dashboard, plus one per widened client), and
+// every entry is retired on an allowlist rebuild. The cap is purely a stop against an
+// unforeseen key explosion quietly turning a cache into a memory leak.
+const REG_CACHE_MAX = 200;
+function regCacheSet(key, value) {
+  if (REG_RESPONSE_CACHE.size >= REG_CACHE_MAX && !REG_RESPONSE_CACHE.has(key)) {
+    logThrottled('regcache-full', `registry cache hit ${REG_CACHE_MAX} entries — clearing`);
+    REG_RESPONSE_CACHE.clear();
+  }
+  REG_RESPONSE_CACHE.set(key, value);
+}
 
 const REGISTRY_TYPES = new Map([
   ['config/entity_registry/list', 'entity'],
@@ -1689,10 +1729,6 @@ server.on('upgrade', (req, socket, head) => {
     const device = discovery.lookup(rt.ip);
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
       ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned,
-      // Whether this connection's allowlist is WIDER than the dashboard's own. The shared
-      // response cache is keyed by dashboard, so a connection that carries extra entities must
-      // not read from it or write to it — see allowDiverged in bridge().
-      selfIdentified: selfIdentified > 0,
       device: device ? { kind: device[0].kind, name: device[0].name, version: device[0].version } : null,
       origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
     }));
@@ -1728,19 +1764,16 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   });
   let userChecked = false;
   let learnedKick = false;   // only ever drop a connection once for a newly-learned identity
-  // Does this connection's allowlist still equal the one its DASHBOARD resolves to?
+  // This connection's cache identity: a signature of the allowlist it actually ended up with.
   //
-  // REG_RESPONSE_CACHE is keyed by (kind, dashboard, allowlist version) — deliberately, since
-  // that is what makes it shareable. But three things widen a single connection beyond its
-  // dashboard: a `client_overrides` pin, entities a satellite self-identified, and
-  // `user_overrides` applied once the user is known. A widened connection must neither READ
-  // the shared entry (it would be missing that connection's extra rows — under-inclusion is
-  // the direction that actually breaks cards, leaving names and areas unresolved) nor WRITE
-  // one (poisoning every ordinary connection on that dashboard with another user's rows).
-  //
-  // Widened connections are the minority — a few pinned panels — so skipping the cache for
-  // them keeps the whole win for the common case and costs correctness nothing.
-  let allowDiverged = !!(meta.clientPinned || meta.selfIdentified);
+  // Computed lazily and memoised, because `allow` is still moving when the connection opens —
+  // `user_overrides` can widen it once the user resolves, and the gate below holds every
+  // message until that has happened. Taking the signature at the first cacheable REQUEST means
+  // it is always taken after the set has settled. It is invalidated on the one in-connection
+  // event that can change the set (see allowSigReset).
+  let allowSig = null;
+  const cacheSig = () => (allowSig ??= allowSignature(allow));
+  const allowSigReset = () => { allowSig = null; };
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
   const registryIds = new Map();    // request id -> which registry, to trim its result
@@ -1810,10 +1843,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         }
         if (extra) {
           allow = applyUserRules(allow, extra);
-          // This connection no longer matches its dashboard, so it stops sharing the response
-          // cache. Set before openGate() below, which is what releases the held registry and
-          // get_services requests — so the flag is always in place before they are examined.
-          allowDiverged = true;
+          // The set changed, so any signature taken before now is stale. In practice none has
+          // been: the gate holds every message until this resolves. Reset anyway rather than
+          // depend on that ordering staying true.
+          allowSigReset();
           log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
             + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`);
         }
@@ -1830,7 +1863,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (STRIP && m && m.type === 'get_states') getStatesIds.add(m.id);
     if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) {
       const kind = REGISTRY_TYPES.get(m.type);
-      const hit = allowDiverged ? undefined : REG_RESPONSE_CACHE.get(regCacheKey(kind, dash));
+      const hit = REG_RESPONSE_CACHE.get(regCacheKey(kind, dash, cacheSig()));
       if (hit !== undefined) {
         // Answer locally and never forward: HA is not asked to build the registry again.
         // Safe against HA's increasing-id rule because nothing is sent to HA at all, and
@@ -1850,7 +1883,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // big instance-wide payloads still being rebuilt by HA and re-parsed here once per
     // connection, while the registries beside it were being served from memory.
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
-      const hit = allowDiverged ? undefined : REG_RESPONSE_CACHE.get(regCacheKey('services', dash));
+      const hit = REG_RESPONSE_CACHE.get(regCacheKey('services', dash, cacheSig()));
       if (hit !== undefined) {
         logThrottled('regcache:services', `get_services served from cache${dash ? ` (${dash})` : ''}`);
         stats.recordCacheHit(hit.length);
@@ -2089,7 +2122,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // Keep the trimmed rows for the next connection on this allowlist. Stored as a JSON
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
-      if (!allowDiverged) REG_RESPONSE_CACHE.set(regCacheKey(kind, dash), JSON.stringify(msg.result));
+      regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
     }
     if (STRIP && TRIM_SERVICES && msg && msg.type === 'result' && serviceIds.has(msg.id)
         && msg.result && typeof msg.result === 'object' && !Array.isArray(msg.result)) {
@@ -2111,7 +2144,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // handing the frontend an empty service list, and the cache has to agree with that
       // decision or the first connection would see the safe answer and every later one the
       // empty one.
-      if (!allowDiverged) REG_RESPONSE_CACHE.set(regCacheKey('services', dash), JSON.stringify(msg.result));
+      regCacheSet(regCacheKey('services', dash, cacheSig()), JSON.stringify(msg.result));
     }
     if (STRIP && TRIM_RESOURCES && msg && msg.type === 'result' && resourceIds.has(msg.id) && Array.isArray(msg.result)) {
       resourceIds.delete(msg.id);

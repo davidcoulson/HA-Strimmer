@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026.09.13.32 — 2026-09-13
+
+**The response cache is keyed by the connection's allowlist, not by its dashboard — which took
+the live hit rate from 9.1% back to where it belongs.**
+
+`.30` made widened connections skip the shared cache entirely. That was correct and nearly
+useless. The reasoning behind it — "widened connections are the minority, a few pinned panels" —
+was an assumption, and measuring it on a live instance proved it false:
+
+    .29 (no correctness guard)   331 hits / 7 misses    97.9%
+    .30 (widened skip the cache)   4 hits / 40 misses    9.1%
+
+Most connections there ARE widened. Voice-satellite panels self-identify, so two panels on one
+dashboard held 151 and 172 entities; the admin user matched a `user_overrides` rule. Nearly
+everything was taking the bypass, so Home Assistant was re-serialising a ~10MB entity registry
+per connection again.
+
+The fix puts identity in the key rather than refusing to cache: `(kind, dashboard, allowlist
+version, allowlist signature)`. Connections holding an identical allowlist share an entry —
+including the same panel across its reconnects, which is where the hits actually come from — and
+connections with different sets cannot collide by construction, because the signature is prefixed
+with the set's size and hashed over its sorted ids. Taken once per connection, memoised, and
+recomputed only if `user_overrides` widens the set mid-handshake.
+
+**The test that should have caught the original bug did not exist.** Removing the signature from
+the key passed all 229 tests, because every test client presents as `127.0.0.1` — so within one
+proxy either every connection is pinned or none is, and the collision case never arose. The new
+test uses two USERS instead: David matches a rule and gets `light.kitchen`, Michelle opens the
+identical dashboard and must not inherit it. Verified by deliberately dropping the signature and
+watching it fail. Its first draft would have passed vacuously (it probed an entity absent from
+the registry fixture), which its own guard assertion caught.
+
 ## 2026.09.13.31 — 2026-09-13
 
 **The image moves to Node 26, deliberately ahead of its LTS date.**

@@ -706,14 +706,19 @@ describe('get_services caching', () => {
     } finally { px.kill(); await m2.close(); }
   });
 
-  // The cache is keyed by (kind, dashboard, allowlist version), which is what makes it
-  // shareable — and also what makes it wrong for a connection whose allowlist is WIDER than its
-  // dashboard's. Such a connection must not read the shared entry (it would be missing its
-  // extra entities) and must not write one (every ordinary connection on that dashboard would
-  // inherit another client's rows). A `client_overrides` pin is the reachable case in a test,
-  // since every loopback client presents as 127.0.0.1; `user_overrides` and a self-identified
-  // satellite widen a connection the same way and take the same path.
-  it('a client-pinned connection neither reads nor writes the shared cache', async () => {
+  // A widened connection must never share an entry with a narrower one — it would read rows
+  // missing its extra entities, and write rows that over-serve everyone else on that dashboard.
+  //
+  // The first implementation achieved that by making widened connections skip the cache. That
+  // was correct and nearly useless: measured on a live instance, MOST connections are widened
+  // (voice-satellite panels self-identify, the admin user matches a user rule) and the hit rate
+  // fell from 97.9% to 9.1%. So the allowlist's signature is part of the KEY instead — a
+  // widened connection still caches, just under its own identity, which it shares with its own
+  // reconnects and with any other client holding the same set.
+  //
+  // This test therefore asserts the property that matters — a pinned client does NOT get the
+  // unpinned entry — rather than the mechanism, which has already changed once.
+  it('a widened connection caches under its own identity, never the narrow one', async () => {
     const m2 = await startMockHa();
     const p2 = await getFreePort();
     const px = spawnProxy({
@@ -731,9 +736,15 @@ describe('get_services caching', () => {
       await px.waitForLog(/union allowlist for/);
       const before = m2.rpcCount('get_services');
       await ask(p2);
+      const afterFirst = m2.rpcCount('get_services');
       await ask(p2);
-      assert.equal(m2.rpcCount('get_services') - before, 2,
-        'a widened connection must go to HA every time rather than share a per-dashboard entry');
+      const afterSecond = m2.rpcCount('get_services');
+
+      assert.equal(afterFirst - before, 1, 'the first widened connection still has to fetch');
+      // The point of the rewrite: a widened client is not punished with a permanent miss. Its
+      // second connection carries the same set, so it shares its own entry.
+      assert.equal(afterSecond - afterFirst, 0,
+        'a widened connection must reuse its OWN cached entry on reconnect');
 
       // And the widening is real: the pinned entity reaches this connection, which is what a
       // stale narrow cache would have silently withheld.
@@ -742,6 +753,53 @@ describe('get_services caching', () => {
       const ids = (await c.rpc({ type: 'get_states' })).result.map((e) => e.entity_id);
       c.close();
       assert.ok(ids.includes('sensor.decoy_power'), 'the client_overrides entity must be present');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // The property the signature key exists for, and the one every other test here misses: two
+  // connections to the SAME proxy on the SAME dashboard holding DIFFERENT allowlists must not
+  // share a cache entry.
+  //
+  // Every loopback client presents as 127.0.0.1, so a client_overrides pin cannot produce that
+  // pair — it widens all of them or none. Two USERS can: David matches a user rule and gets the
+  // decoys, Michelle opens the identical dashboard and does not. That is exactly the live shape
+  // that caused this (an admin user matching a rule alongside unwidened wall panels).
+  //
+  // Without the signature in the key, whoever connects first wins and the other silently
+  // inherits their registry.
+  it('two users on one dashboard never share each other\'s cached registry', async () => {
+    const m2 = await startMockHa();
+    const p2 = await getFreePort();
+    const px = spawnProxy({
+      mock: m2, dashPaths: 'test-dash', port: p2,
+      // light.kitchen, because it is in the entity REGISTRY fixture and on no dashboard. The
+      // sensor.decoy_* entities exist only in STATES, so widening with those would leave both
+      // users' registries identical and the test would pass without proving anything.
+      extraEnv: { USER_OVERRIDES: JSON.stringify([
+        { user: 'David', dashboard: 'test-dash', always_forward: ['light.kitchen'] },
+      ]) },
+    });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const registryFor = async (token) => {
+        // Needed for the rule's `dashboard: 'test-dash'` scope to match: without a page fetch
+        // the connection is unattributed, dash is null, and no scoped user rule can apply.
+        await httpGet(`http://127.0.0.1:${p2}/test-dash/main`);
+        const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`, token);
+        await c.authed;
+        const rows = (await c.rpc({ type: 'config/entity_registry/list' })).result;
+        c.close();
+        return new Set(rows.map((r) => r.entity_id));
+      };
+
+      // David first, so his (wider) answer is the one sitting in the cache when Michelle asks.
+      const david = await registryFor('david-token');
+      const michelle = await registryFor('michelle-token');
+
+      assert.ok(david.has('light.kitchen'),
+        'the user rule must actually widen David, or this test proves nothing');
+      assert.ok(!michelle.has('light.kitchen'),
+        'Michelle must NOT inherit David\'s cached registry rows');
     } finally { px.kill(); await m2.close(); }
   });
 });
