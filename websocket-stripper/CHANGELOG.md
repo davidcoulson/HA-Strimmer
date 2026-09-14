@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.09.14.8 — 2026-09-14
+
+**The stats panel was under-reporting its own configuration, and had been for months.**
+
+The `options` block in `stats.json` is a hand-maintained list, and it had fallen behind **five**
+options: `mqtt_sensors` and `mdns_discovery` (missing since they shipped), then `log_level`,
+`trim_repairs` and `trim_translations`.
+
+The consequence is worse than a cosmetic gap. An option missing from that block reads as absent —
+which is indistinguishable from "Supervisor never passed this", the exact question the block
+exists to answer. Chasing whether a newly added option had survived the Supervisor store cache,
+the panel said `None` for a setting that was working correctly.
+
+All five are now reported, and a test pins the list to `config.yaml` so it cannot drift again: it
+reads every simple toggle or choice out of the schema and fails if the stats block omits one.
+
+That test found `mqtt_sensors` and `mdns_discovery` the moment it was written — two gaps nobody
+had noticed, in the same commit that fixed the three that had been.
+
 ## 2026.09.14.7 — 2026-09-14
 
 **`trim_translations` — the last big untrimmed payload in the boot path.**

@@ -72,3 +72,22 @@ test('translations/en.yaml describes no option that does not exist', () => {
     assert.ok(options.has(key), `translations/en.yaml documents "${key}", which is not in the schema`);
   }
 });
+
+// The stats `options` block is hand-maintained, and it silently fell behind three times:
+// log_level, trim_repairs and trim_translations were each added to config.yaml without it. The
+// panel then reported them as absent, which reads identically to "Supervisor never passed this"
+// — the precise question that block exists to answer. So the list is pinned to the schema.
+test('the stats options block reports every simple option the schema declares', () => {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const cfg = fs.readFileSync(path.join(dir, '..', 'config.yaml'), 'utf8');
+  const src = fs.readFileSync(path.join(dir, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
+
+  // Toggles and choices — the options a person reads off the panel to answer "is it on?".
+  // List and free-string options are reported elsewhere and are deliberately out of scope.
+  const simple = [...cfg.matchAll(/^  ([a-z_]+): "?(bool\??|list\([a-z|]+\)\?)"?$/gm)].map((m) => m[1]);
+  assert.ok(simple.length >= 6, `expected several simple options, found ${simple.length}`);
+
+  const block = src.slice(src.indexOf('    options: {'), src.indexOf('    allowlist: {'));
+  const missing = simple.filter((k) => !block.includes(`${k}:`));
+  assert.deepEqual(missing, [], `options missing from the stats block: ${missing.join(', ')}`);
+});

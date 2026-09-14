@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.7';
+const VERSION = '2026.09.14.8';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2534,6 +2534,17 @@ function statsExtras() {
       compress_websocket: COMPRESS_WS,
       trim_resources: TRIM_RESOURCES,
       trim_services: TRIM_SERVICES,
+      // Every option belongs here. This list was hand-maintained and silently fell behind:
+      // log_level, trim_repairs and trim_translations were all added without it, so the panel
+      // reported them as absent when they were merely unlisted — which is indistinguishable
+      // from "Supervisor never passed it", the exact question this block exists to answer.
+      trim_repairs: TRIM_REPAIRS,
+      trim_translations: TRIM_TRANSLATIONS,
+      log_level: Object.keys(LEVELS).find((k) => LEVELS[k] === LOG_LEVEL) ?? 'info',
+      // Found by the guard test the moment it was written: these two had been missing since they
+      // shipped, so the panel never showed whether MQTT or mDNS was actually on.
+      mqtt_sensors: MQTT_SENSORS,
+      mdns_discovery: MDNS_ENABLED,
     },
     allowlist: {
       ready: ALLOW_READY,
