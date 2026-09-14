@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.8';
+const VERSION = '2026.09.14.9';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2338,6 +2338,11 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // each one, and this payload is a quarter of a megabyte. Counts answer the question that
       // matters — how much of it is `component.<domain>` and therefore filterable at all.
       const res = msg.result?.resources;
+      // Sized BEFORE any trimming below. `res` holds the original resources object, so the key
+      // count already describes the untrimmed payload — reading the byte count off the mutated
+      // `msg.result` afterwards paired an untrimmed count with a trimmed size, which reads as
+      // "5,359 keys in 108KB" and understates the payload this diagnostic exists to measure.
+      const originalBytes = sized(msg.result);
       if (res && typeof res === 'object' && TRIM_TRANSLATIONS) {
         // Keep a `component.<x>` tree when x is either an entity DOMAIN this connection can see
         // (`light`, `sensor` — the generic UI strings) or the INTEGRATION providing one of its
@@ -2377,7 +2382,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
           const pre = parts[0] === 'component' && parts.length > 1 ? `component.${parts[1]}` : parts[0];
           byPrefix[pre] = (byPrefix[pre] || 0) + 1;
         }
-        stats.recordTranslations({ keys: total, bytes: sized(msg.result), byPrefix });
+        stats.recordTranslations({ keys: total, bytes: originalBytes, byPrefix });
       }
     }
     // Emptied rather than dropped. The frontend asks for this and waits; a missing reply would

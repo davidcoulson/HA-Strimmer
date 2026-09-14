@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026.09.14.9 — 2026-09-14
+
+**Fixes the translations diagnostic pairing an untrimmed key count with a trimmed byte count.**
+
+With `trim_translations` on, `stats.translations` reported `5,359 keys, 108,473 bytes`. Both
+numbers were real and they described different payloads: the key count came from the original
+`resources` object, the byte count from `msg.result` *after* the trim had replaced it.
+
+Read together they say a quarter-megabyte payload is 108KB — understating the very thing the
+diagnostic exists to measure, and doing it in the direction that makes the feature look
+unnecessary.
+
+Now sized before trimming, so both halves describe the untrimmed reply.
+
 ## 2026.09.14.8 — 2026-09-14
 
 **The stats panel was under-reporting its own configuration, and had been for months.**
