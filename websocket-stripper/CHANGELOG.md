@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026.09.14.12 — 2026-09-14
+
+**`trim_themes` — Home Assistant sends every installed theme to every client.**
+
+Measured: **10 themes, 28,138 bytes**, on every page load, to panels that render exactly one.
+
+Kept are the themes your dashboards actually name — the config tree is walked in full, since a
+`theme:` can sit on a dashboard, a view or a card — plus whatever HA reports as its default and
+dark default. Those two are read **from the reply itself** rather than from configuration, so a
+dark default that no dashboard mentions anywhere is still kept.
+
+If the trim would keep nothing the full list is forwarded, same safety valve as the services
+trim: an unthemed dashboard is worse than a large one.
+
+Off by default, and visibly lossy if it guesses wrong.
+
+The guard test added in `.8` caught `trim_themes` missing from the stats options block before it
+shipped — the first time that check has paid off on a new option rather than a historical one.
+
+## 2026.09.14.11 — 2026-09-14
+
+**Reports the shape of payloads being considered for trimming, before trimming them.**
+
+The next candidates after translations were `frontend/get_themes` (~28KB per call),
+`custom_icons/list` (~41KB) and `frontend/get_icons` (~16KB), none of which had been looked at.
+
+Measuring first has changed the design twice — translations would otherwise have shipped a filter
+keyed on entity domain, which renders raw keys on the dashboard — so nothing gets trimmed on the
+strength of what its API *probably* returns. `stats.shapes` reports one shallow description per
+message kind: total bytes, the top-level structure, and the first keys.
+
+Observational, and temporary by nature: once a payload has a real trim, its before/after appears
+in `savings` and the shape stops being the interesting thing about it.
+
 ## 2026.09.14.10 — 2026-09-14
 
 **Registry change events were filtered by nothing, per connection.**
