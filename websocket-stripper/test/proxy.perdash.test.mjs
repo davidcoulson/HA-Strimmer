@@ -468,6 +468,48 @@ describe('websocket compression', () => {
 // repairs/list_issues is ~27KB on every page load and a kiosk never renders it. Lossy in one
 // direction though — an admin on a trimmed dashboard stops seeing repair notices — so it is off
 // by default, and both halves of that are pinned here.
+// The largest untrimmed payload in a page load, and the most dangerous to trim: a missing
+// translation renders its raw key ON the dashboard rather than degrading quietly.
+describe('translation trimming', () => {
+  const resources = async (extraEnv) => {
+    const m2 = await startMockHa();
+    const port = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'test-dash', port, extraEnv });
+    try {
+      await px.waitForLog(READY);
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+      await c.authed;
+      const r = (await c.rpc({ type: 'frontend/get_translations', language: 'en' })).result;
+      c.close();
+      return r.resources;
+    } finally { px.kill(); await m2.close(); }
+  };
+
+  it('keeps entity domains AND the integrations providing them, drops the rest', async () => {
+    const r = await resources({ TRIM_TRANSLATIONS: '1' });
+    assert.ok(r['component.light.entity_component._.state.on'], 'an entity domain in view is kept');
+    // The subtle half: hue provides light.living_room, and its state names live under the
+    // INTEGRATION. Filtering on entity domains alone would drop this and show raw keys.
+    assert.ok(r['component.hue.entity.light.x.state.on'],
+      'the integration providing a visible entity must be kept');
+    assert.ok(!r['component.tuya_local.entity.sensor.y.state.z'],
+      'an integration no dashboard can see is dropped');
+    assert.ok(!r['component.roborock.entity.vacuum.v.state.w'], 'likewise');
+  });
+
+  it('never drops a key that is not component-shaped', async () => {
+    const r = await resources({ TRIM_TRANSLATIONS: '1' });
+    assert.equal(r['ui.panel.lovelace.editor.save'], 'Save',
+      'anything outside component.<x> must pass through untouched');
+  });
+
+  it('is off by default', async () => {
+    const r = await resources({});
+    assert.ok(r['component.tuya_local.entity.sensor.y.state.z'],
+      'off by default — nothing is lost until asked for');
+  });
+});
+
 describe('repairs trimming', () => {
   const issues = async (p2, extraEnv) => {
     const m2 = await startMockHa();

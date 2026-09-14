@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026.09.14.7 — 2026-09-14
+
+**`trim_translations` — the last big untrimmed payload in the boot path.**
+
+Measured before designing, which changed the design. A real reply from this instance:
+
+    5,359 keys      432,799 bytes      69 integrations
+    100% of keys shaped `component.<domain>`     0% anything else
+
+    component.tuya_local   823 keys      component.roborock   417
+    component.lg_thinq     686           component.bambu_lab  322
+    component.tuya         477           component.matter     289
+
+A panel showing two lights and a printer was being sent state names for every Tuya device, every
+LG appliance and every Roborock on the account, on **every page load**.
+
+**The measurement overturned the obvious implementation.** Filtering by entity domain — the
+`get_services` pattern — would have been wrong: `component.tuya_local` is an INTEGRATION, while
+the entity it provides is `sensor.something`. Trimming on entity domains alone drops exactly the
+tree that names that sensor's states, and the dashboard renders raw keys. So a tree is kept when
+it matches **either** an entity domain the connection can see **or** the integration providing one
+of its entities, which needs a new entity -> platform map built alongside the allowlist.
+
+Anything not shaped `component.<x>.…` passes through untouched. That measured 0% of a real
+payload, but a category nobody has seen must never be silently dropped.
+
+**Off by default, and the most lossy option here.** A missing translation does not degrade
+quietly like a missing service — it renders its raw key on the dashboard. Turn it on, load every
+panel, and look.
+
+Three tests, each verified by breaking it: dropping the integration half fails the first,
+dropping the non-component passthrough fails the second.
+
 ## 2026.09.14.6 — 2026-09-14
 
 **Reports what is actually inside a translations payload, before trimming it.**

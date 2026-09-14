@@ -58,6 +58,20 @@ configuration:
       every integration and is sent on every page load — 193KB across 115 domains on a large
       install. Off by default: the frontend uses it for service pickers and the automation
       editor, so this is fine for a kiosk and visibly lossy in the admin UI.
+  trim_translations:
+    name: Trim frontend translations
+    description: >-
+      Cuts `frontend/get_translations` to the integrations a connection can actually see. It is
+      the largest untrimmed payload left in a page load — measured at 5,359 keys and 432KB on one
+      instance, every key of it `component.<integration>`, across 69 integrations. A panel showing
+      lights and a printer does not need `component.tuya_local`, which alone carried 823 keys.
+      THE MOST LOSSY OPTION HERE, and off by default: a missing translation does not fail quietly
+      like a missing service, it renders its raw key on the dashboard — you would see
+      `component.light.entity_component._.state.on` where "On" should be. A tree is kept when it
+      matches either an entity domain the connection can see or the integration that provides one
+      of its entities; both are needed, because a Tuya sensor's state names live under the
+      integration while its entity_id says `sensor`. Turn it on, load every panel, and look before
+      trusting it.
   trim_repairs:
     name: Trim the Repairs backlog
     description: >-

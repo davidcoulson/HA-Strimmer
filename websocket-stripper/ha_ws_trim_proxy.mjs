@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.6';
+const VERSION = '2026.09.14.7';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -93,6 +93,15 @@ const COMPRESS_WS = OPT.compress_websocket !== undefined ? !!OPT.compress_websoc
 // repairs/list_issues is the admin "Repairs" panel's backlog. A kiosk never renders it, and it
 // costs ~27KB on every page load. Off by default like the other lossy trims: an admin browsing a
 // trimmed dashboard would stop seeing repair notifications, which is a real thing to lose.
+// Translations are ~247KB per page load and the largest untrimmed payload in the boot path.
+// Measured on a live instance: 5,359 keys, 432KB, and 100% of them `component.<domain>` across
+// 69 domains — tuya_local alone carries 823 keys on an instance whose panels show none of it.
+//
+// OFF by default and the most lossy trim here. A missing translation does not degrade quietly
+// like a missing service: it renders its raw key ON the dashboard, so a wall panel shows
+// `component.light.entity_component._.state.on` where "On" should be.
+const TRIM_TRANSLATIONS = OPT.trim_translations !== undefined ? !!OPT.trim_translations
+  : (process.env.TRIM_TRANSLATIONS ?? '0') !== '0';
 const TRIM_REPAIRS = OPT.trim_repairs !== undefined ? !!OPT.trim_repairs
   : (process.env.TRIM_REPAIRS ?? '0') !== '0';
 const TRIM_SERVICES = OPT.trim_services !== undefined ? !!OPT.trim_services
@@ -540,6 +549,14 @@ async function buildAllow(rpc, renderTemplate) {
     }
     return out;
   })();
+  // entity_id -> the INTEGRATION that provides it. Needed for translations and nothing else: a
+  // Tuya sensor's state strings live under `component.tuya_local`, while its entity_id says
+  // `sensor.`. Filtering translations on entity domains alone would drop exactly the tree that
+  // names its states, and the dashboard would render raw keys instead.
+  PLATFORM_BY_ENTITY = new Map();
+  for (const e of (registries?.entities || [])) {
+    if (e?.entity_id && e?.platform) PLATFORM_BY_ENTITY.set(e.entity_id, e.platform);
+  }
   const union = new Set();
   const perDash = new Map();
   const keysByDash = new Map();
@@ -1693,6 +1710,8 @@ const CLIENT_LEARNED_MAX = 500;
 // entity_id -> every entity id on that entity's device, honouring exclude_device_categories.
 // Rebuilt with the allowlist, so a renamed or re-added device is picked up without a restart.
 let REG_CACHE_BY_ENTITY = null;
+// entity_id -> integration domain, built alongside the allowlist. See buildAllow.
+let PLATFORM_BY_ENTITY = new Map();
 
 // Entities a client has told us it needs, by naming itself. Strictly additive: it can only ever
 // widen an allowlist, never narrow one.
@@ -2319,6 +2338,36 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // each one, and this payload is a quarter of a megabyte. Counts answer the question that
       // matters — how much of it is `component.<domain>` and therefore filterable at all.
       const res = msg.result?.resources;
+      if (res && typeof res === 'object' && TRIM_TRANSLATIONS) {
+        // Keep a `component.<x>` tree when x is either an entity DOMAIN this connection can see
+        // (`light`, `sensor` — the generic UI strings) or the INTEGRATION providing one of its
+        // entities (`tuya_local` — where that integration's own state names live). Both are
+        // required; either alone renders raw keys.
+        const keep = new Set(['homeassistant']);
+        for (const id of allow) {
+          keep.add(String(id).split('.')[0]);
+          const plat = PLATFORM_BY_ENTITY.get(id);
+          if (plat) keep.add(plat);
+        }
+        const beforeB = sized(msg.result);
+        const beforeN = Object.keys(res).length;
+        const next = {};
+        for (const [k, v] of Object.entries(res)) {
+          const parts = String(k).split('.');
+          // Anything not shaped `component.<x>.…` is passed through untouched. Measured at 0%%
+          // of a real payload, but a category that does not match must never be silently lost.
+          if (parts[0] !== 'component' || parts.length < 2 || keep.has(parts[1])) next[k] = v;
+        }
+        const afterN = Object.keys(next).length;
+        if (afterN && afterN !== beforeN) {
+          msg.result = { ...msg.result, resources: next };
+          changed = true;
+          logThrottled('translations',
+            `get_translations trimmed ${beforeN} -> ${afterN} keys${dash ? ` (${dash})` : ''}`);
+        }
+        cat = 'translations';
+        frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
+      }
       if (res && typeof res === 'object') {
         const byPrefix = {};
         let total = 0;

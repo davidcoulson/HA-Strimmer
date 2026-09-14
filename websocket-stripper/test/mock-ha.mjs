@@ -170,6 +170,19 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
       switch (m.type) {
         case 'get_states': return ok(states);
         // The admin Repairs backlog. Two issues is enough to tell "emptied" from "untouched".
+        // Shaped like the real thing: every key `component.<x>.…`, mixing entity DOMAINS with
+        // INTEGRATIONS, because the distinction is the whole difficulty of trimming it.
+        case 'frontend/get_translations': return ok({ resources: {
+          'component.light.entity_component._.state.on': 'On',
+          'component.sensor.entity_component._.state.unknown': 'Unknown',
+          // the integration that PROVIDES light.living_room in the fixtures
+          'component.hue.entity.light.x.state.on': 'Lit',
+          // integrations no fixture dashboard can see
+          'component.tuya_local.entity.sensor.y.state.z': 'Tuya',
+          'component.roborock.entity.vacuum.v.state.w': 'Roborock',
+          // not component-shaped: must survive whatever else happens
+          'ui.panel.lovelace.editor.save': 'Save',
+        } });
         case 'repairs/list_issues': return ok({ issues: [
           { issue_id: 'i1', domain: 'hassio', severity: 'warning', ignored: false },
           { issue_id: 'i2', domain: 'cloud', severity: 'error', ignored: false },
