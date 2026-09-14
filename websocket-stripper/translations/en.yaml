@@ -161,10 +161,20 @@ configuration:
     description: >-
       URL fragments of resources to withhold from every dashboard. Overrides the always
       list. Literal substring or /regex/.
+  log_level:
+    name: How much to log
+    description: >-
+      How much detail the app writes to its own log. `info` is the default and is what it has
+      always written. `warn` keeps only problems and the startup summary — worth having because a
+      busy instance turns over twenty-odd websocket connections a minute, and each one wrote a
+      line whether you wanted it or not. `debug` adds per-connection and per-decision detail that
+      is not written at all otherwise: which dashboard a connection was attributed to and why,
+      which resource matched which card, and cache hits. Turn it on while chasing something and
+      turn it back down afterwards — it is genuinely noisy.
   port:
     name: Listen port
     description: >-
-      The port the app serves on (default 8099). Because it runs with host networking,
+      The port the app serves on (default 9123). Because it runs with host networking,
       this option is the only way to move it — the Network tab cannot remap a host-network
       port. Change it if something else already uses 8099.
   ha_base:

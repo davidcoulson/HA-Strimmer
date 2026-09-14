@@ -34,6 +34,9 @@ describe('client-pinned rules', () => {
         PORT: String(port),
         STATS_PORT: String(await getFreePort()),
         STRIP_ENTITIES: '1',
+        // The pin-widening line is debug-level: it is written once per connection, which is
+        // exactly the volume the levels exist to control. This test asserts it, so it asks.
+        LOG_LEVEL: 'debug',
         PER_DASHBOARD: '1',
         // 127.0.0.1 is what a loopback test client presents as, so it stands in for the wall
         // panel's address. The device is named the way a person would write it in the UI.

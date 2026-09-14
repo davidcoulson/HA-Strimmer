@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.14.2"
+version: "2026.09.14.3"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -106,6 +106,9 @@ options:
   resources_always_forward: []
   # URL patterns never sent to any dashboard. Wins over always.
   resources_never_forward: []
+  # warn = problems and the startup summary only; info = normal operation (default);
+  # debug = per-connection and per-decision detail, for when you are hunting something.
+  log_level: info
   port: 9123
   ha_base: ""
   allow_ws_url: ""
@@ -157,6 +160,7 @@ schema:
     - str
   resources_never_forward:
     - str
+  log_level: "list(warn|info|debug)?"
   port: "int(1,65535)?"
   ha_base: "str?"
   allow_ws_url: "str?"

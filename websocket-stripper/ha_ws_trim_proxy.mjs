@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.2';
+const VERSION = '2026.09.14.3';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -261,7 +261,29 @@ if (!ALLOW_TOKEN) {
 if (!DASH_PATHS.length) {
   console.error('ERROR: no dashboards configured — set the `dashboards` option to your dashboard url_path values (Settings -> Dashboards). Until then /api/websocket is refused.');
 }
-const log = (...a) => console.log(new Date().toISOString(), ...a);
+// ---- log levels ----
+//
+// The service log had no volume control. `logThrottled` collapses REPEATS of one key, which does
+// nothing about a hundred distinct clients each logging once — and this instance turns over ~22
+// connections a minute, so the per-connection lines alone were writing tens of thousands of
+// lines a day. All of it invaluable while diagnosing something and noise the rest of the time.
+//
+//   warn   problems, and the handful of startup lines without which a log cannot be read at all
+//   info   normal operation — the DEFAULT, and exactly what this always printed
+//   debug  per-connection and per-decision detail, most of which did not exist before
+//
+// `info` is the default deliberately: upgrading changes nothing about what you see. The point of
+// the exercise is `debug` — a way to ASK for more when hunting something — not quieter defaults.
+const LEVELS = { warn: 0, info: 1, debug: 2 };
+const LOG_LEVEL = LEVELS[String(process.env.LOG_LEVEL ?? OPT.log_level ?? 'info').toLowerCase()] ?? LEVELS.info;
+
+const stamp = (a) => [new Date().toISOString(), ...a];
+// Always printed. Used for real problems AND for the version/listening/allowlist lines, because
+// a log that cannot tell you which build produced it is not worth keeping at any level.
+const warn = (...a) => console.log(...stamp(a));
+const log = (...a) => { if (LOG_LEVEL >= LEVELS.info) console.log(...stamp(a)); };
+const debug = (...a) => { if (LOG_LEVEL >= LEVELS.debug) console.log(...stamp(a)); };
+const debugging = () => LOG_LEVEL >= LEVELS.debug;
 
 // While HA is down (a restart, or a host boot where core isn't up yet) every kiosk retry and
 // every in-flight stream produces the SAME error, hundreds of times a second — that flood is
@@ -269,7 +291,8 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 // immediately, then at most one summary line per window with the suppressed count.
 const THROTTLE_MS = 10000;
 const throttleState = new Map();
-function logThrottled(key, msg) {
+function logThrottled(key, msg, level = LEVELS.info) {
+  if (LOG_LEVEL < level) return;
   const t = throttleState.get(key);
   if (t) { t.n++; t.msg = msg; return; }
   log(msg);
@@ -1363,7 +1386,7 @@ async function buildResources(rpc, keysByDash) {
     }
     if (unmet.length) {
       RESOURCE_UNMET_BY_DASH.set(dash, unmet.sort());
-      log(`  !! resources ${dash}: ${unmet.length} card type(s) will NOT render — `
+      warn(`  !! resources ${dash}: ${unmet.length} card type(s) will NOT render — `
         + `${unmet.join(', ')}. The file that defines each was dropped. `
         + `Add a matching fragment to resources_always_forward, or set trim_resources: false.`);
     }
@@ -1852,7 +1875,7 @@ server.on('upgrade', (req, socket, head) => {
       if (widened.size !== before) { set = widened; selfIdentified = widened.size - before; }
     }
     if (dash || pinned || selfIdentified) {
-      log(`/api/websocket for ${rt.ip} (${rt.origin}, via ${rt.route}${rt.host ? ` @ ${rt.host}` : ''}): `
+      debug(`/api/websocket for ${rt.ip} (${rt.origin}, via ${rt.route}${rt.host ? ` @ ${rt.host}` : ''}): `
         + `serving ${dash ?? 'union'}${dash ? ` via ${via}` : ''}`
         + `${pinned ? ` +client rules (${dashSet.size} -> ${afterRules})` : ''}`
         + `${selfIdentified ? ` +${selfIdentified} self-identified` : ''} `
@@ -1873,7 +1896,7 @@ server.on('upgrade', (req, socket, head) => {
     const pt = classify(req);
     logThrottled(`passthrough:${req.url.split('?')[0]}`,
       `ws upgrade passthrough -> HA: ${req.url} (from ${pt.ip ?? '?'}${pt.origin ? `, ${pt.origin}` : ''}`
-      + `${pt.route ? ` via ${pt.route}` : ''})`);
+      + `${pt.route ? ` via ${pt.route}` : ''})`, LEVELS.debug);
     // NOTE the argument order: httpxy is `ws(req, socket, options, head)` where node-http-proxy
     // was `ws(req, socket, head)`. Passing `head` third would spread a Buffer into the request
     // options and break the upgrade — silently, since the socket simply never completes.
@@ -2000,7 +2023,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         // Answer locally and never forward: HA is not asked to build the registry again.
         // Safe against HA's increasing-id rule because nothing is sent to HA at all, and
         // the browser still sees replies in the order it asked.
-        logThrottled(`regcache:${kind}`, `${kind} registry served from cache${dash ? ` (${dash})` : ''}`);
+        logThrottled(`regcache:${kind}`, `${kind} registry served from cache${dash ? ` (${dash})` : ''}`, LEVELS.debug);
         stats.recordCacheHit(hit.length);
         safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
         return;
@@ -2017,7 +2040,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
       const hit = REG_RESPONSE_CACHE.get(regCacheKey('services', dash, cacheSig()));
       if (hit !== undefined) {
-        logThrottled('regcache:services', `get_services served from cache${dash ? ` (${dash})` : ''}`);
+        logThrottled('regcache:services', `get_services served from cache${dash ? ` (${dash})` : ''}`, LEVELS.debug);
         stats.recordCacheHit(hit.length);
         safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
         return;
@@ -2029,7 +2052,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (STRIP && m && m.type === 'subscribe_events'
         && (!m.event_type || m.event_type === 'state_changed')) {
       stateChangedSubs.add(m.id);
-      log(`subscribe_events(${m.event_type ?? 'ALL EVENTS'}) id=${m.id} from ${meta.ip ?? '?'} dash=${dash ?? '(union)'}`);
+      debug(`subscribe_events(${m.event_type ?? 'ALL EVENTS'}) id=${m.id} from ${meta.ip ?? '?'} dash=${dash ?? '(union)'}`);
     }
     // A client naming itself. A browser voice satellite sends its own entity_id on this socket
     // (voice_satellite/subscribe_events, and a keepalive check every 30s), which is a far better
@@ -2524,7 +2547,7 @@ history.start(() => stats.snapshot(statsExtras()), HISTORY_DIR);
 log(`history: sampling every ${history.INTERVAL_MS / 60000}min, keeping ${history.KEEP} buckets${HISTORY_DIR ? ` in ${HISTORY_DIR}` : ' (memory only)'}`);
 
 // ---- boot ----
-log(`ha-ws-trim-proxy v${VERSION} starting`);
+warn(`ha-ws-trim-proxy v${VERSION} starting`);
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
 log(`options: per_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together
@@ -2532,7 +2555,7 @@ log(`options: per_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compr
 // wait for it, not to exit. HTTP proxies through immediately (502 while HA is down, like any
 // reverse proxy); /api/websocket is refused until the first allowlist lands, above.
 server.listen(PORT, () => {
-  log(`HA trim-proxy listening on :${PORT}  ->  ${HA_BASE}`);
+  warn(`HA trim-proxy listening on :${PORT}  ->  ${HA_BASE}`);
   DASH_PATHS.forEach((p) => log(`  open: http://<host>:${PORT}/${p}`));
   // Started after listen, never awaited: discovery is beside the request path, so a network
   // that filters multicast costs us a label and nothing else.
@@ -2570,5 +2593,5 @@ server.on('error', (e) => {
 // so a malformed `allow_ws_url` throws `Invalid URL` right here — a config error worth dying
 // on, but with a message rather than a raw stack.
 startController()
-  .then(() => log(`union allowlist for [${DASH_PATHS.join(', ')}]: ${ALLOW.size} entities (strip_entities=${STRIP})`))
+  .then(() => warn(`union allowlist for [${DASH_PATHS.join(', ')}]: ${ALLOW.size} entities (strip_entities=${STRIP})`))
   .catch((e) => { console.error('fatal: cannot start the control connection:', e.message); process.exit(2); });

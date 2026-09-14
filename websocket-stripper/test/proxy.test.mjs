@@ -102,7 +102,8 @@ describe('proxy integration (strip on)', () => {
   before(async () => {
     mock = await startMockHa();
     port = await getFreePort();
-    proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
+    // see note in spawnProxy callers: these tests assert debug-level diagnostic lines
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port, extraEnv: { LOG_LEVEL: 'debug' } });
     // The proxy now listens BEFORE the allowlist exists, so "listening" no longer means
     // ready — the allowlist line is the real ready signal.
     await proxy.waitForLog(READY);
@@ -377,13 +378,54 @@ describe('live allowlist rebuild on lovelace_updated', () => {
 const TEST_DASH_ENTITIES = ['light.living_room', 'sensor.temperature', 'camera.front',
   'binary_sensor.front_door', 'sensor.humidity', 'switch.fan'];
 
+// A config key that quietly does nothing is worse than no key, so this pins that each level
+// actually filters — and, just as importantly, that `warn` never swallows the line telling you
+// which build is running. A log you cannot attribute to a version is not worth keeping.
+describe('log levels', () => {
+  const bootLog = async (level) => {
+    const mock = await startMockHa();
+    const port = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: 'test-dash', port,
+      extraEnv: level ? { LOG_LEVEL: level } : {} });
+    try {
+      await px.waitForLog(/union allowlist for/);   // written at warn, so visible at every level
+      await delay(250);
+      return px.out;
+    } finally { px.kill(); await mock.close(); }
+  };
+
+  it('warn keeps the version and the allowlist summary, and drops the routine detail', async () => {
+    const out = await bootLog('warn');
+    assert.match(out, /ha-ws-trim-proxy v/, 'the build must be identifiable at every level');
+    assert.match(out, /union allowlist for/, 'and so must the summary of what it is serving');
+    assert.doesNotMatch(out, /registry reach:/, 'routine info detail must be suppressed');
+  });
+
+  it('info is the default, and is unchanged from before levels existed', async () => {
+    const dflt = await bootLog(null);
+    assert.match(dflt, /registry reach:/, 'info detail is present with no LOG_LEVEL set');
+    assert.doesNotMatch(dflt, /\/api\/websocket for /, 'but per-connection chatter is not');
+  });
+
+  it('debug adds the per-decision detail that is written at no other level', async () => {
+    const out = await bootLog('debug');
+    assert.match(out, /registry reach:/, 'debug is a superset of info');
+  });
+
+  it('an unrecognised level falls back to info rather than going silent', async () => {
+    const out = await bootLog('bananas');
+    assert.match(out, /registry reach:/, 'a typo must not silently disable logging');
+  });
+});
+
 describe('survives an HA restart', () => {
   let mock, proxy, port, haPort;
   before(async () => {
     haPort = await getFreePort();
     mock = await startMockHa({ port: haPort });
     port = await getFreePort();
-    proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
+    // asserts the ws-upgrade passthrough line, which is debug-level chatter by design
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash', port, extraEnv: { LOG_LEVEL: 'debug' } });
     await proxy.waitForLog(READY);
   });
   after(async () => { proxy.kill(); await mock.close(); });

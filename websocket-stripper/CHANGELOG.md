@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026.09.14.3 — 2026-09-14
+
+**`log_level` — the service log finally has a volume control, and a way to ask for more.**
+
+There was none. `logThrottled` collapses *repeats of one key*, which does nothing about a hundred
+distinct clients each logging once — and measured on a live instance this turns over **~22
+websocket connections a minute**, each writing a line. That is tens of thousands of lines a day,
+every one of them invaluable while diagnosing something and noise the rest of the time.
+
+    warn    problems, plus the startup lines without which a log cannot be read at all
+    info    normal operation — the DEFAULT, and exactly what was always written
+    debug   per-connection and per-decision detail
+
+**`info` is the default deliberately, so upgrading changes nothing about what you see.** The
+point of this was never quieter defaults; it was having a way to *ask for more*. Diagnosing the
+navbar-card bug meant hand-diffing the proxy's `lovelace/resources` reply against Home
+Assistant's stored collection, because there was no level of detail available beyond what it
+already printed.
+
+Moved to `debug`: the per-connection attribution line, `subscribe_events`, websocket-upgrade
+passthrough, and registry/services cache hits — the volume drivers. Moved to `warn`: the version
+banner, the listening line, the allowlist summary, and the "card will not render" warning.
+
+The version banner is deliberately **warn**, not info, even though it is not a problem: a log
+that cannot tell you which build produced it is not worth keeping at any level.
+
+Three tests that asserted per-connection lines now spawn with `LOG_LEVEL=debug`, which is correct
+rather than a workaround — a test that checks diagnostic output should have to ask for
+diagnostics. Four more pin that the levels actually filter, that `warn` never swallows the
+version, and that an unrecognised value falls back to `info` rather than silencing the log.
+
+Also fixes a stale option description that still said the default port was 8099; it has been 9123
+since `.17`.
+
 ## 2026.09.14.2 — 2026-09-14
 
 **Test suite: fixes the flake at its root rather than by raising timeouts again.**
