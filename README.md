@@ -423,6 +423,10 @@ are JSON.
 | `COMPRESS_WS` | `compress_websocket` | Leave on. |
 | `TRIM_RESOURCES` | `trim_resources` | **Off by default** — read the tuning notes before enabling. |
 | `TRIM_SERVICES` | `trim_services` | **Off by default** — visibly lossy in the admin UI. |
+| `TRIM_REPAIRS` | `trim_repairs` | **Off by default.** Empties the admin Repairs backlog (~27 KB per load). |
+| `TRIM_TRANSLATIONS` | `trim_translations` | **Off by default, and the most lossy option here** — a missing translation renders its raw key on the dashboard. ~190 KB saved per load when it fits. |
+| `LOG_LEVEL` | `log_level` | `warn` / `info` (default) / `debug`. |
+| `PROXY_TIMEOUT_MS` | — | How long to wait on Home Assistant before returning 502 (default `120000`). `0` disables. |
 | `RESOURCES_ALWAYS_FORWARD` | `resources_always_forward` | URL fragments, e.g. `kiosk-mode`. |
 | `RESOURCES_NEVER_FORWARD` | `resources_never_forward` | |
 | `DASHBOARD_OVERRIDES` | `dashboard_overrides` | JSON array. Always/never lists scoped to one dashboard. |
@@ -606,6 +610,19 @@ Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG
 
 **The big ones, in plain English:**
 
+- 🌍 **Translations are the biggest thing left, and can now be trimmed.** Home Assistant sends
+  the browser translations for *every installed integration* on every page load — measured here
+  at **5,359 keys / 432 KB across 69 integrations**, of which `tuya_local` alone contributed 823
+  keys to panels that show no Tuya at all. `trim_translations` cuts it to what a connection can
+  actually see: **~190 KB off every load, 79% of that payload**. Off by default, and the one
+  option whose failure is *visible* rather than silent — a missing translation renders its raw
+  key on the dashboard — so turn it on and look at your panels. With `trim_repairs` alongside it
+  (the admin Repairs backlog, ~27 KB a load, which a kiosk never shows) total savings on the
+  instance this was built against reached **96%**
+- 🔍 **A log you can turn down, and turn up.** `log_level` adds `warn` / `info` / `debug`.
+  `info` is the default and is exactly what it always wrote, so nothing changes on upgrade —
+  the point is `debug`, which adds per-connection and per-decision detail that is not written at
+  any other level, for when you are actually hunting something
 - 🧱 **The whole stack got modernised, and wired up so it stays that way.** The runtime moved
   Node 20 → 24 → 26 (20 hit end-of-life in March 2026 and had been shipping without security
   patches), and `http-proxy` — untouched since December 2024 — was replaced with
