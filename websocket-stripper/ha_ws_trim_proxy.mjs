@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.9';
+const VERSION = '2026.09.14.10';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1965,6 +1965,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // card using the older subscribe_events path received the WHOLE firehose — the exact thing
   // this add-on exists to prevent. Measured at ~700MB/h to a single wall panel.
   const stateChangedSubs = new Set();
+  // subscribe_events subscriptions for entity_registry_updated. Separate from the set above
+  // because an ALL-events subscription already lands there and is already filtered; a
+  // subscription aimed specifically at the registry was not filtered by anything.
+  const registrySubs = new Set();
   // id -> the command the browser sent, so a `result` can be attributed to what asked for it.
   // Bounded: a client that never gets answers must not grow this without limit.
   const pendingTypes = new Map();
@@ -2087,6 +2091,17 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       stateChangedSubs.add(m.id);
       debug(`subscribe_events(${m.event_type ?? 'ALL EVENTS'}) id=${m.id} from ${meta.ip ?? '?'} dash=${dash ?? '(union)'}`);
     }
+    // Registry CHANGE events, which nothing filtered per connection. `registryEventMatters`
+    // gates only the control connection's rebuild decision; the egress filter below covered
+    // subscribe_entities and nothing else. So a panel subscribed here received a change event
+    // for every one of the instance's entities — measured at 91,873 bytes per frame and 14.3%
+    // of all websocket traffic, for entities that connection cannot see and has no row for,
+    // because the registry it was given was already trimmed to its allowlist.
+    if (STRIP && TRIM_REGISTRIES && m && m.type === 'subscribe_events'
+        && m.event_type === 'entity_registry_updated') {
+      registrySubs.add(m.id);
+      debug(`subscribe_events(entity_registry_updated) id=${m.id} from ${meta.ip ?? '?'}`);
+    }
     // A client naming itself. A browser voice satellite sends its own entity_id on this socket
     // (voice_satellite/subscribe_events, and a keepalive check every 30s), which is a far better
     // identity signal than an IP: it needs no mDNS — a web page cannot advertise it — no DHCP
@@ -2135,6 +2150,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (m && m.type === 'unsubscribe_events' && m.subscription != null) {
       subEntityIds.delete(m.subscription);
       stateChangedSubs.delete(m.subscription);
+      registrySubs.delete(m.subscription);
     }
     sendOrQueue(stampAllow
       ? () => {
@@ -2279,6 +2295,16 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // undefined on those, so an array frame fell through every branch untouched and
     // unlabelled — which is how an unfiltered firehose hid in plain sight. Handle the array
     // by filtering its elements, then fall through with the rest of the logic intact.
+    // A registry change for an entity this connection cannot see. Dropped whole: the browser
+    // holds no row for it, so the update has nothing to apply to. Entities that are ADDED and
+    // later become relevant are not lost — a new entity changes the allowlist, which triggers
+    // a recompute and reconnects open dashboards.
+    const dropRegistryEvent = (x) => STRIP && TRIM_REGISTRIES
+      && x && x.type === 'event'
+      && registrySubs.has(x.id)
+      && typeof x.event?.data?.entity_id === 'string'
+      && !allow.has(x.event.data.entity_id);
+
     const dropStateChanged = (x) => STRIP
       && x && x.type === 'event'
       && stateChangedSubs.has(x.id)
@@ -2301,6 +2327,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     const transform = (msg) => {
       if (!msg || typeof msg !== 'object') return msg;
       if (dropStateChanged(msg)) return null;
+      if (dropRegistryEvent(msg)) return null;
 
       if (STRIP && msg.type === 'result' && getStatesIds.has(msg.id) && Array.isArray(msg.result)) {
         const beforeB = sized(msg.result);

@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.09.14.10 — 2026-09-14
+
+**Registry change events were filtered by nothing, per connection.**
+
+With translations trimmed, the largest remaining payload turned out to be
+`entity_registry_updated` events: **91,873 bytes per frame, 14.3% of all websocket traffic**.
+
+Two things looked like they covered this and neither did. `registryEventMatters` gates only the
+**control** connection's decision about whether to rebuild the allowlist. The per-connection
+egress filter covered `subscribe_entities` and nothing else. So a panel subscribed to
+`entity_registry_updated` received a change event for **every entity on the instance** — 9,617 of
+them — including entities it holds no registry row for, because the registry it was served had
+already been trimmed to its allowlist. The update had nothing to apply to.
+
+Now dropped whole when the entity is outside the connection's allowlist, under `trim_registries`
+(already on by default): if you trim the registry, its change events follow.
+
+Entities newly added are not lost. A new entity changes the allowlist, which triggers a recompute
+and reconnects open dashboards.
+
+**The first version of the test was vacuous** and is worth recording. It collected events via a
+`c.onMessage?.()` that does not exist on the test client, so optional chaining silently no-opped,
+the array stayed empty, and `assert.ok(!seen.includes(...))` passed regardless of what the proxy
+did — confirmed by deleting the filter and watching it still pass. It now listens on the raw
+socket, and fails when the filter is removed.
+
 ## 2026.09.14.9 — 2026-09-14
 
 **Fixes the translations diagnostic pairing an untrimmed key count with a trimmed byte count.**

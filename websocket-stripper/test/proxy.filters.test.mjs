@@ -186,6 +186,58 @@ describe('#7 a grown allowlist reaches already-open pages', () => {
   });
 });
 
+// Registry CHANGE events were filtered by nothing per connection. registryEventMatters gates
+// only the control connection's rebuild decision, and the egress filter covered
+// subscribe_entities alone — so a panel subscribed here got a change event for every entity on
+// the instance, measured at 91,873 bytes per frame and 14.3% of all websocket traffic.
+//
+// The browser holds no registry row for an entity outside its allowlist, because the registry it
+// was served was already trimmed, so the update has nothing to apply to.
+describe('registry change events are filtered to the allowlist', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash', port });
+    await proxy.waitForLog(/union allowlist for/);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  it('forwards a change for an entity the dashboard shows, drops one it cannot see', async () => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    const id = c.send({ type: 'subscribe_events', event_type: 'entity_registry_updated' });
+    await delay(300);
+
+    // Listen on the RAW socket. An earlier draft used a `c.onMessage?.()` that does not exist,
+    // so optional chaining silently no-opped, `seen` stayed empty and the assertion below passed
+    // no matter what the proxy did — verified by deleting the filter and watching it still pass.
+    const seen = [];
+    c.ws.on('message', (raw) => {
+      try {
+        const m = JSON.parse(raw.toString());
+        for (const x of (Array.isArray(m) ? m : [m])) {
+          if (x?.type === 'event' && x.id === id) seen.push(x.event?.data?.entity_id);
+        }
+      } catch { /* non-JSON frames are not this test's business */ }
+    });
+    const got = c.waitFor((m) => m.type === 'event' && m.id === id
+      && m.event?.data?.entity_id === 'light.living_room');
+
+    // The decoy is not on any dashboard; the light is. Fired decoy FIRST, so if it were
+    // forwarded it would arrive before the one being waited on.
+    mock.fireEvent('entity_registry_updated', { action: 'update', entity_id: 'light.decoy' });
+    mock.fireEvent('entity_registry_updated', { action: 'update', entity_id: 'light.living_room' });
+
+    const ev = await got;
+    assert.equal(ev.event.data.entity_id, 'light.living_room',
+      'the allowlisted entity must arrive');
+    assert.ok(!seen.includes('light.decoy'),
+      'a registry change for an entity this connection cannot see must be dropped');
+    c.close();
+  });
+});
+
 describe('#9 the X-Forwarded-For chain survives an upstream proxy', () => {
   let mock, proxy, port;
   before(async () => {
