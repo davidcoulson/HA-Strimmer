@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.13.38';
+const VERSION = '2026.09.14.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1098,6 +1098,12 @@ let RESOURCE_STATS = new Map();       // dash -> { kept, dropped, keptKB, droppe
 // why the tuning loop is the part of this add-on people get wrong.
 let RESOURCE_DROPPED_ALL = [];        // [{ url, kb }] dropped by every dashboard
 let RESOURCE_DROPPED_BY_DASH = new Map();   // dash -> [{ url, kb }]
+// dash -> [card type]. Card types the dashboard renders that a DROPPED resource demonstrably
+// defines and no kept one does. See buildResources for why this uses literal evidence only.
+let RESOURCE_UNMET_BY_DASH = new Map();
+// { checkable, unknowable } — how much of the answer is knowable at all, reported alongside it
+// so the silence is legible rather than mistaken for a clean bill of health.
+let RESOURCE_UNMET_COVERAGE = { checkable: 0, unknowable: 0 };
 // How big the instance actually is, taken from the control connection's own get_states —
 // which asks for everything by definition. Lets the panel say "104 of 9,751", not just "104".
 let INSTANCE_ENTITIES = 0;
@@ -1296,6 +1302,36 @@ async function buildResources(rpc, keysByDash) {
   const byDash = new Map();
   RESOURCE_STATS = new Map();
   RESOURCE_DROPPED_BY_DASH = new Map();
+  RESOURCE_UNMET_BY_DASH = new Map();
+
+  // Which resources LITERALLY name each card type. This is the only definitive card -> file
+  // link available, and knowing its limits is the whole point.
+  //
+  // Static analysis of `customElements.define()` does not work: every bundle is minified, and
+  // they register as `customElements.define(t, ...)` with the name in a variable. Measured on
+  // real installs — navbar-card, button-card and bubble-card all do exactly that.
+  //
+  // But the name still has to exist as a string somewhere in a file that registers it, so a
+  // literal occurrence IS evidence. Also measured: `navbar-card` appears 38 times in
+  // navbar-card.js, `bubble-card` 20 times in bubble-card.js — while `mushroom-cover-card`
+  // appears NOWHERE in mushroom.js and `ha-bambulab-print_status-card` nowhere in
+  // ha-bambulab-cards.js, because both build their element names at runtime from a prefix.
+  //
+  // So this is precise where the evidence exists and SILENT where it does not. It is the
+  // opposite of the previous attempt, which reused the lenient keep-matcher and therefore could
+  // never fire. Fragments are deliberately not consulted here: they are right for deciding what
+  // to KEEP (over-including is free) and wrong for deciding what to WARN about (over-warning
+  // trains you to ignore it).
+  const literalProviders = new Map();
+  for (const r of rows) {
+    const c = RESOURCE_CACHE.get(r.url);
+    if (!c || c.unreadable) continue;
+    for (const k of c.literal) {
+      if (!literalProviders.has(k)) literalProviders.set(k, new Set());
+      literalProviders.get(k).add(resourcePath(r.url));
+    }
+  }
+  const checkable = new Set(), unknowable = new Set();
   for (const [dash, keys] of keysByDash) {
     const keep = new Set();
     let keptB = 0, dropB = 0;
@@ -1313,9 +1349,34 @@ async function buildResources(rpc, keysByDash) {
       kept: keep.size, dropped: rows.length - keep.size,
       keptKB: Math.round(keptB / 1024), droppedKB: Math.round(dropB / 1024),
     });
+    // A card this dashboard renders whose ONLY literal definer was dropped. That is a real
+    // broken card: it will render as an error card with no message, no console error and no
+    // network request, which is exactly how the navbar-card report took a hand diff to
+    // diagnose. Cards with no literal definer anywhere are not reported — not because they are
+    // fine, but because nothing here can tell.
+    const unmet = [];
+    for (const c of keys.cards) {
+      const provs = literalProviders.get(c);
+      if (!provs || !provs.size) { unknowable.add(c); continue; }
+      checkable.add(c);
+      if (![...provs].some((path) => keep.has(path))) unmet.push(c);
+    }
+    if (unmet.length) {
+      RESOURCE_UNMET_BY_DASH.set(dash, unmet.sort());
+      log(`  !! resources ${dash}: ${unmet.length} card type(s) will NOT render — `
+        + `${unmet.join(', ')}. The file that defines each was dropped. `
+        + `Add a matching fragment to resources_always_forward, or set trim_resources: false.`);
+    }
     const needs = [...[...keys.cards].sort(), ...[...keys.icons].sort().map((i) => i + ':')];
     log(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
     log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
+  }
+  RESOURCE_UNMET_COVERAGE = { checkable: checkable.size, unknowable: unknowable.size };
+  if (unknowable.size) {
+    log(`  resources: ${checkable.size} of ${checkable.size + unknowable.size} card type(s) can be `
+      + `checked for a missing definition; ${unknowable.size} build their element name at runtime `
+      + `(${[...unknowable].sort().slice(0, 6).join(', ')}${unknowable.size > 6 ? ', …' : ''}) `
+      + `and cannot be verified from here.`);
   }
   RESOURCES_BY_DASH = byDash;
 
@@ -2347,6 +2408,11 @@ function statsExtras() {
       // about to go quietly inert (pin it). The add-on cannot tell those apart; a person can.
       droppedByAll: RESOURCE_DROPPED_ALL,
       droppedByDashboard: Object.fromEntries(RESOURCE_DROPPED_BY_DASH),
+      // Card types that will NOT render, proven rather than guessed — the file that literally
+      // defines them was dropped. `unmetCoverage` says how much of the question is answerable:
+      // cards whose bundle builds the element name at runtime cannot be checked at all.
+      unmetByDashboard: Object.fromEntries(RESOURCE_UNMET_BY_DASH),
+      unmetCoverage: RESOURCE_UNMET_COVERAGE,
       alwaysForward: RES_ALWAYS.map((r) => r.literal ?? String(r.re)),
     },
   };

@@ -613,6 +613,58 @@ describe('resource trimming', () => {
     } finally { px.kill(); await m2.close(); }
   });
 
+  // The navbar-card case, reduced: a card whose defining file is identifiable by name, and
+  // which the trimmer dropped. This must be reported, because it is PROVEN broken — not guessed.
+  it('reports a card whose only literal definer was dropped', async () => {
+    const m2 = await startMockHa({
+      // renders my-fancy-card; `resources_never_forward` then drops the one file that names it
+      configs: { 'res-dash': CFG },
+    });
+    const p2 = await getFreePort();
+    const sp = await getFreePort();
+    const px = spawnProxy({
+      mock: m2, dashPaths: 'res-dash', port: p2, statsPort: sp,
+      extraEnv: { TRIM_RESOURCES: '1', RESOURCES_NEVER_FORWARD: 'my-fancy-card' },
+    });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const stats = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
+      const unmet = (stats.resources || {}).unmetByDashboard || {};
+      assert.deepEqual(unmet['res-dash'], ['my-fancy-card'],
+        'the card whose definer was dropped must be named');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // The other half, and the reason the previous attempt was withdrawn. Mushroom's fixture body
+  // builds its element names at runtime — `customElements.define(`${P}-${t}-card`)` — so the
+  // string `mushroom-cover-card` appears nowhere in the file. Real bundles do exactly this;
+  // measured on a live install, mushroom.js and ha-bambulab-cards.js both do.
+  //
+  // Nothing can tell whether such a card will render, so nothing must be claimed. Reporting it
+  // would be crying wolf, and a warning people learn to ignore is worse than no warning.
+  it('stays silent about a card whose bundle builds its name at runtime', async () => {
+    const m2 = await startMockHa({
+      configs: { 'res-dash': { views: [{ cards: [
+        { type: 'custom:mushroom-cover-card', entity: 'light.living_room' },
+      ] }] } },
+      resources: [{ id: 'm1', type: 'module', url: '/res/mushroom.js' }],
+    });
+    const p2 = await getFreePort();
+    const sp = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'res-dash', port: p2, statsPort: sp,
+      extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(/union allowlist for/);
+      const stats = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
+      const res = stats.resources || {};
+      assert.deepEqual(res.unmetByDashboard || {}, {},
+        'a card that cannot be verified must not be reported as broken');
+      // And the silence is declared rather than implied.
+      assert.ok((res.unmetCoverage || {}).unknowable >= 1,
+        'the unverifiable card must be counted, so the silence is legible');
+    } finally { px.kill(); await m2.close(); }
+  });
+
   it('trim_resources off (the default) leaves the list untouched', async () => {
     const p2 = await getFreePort();
     const px = spawnProxy({ mock, dashPaths: 'res-dash', port: p2 });

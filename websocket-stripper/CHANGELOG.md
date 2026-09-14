@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026.09.14.1 — 2026-09-14
+
+**A card that will not render is now reported — proven, not guessed.** This is the third attempt
+at the warning `.37` shipped broken and `.38` withdrew, and the difference is that this one knows
+what it cannot know.
+
+Two dead ends were measured before landing on the answer, both worth recording so nobody spends
+the afternoon again:
+
+**Static analysis of `customElements.define()` does not work.** Every bundle is minified and
+registers as `customElements.define(t, ...)` with the element name in a variable. Checked against
+real installs: navbar-card, button-card and ha-bambulab-cards all do exactly that. Nothing useful
+can be extracted.
+
+**Reusing the keep-matcher cannot work** — that was `.37`'s bug. It asked "does a kept resource
+provide this card?" with the same lenient matcher that decided to keep it, so the answer was
+always yes.
+
+What does work is the literal name, because a file that registers an element almost always
+contains that element's name as a string even when it passes it through a variable. Measured:
+
+    navbar-card                    appears 38x in navbar-card.js
+    bubble-card                    appears 20x in bubble-card.js
+    button-card                    appears  2x in button-card.js
+    mushroom-cover-card            appears  0x in mushroom.js
+    ha-bambulab-print_status-card  appears  0x in ha-bambulab-cards.js
+
+The last two build their element names at runtime from a prefix, so no evidence exists — and
+that is the point. A card is reported **only** when a resource literally names it and every such
+resource was dropped. That is a proven broken card. A card nothing literally names is not
+reported, because nothing here can tell whether it works, and a warning that cries wolf is worse
+than no warning.
+
+Fragments are deliberately not consulted. They are right for deciding what to KEEP, where
+over-including is free, and wrong for deciding what to WARN about, where over-warning is the
+whole failure.
+
+The silence is declared rather than implied: `resources.unmetCoverage` reports how many card
+types could be checked at all, and the log names the ones that could not. Roughly half the cards
+on the instance this was built against are verifiable — so half now have a real safety net, and
+the other half get honest silence instead of a false clean bill of health.
+
+Both directions are tested, and both were verified by breaking them: making every file claim
+every card fails the positive test, and reporting the unverifiable cards fails the silence test.
+
 ## 2026.09.13.38 — 2026-09-13
 
 **Removes the "card needed but no resource provides it" warning added in `.37`. It could never
