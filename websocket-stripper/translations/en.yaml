@@ -72,6 +72,16 @@ configuration:
       of its entities; both are needed, because a Tuya sensor's state names live under the
       integration while its entity_id says `sensor`. Turn it on, load every panel, and look before
       trusting it.
+  trim_themes:
+    name: Trim themes
+    description: >-
+      Home Assistant sends EVERY installed theme to every client on every page load — 10 themes
+      and 28,138 bytes on the instance this was built against, of which a panel renders exactly
+      one. This sends only the themes your dashboards actually name, plus whatever HA currently
+      reports as its default and dark default (read from the reply itself, so a dark default no
+      dashboard mentions is still kept). Off by default, and visibly lossy if it guesses wrong —
+      an unthemed dashboard is obvious at a glance. If the trim would keep nothing, the full list
+      is sent instead.
   trim_repairs:
     name: Trim the Repairs backlog
     description: >-

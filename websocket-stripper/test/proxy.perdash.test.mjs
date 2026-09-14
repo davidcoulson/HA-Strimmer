@@ -510,6 +510,40 @@ describe('translation trimming', () => {
   });
 });
 
+// HA sends every installed theme to every client on every load. A panel renders one.
+describe('theme trimming', () => {
+  const themes = async (extraEnv, cfg) => {
+    const m2 = await startMockHa(cfg ? { configs: { 'res-dash': cfg } } : undefined);
+    const port = await getFreePort();
+    const dash = cfg ? 'res-dash' : 'test-dash';
+    const px = spawnProxy({ mock: m2, dashPaths: dash, port, extraEnv });
+    try {
+      await px.waitForLog(READY);
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+      await c.authed;
+      const r = (await c.rpc({ type: 'frontend/get_themes' })).result;
+      c.close();
+      return r;
+    } finally { px.kill(); await m2.close(); }
+  };
+
+  it('keeps the themes a dashboard names, plus the defaults HA reports', async () => {
+    // This dashboard asks for `Frosted`; HA's default is `Mushroom`. Both must survive.
+    const r = await themes({ TRIM_THEMES: '1' }, {
+      views: [{ theme: 'Frosted', cards: [{ type: 'custom:my-fancy-card', entity: 'light.living_room' }] }],
+    });
+    assert.ok(r.themes.Frosted, 'the theme the dashboard names must be kept');
+    assert.ok(r.themes.Mushroom, 'and the default HA reports, which no dashboard names');
+    assert.ok(!r.themes.minimalist, 'a theme nothing references is dropped');
+    assert.ok(!r.themes.iCloud3, 'likewise');
+  });
+
+  it('is off by default', async () => {
+    const r = await themes({}, null);
+    assert.equal(Object.keys(r.themes).length, 4, 'nothing is lost until asked for');
+  });
+});
+
 describe('repairs trimming', () => {
   const issues = async (p2, extraEnv) => {
     const m2 = await startMockHa();

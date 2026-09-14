@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.14.11"
+version: "2026.09.14.12"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -80,6 +80,8 @@ options:
   trim_services: false
   # Empty the admin Repairs backlog for trimmed connections (~27KB per page load).
   trim_repairs: false
+  # Send only the themes a dashboard actually uses, plus HA's defaults (~28KB/load).
+  trim_themes: false
   # Cut frontend translations to the integrations this connection can see (~247KB/load).
   trim_translations: false
   # URL patterns (literal substring or /regex/) always sent, whatever the content match says.
@@ -130,6 +132,7 @@ schema:
   trim_resources: bool
   trim_services: bool
   trim_repairs: "bool?"
+  trim_themes: "bool?"
   trim_translations: "bool?"
   user_agent_dashboards:
     - match: str

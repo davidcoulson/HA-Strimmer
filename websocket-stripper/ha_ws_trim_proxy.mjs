@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.11';
+const VERSION = '2026.09.14.12';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -105,6 +105,11 @@ const TRIM_TRANSLATIONS = OPT.trim_translations !== undefined ? !!OPT.trim_trans
 // Payloads whose structure is reported once to stats so a trim can be designed from the real
 // thing. Purely observational and costs one shallow walk per reply.
 const SHAPE_TYPES = new Set(['frontend/get_themes', 'custom_icons/list', 'frontend/get_icons']);
+// Home Assistant sends every installed theme to every client: 10 themes and 28,138 bytes on the
+// instance this was built against, of which a panel renders exactly one. Off by default and
+// visibly lossy if it gets it wrong — an unthemed dashboard is obvious.
+const TRIM_THEMES = OPT.trim_themes !== undefined ? !!OPT.trim_themes
+  : (process.env.TRIM_THEMES ?? '0') !== '0';
 const TRIM_REPAIRS = OPT.trim_repairs !== undefined ? !!OPT.trim_repairs
   : (process.env.TRIM_REPAIRS ?? '0') !== '0';
 const TRIM_SERVICES = OPT.trim_services !== undefined ? !!OPT.trim_services
@@ -556,6 +561,7 @@ async function buildAllow(rpc, renderTemplate) {
   // Tuya sensor's state strings live under `component.tuya_local`, while its entity_id says
   // `sensor.`. Filtering translations on entity domains alone would drop exactly the tree that
   // names its states, and the dashboard would render raw keys instead.
+  THEMES_USED = new Set();
   PLATFORM_BY_ENTITY = new Map();
   for (const e of (registries?.entities || [])) {
     if (e?.entity_id && e?.platform) PLATFORM_BY_ENTITY.set(e.entity_id, e.platform);
@@ -577,6 +583,14 @@ async function buildAllow(rpc, renderTemplate) {
       // and drops the icon pack that renders it. Measured here: 20 entities carry `phu:`
       // icons set in the registry, and the string "phu" appears in no dashboard config.
       keysByDash.set(p, resourceKeys(cfg, set, byId));
+      // Theme names this dashboard asks for. A `theme:` can sit on the dashboard, on a view or
+      // on a card, so the whole config tree is walked rather than a fixed set of places.
+      (function collectThemes(n) {
+        if (!n || typeof n !== 'object') return;
+        if (Array.isArray(n)) { n.forEach(collectThemes); return; }
+        if (typeof n.theme === 'string' && n.theme) THEMES_USED.add(n.theme);
+        for (const v of Object.values(n)) collectThemes(v);
+      })(cfg);
       set.forEach((e) => union.add(e));
     } catch (e) { failed++; log(`  ${p}: FAILED ${e.message}`); }
   }
@@ -1715,6 +1729,9 @@ const CLIENT_LEARNED_MAX = 500;
 let REG_CACHE_BY_ENTITY = null;
 // entity_id -> integration domain, built alongside the allowlist. See buildAllow.
 let PLATFORM_BY_ENTITY = new Map();
+// Theme names referenced anywhere in the served dashboards' configs. Home Assistant sends EVERY
+// installed theme on every page load — 10 themes, 28,138 bytes here — and a panel renders one.
+let THEMES_USED = new Set();
 
 // Entities a client has told us it needs, by naming itself. Strictly additive: it can only ever
 // widen an allowlist, never narrow one.
@@ -1964,6 +1981,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const repairIds = new Set();      // repairs/list_issues requests, to empty their result
   const translationIds = new Set(); // frontend/get_translations, for the size analysis below
   const shapeIds = new Map();       // id -> type, for the one-shot shape capture below
+  const themeIds = new Set();       // frontend/get_themes requests, to cut to the themes in use
   // `subscribe_events` subscriptions that will deliver state_changed. These bypass the
   // allowlist entirely: the egress filter below only ever covered subscribe_entities, so a
   // card using the older subscribe_events path received the WHOLE firehose — the exact thing
@@ -2082,6 +2100,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // a filter keyed on entity domain, which renders raw keys — so nothing else gets trimmed on
     // the strength of what its API "probably" returns.
     if (m && SHAPE_TYPES.has(m.type)) shapeIds.set(m.id, m.type);
+    if (STRIP && TRIM_THEMES && m && m.type === 'frontend/get_themes') themeIds.add(m.id);
     if (STRIP && TRIM_REPAIRS && m && m.type === 'repairs/list_issues') repairIds.add(m.id);
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
       const hit = REG_RESPONSE_CACHE.get(regCacheKey('services', dash, cacheSig()));
@@ -2368,6 +2387,28 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // once here saves doing it per hit, and nothing downstream can mutate a string.
       regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
     }
+    if (STRIP && TRIM_THEMES && msg && msg.type === 'result' && themeIds.has(msg.id)
+        && msg.result && typeof msg.result.themes === 'object') {
+      themeIds.delete(msg.id);
+      // The two defaults are read from the REPLY, not from config: they are whatever HA says
+      // they are right now, including a dark default that no dashboard names anywhere.
+      const keep = new Set([msg.result.default_theme, msg.result.default_dark_theme, ...THEMES_USED]
+        .filter((t) => typeof t === 'string' && t));
+      const beforeB = sized(msg.result);
+      const beforeN = Object.keys(msg.result.themes).length;
+      const next = {};
+      for (const [name, def] of Object.entries(msg.result.themes)) if (keep.has(name)) next[name] = def;
+      const afterN = Object.keys(next).length;
+      // Keeping nothing would leave every dashboard unthemed, which is worse than sending all
+      // of them — so an empty result forwards the original, same as the services trim.
+      if (afterN && afterN !== beforeN) {
+        msg.result = { ...msg.result, themes: next };
+        changed = true;
+        logThrottled('themes', `get_themes trimmed ${beforeN} -> ${afterN} themes${dash ? ` (${dash})` : ''}`);
+      }
+      cat = 'themes';
+      frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
+    }
     if (msg && msg.type === 'result' && shapeIds.has(msg.id)) {
       const kind = shapeIds.get(msg.id);
       shapeIds.delete(msg.id);
@@ -2593,6 +2634,7 @@ function statsExtras() {
       // reported them as absent when they were merely unlisted — which is indistinguishable
       // from "Supervisor never passed it", the exact question this block exists to answer.
       trim_repairs: TRIM_REPAIRS,
+      trim_themes: TRIM_THEMES,
       trim_translations: TRIM_TRANSLATIONS,
       log_level: Object.keys(LEVELS).find((k) => LEVELS[k] === LOG_LEVEL) ?? 'info',
       // Found by the guard test the moment it was written: these two had been missing since they

@@ -172,6 +172,12 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
         // The admin Repairs backlog. Two issues is enough to tell "emptied" from "untouched".
         // Shaped like the real thing: every key `component.<x>.…`, mixing entity DOMAINS with
         // INTEGRATIONS, because the distinction is the whole difficulty of trimming it.
+        // Four themes; the fixture dashboard names one, and HA reports one as default.
+        case 'frontend/get_themes': return ok({
+          default_theme: 'Mushroom', default_dark_theme: null,
+          themes: { Mushroom: { 'primary-color': '#111' }, Frosted: { 'primary-color': '#222' },
+                    minimalist: { 'primary-color': '#333' }, iCloud3: { 'primary-color': '#444' } },
+        });
         case 'frontend/get_translations': return ok({ resources: {
           'component.light.entity_component._.state.on': 'On',
           'component.sensor.entity_component._.state.unknown': 'Unknown',
