@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.10';
+const VERSION = '2026.09.14.11';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -102,6 +102,9 @@ const COMPRESS_WS = OPT.compress_websocket !== undefined ? !!OPT.compress_websoc
 // `component.light.entity_component._.state.on` where "On" should be.
 const TRIM_TRANSLATIONS = OPT.trim_translations !== undefined ? !!OPT.trim_translations
   : (process.env.TRIM_TRANSLATIONS ?? '0') !== '0';
+// Payloads whose structure is reported once to stats so a trim can be designed from the real
+// thing. Purely observational and costs one shallow walk per reply.
+const SHAPE_TYPES = new Set(['frontend/get_themes', 'custom_icons/list', 'frontend/get_icons']);
 const TRIM_REPAIRS = OPT.trim_repairs !== undefined ? !!OPT.trim_repairs
   : (process.env.TRIM_REPAIRS ?? '0') !== '0';
 const TRIM_SERVICES = OPT.trim_services !== undefined ? !!OPT.trim_services
@@ -1960,6 +1963,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const serviceIds = new Set();     // get_services requests, to trim their result
   const repairIds = new Set();      // repairs/list_issues requests, to empty their result
   const translationIds = new Set(); // frontend/get_translations, for the size analysis below
+  const shapeIds = new Map();       // id -> type, for the one-shot shape capture below
   // `subscribe_events` subscriptions that will deliver state_changed. These bypass the
   // allowlist entirely: the egress filter below only ever covered subscribe_entities, so a
   // card using the older subscribe_events path received the WHOLE firehose — the exact thing
@@ -2073,6 +2077,11 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // translation renders its raw key ON the dashboard. So measure first, in the product,
     // rather than reason from HA's key conventions and hope.
     if (m && m.type === 'frontend/get_translations') translationIds.add(m.id);
+    // Shape capture for payloads that are candidates for trimming but have not been seen yet.
+    // Measuring before designing has changed the design twice — translations would have shipped
+    // a filter keyed on entity domain, which renders raw keys — so nothing else gets trimmed on
+    // the strength of what its API "probably" returns.
+    if (m && SHAPE_TYPES.has(m.type)) shapeIds.set(m.id, m.type);
     if (STRIP && TRIM_REPAIRS && m && m.type === 'repairs/list_issues') repairIds.add(m.id);
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
       const hit = REG_RESPONSE_CACHE.get(regCacheKey('services', dash, cacheSig()));
@@ -2358,6 +2367,19 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
       regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
+    }
+    if (msg && msg.type === 'result' && shapeIds.has(msg.id)) {
+      const kind = shapeIds.get(msg.id);
+      shapeIds.delete(msg.id);
+      const r = msg.result;
+      const describe = (v, d = 0) => {
+        if (v === null || typeof v !== 'object') return typeof v;
+        if (Array.isArray(v)) return `array[${v.length}]` + (v.length && d < 2 ? ` of ${describe(v[0], d + 1)}` : '');
+        const keys = Object.keys(v);
+        return d >= 2 ? `object{${keys.length} keys}`
+          : `object{${keys.length}: ${keys.slice(0, 8).join(', ')}${keys.length > 8 ? ', …' : ''}}`;
+      };
+      stats.recordShape(kind, { bytes: sized(r), shape: describe(r), topKeys: (r && typeof r === 'object' && !Array.isArray(r)) ? Object.keys(r).slice(0, 25) : null });
     }
     if (msg && msg.type === 'result' && translationIds.has(msg.id)) {
       translationIds.delete(msg.id);

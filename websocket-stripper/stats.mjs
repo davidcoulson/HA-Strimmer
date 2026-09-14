@@ -103,6 +103,12 @@ export function recordEvent(bytes, count = 1) { events.count += count; events.by
 let translations = null;
 export function recordTranslations(t) { translations = { ...t, at: new Date().toISOString() }; }
 
+// One snapshot per message kind, for payloads being considered for trimming. Observational and
+// temporary by nature: once a trim exists for a payload, its real before/after lands in `savings`
+// and the shape stops being the interesting thing about it.
+const shapes = new Map();
+export function recordShape(kind, info) { shapes.set(kind, { ...info, at: new Date().toISOString() }); }
+
 export function recordTraffic(kind, bytes) {
   let e = traffic.get(kind);
   if (!e) {
@@ -262,6 +268,7 @@ export function snapshot(extra = {}) {
     // Untrimmed, and the largest thing left in the boot path. Reported so the size of the
     // opportunity — and the risk of taking it — can be judged from data rather than convention.
     translations,
+    shapes: Object.fromEntries(shapes),
     uptimeSec: Math.round((now - startedAt) / 1000),
     startedAt: new Date(startedAt).toISOString(),
     generatedAt: new Date(now).toISOString(),
