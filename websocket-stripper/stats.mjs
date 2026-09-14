@@ -97,6 +97,12 @@ export function recordTrim(category, before, after) {
 // overhead. Same reasoning as the batched-frame trim accounting.
 export function recordEvent(bytes, count = 1) { events.count += count; events.bytes += bytes; }
 
+// The most recent frontend/get_translations reply, broken down by key prefix. Kept as ONE
+// snapshot rather than accumulated: the question is "what is in a translations payload", which
+// every reply answers identically, and summing them would just multiply by page loads.
+let translations = null;
+export function recordTranslations(t) { translations = { ...t, at: new Date().toISOString() }; }
+
 export function recordTraffic(kind, bytes) {
   let e = traffic.get(kind);
   if (!e) {
@@ -253,6 +259,9 @@ export function snapshot(extra = {}) {
     // repo changing. Read once at boot (see OS_RELEASE) rather than per request — it cannot
     // change while the process lives.
     os: OS_RELEASE,
+    // Untrimmed, and the largest thing left in the boot path. Reported so the size of the
+    // opportunity — and the risk of taking it — can be judged from data rather than convention.
+    translations,
     uptimeSec: Math.round((now - startedAt) / 1000),
     startedAt: new Date(startedAt).toISOString(),
     generatedAt: new Date(now).toISOString(),

@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.5';
+const VERSION = '2026.09.14.6';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1940,6 +1940,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const resourceIds = new Set();    // lovelace/resources requests, to trim their result
   const serviceIds = new Set();     // get_services requests, to trim their result
   const repairIds = new Set();      // repairs/list_issues requests, to empty their result
+  const translationIds = new Set(); // frontend/get_translations, for the size analysis below
   // `subscribe_events` subscriptions that will deliver state_changed. These bypass the
   // allowlist entirely: the egress filter below only ever covered subscribe_entities, so a
   // card using the older subscribe_events path received the WHOLE firehose — the exact thing
@@ -2043,6 +2044,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // the registries — identical for every client on a given allowlist. It was the last of the
     // big instance-wide payloads still being rebuilt by HA and re-parsed here once per
     // connection, while the registries beside it were being served from memory.
+    // Observed, never trimmed. get_translations is the largest untrimmed payload in the boot
+    // path — ~247KB per call, 21.6% of all websocket traffic on the instance this was built
+    // against — and trimming it is risky in a way the other payloads are not: a missing
+    // translation renders its raw key ON the dashboard. So measure first, in the product,
+    // rather than reason from HA's key conventions and hope.
+    if (m && m.type === 'frontend/get_translations') translationIds.add(m.id);
     if (STRIP && TRIM_REPAIRS && m && m.type === 'repairs/list_issues') repairIds.add(m.id);
     if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
       const hit = REG_RESPONSE_CACHE.get(regCacheKey('services', dash, cacheSig()));
@@ -2305,6 +2312,24 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
       regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
+    }
+    if (msg && msg.type === 'result' && translationIds.has(msg.id)) {
+      translationIds.delete(msg.id);
+      // Key COUNTS per prefix, not bytes: byte-accurate subtree sizes would mean serialising
+      // each one, and this payload is a quarter of a megabyte. Counts answer the question that
+      // matters — how much of it is `component.<domain>` and therefore filterable at all.
+      const res = msg.result?.resources;
+      if (res && typeof res === 'object') {
+        const byPrefix = {};
+        let total = 0;
+        for (const k of Object.keys(res)) {
+          total++;
+          const parts = String(k).split('.');
+          const pre = parts[0] === 'component' && parts.length > 1 ? `component.${parts[1]}` : parts[0];
+          byPrefix[pre] = (byPrefix[pre] || 0) + 1;
+        }
+        stats.recordTranslations({ keys: total, bytes: sized(msg.result), byPrefix });
+      }
     }
     // Emptied rather than dropped. The frontend asks for this and waits; a missing reply would
     // leave that request pending forever, while an empty issue list is a perfectly valid answer

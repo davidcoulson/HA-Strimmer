@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.09.14.6 — 2026-09-14
+
+**Reports what is actually inside a translations payload, before trimming it.**
+
+`frontend/get_translations` is the largest untrimmed payload in the boot path — **~247KB per
+call, 21.6% of all websocket traffic**. Trimming it by domain looks obvious, since the keys are
+`component.<domain>.…` exactly like `get_services`. But the failure mode is worse than anything
+else trimmed here: a missing translation renders its **raw key on the dashboard**, so
+`component.light.entity_component._.state.on` appears where "On" should be.
+
+That is not a thing to design from convention. `stats.json` now reports the most recent reply
+broken down by key prefix, so the decision can be made from the actual payload: how much of it is
+`component.<domain>` and therefore filterable, and how much is `ui.*` / `state.*` that every
+dashboard needs whatever it shows.
+
+Key counts rather than byte-accurate subtree sizes — weighing each subtree would mean serialising
+a quarter-megabyte payload piece by piece, and counts answer the question being asked.
+
 ## 2026.09.14.5 — 2026-09-14
 
 **`trim_repairs` — empties the admin Repairs backlog for trimmed connections.**
