@@ -112,7 +112,8 @@
       JavaScript, a template it cannot resolve, an integration that renames things). Search the
       whole instance here and send it anyway.
       <div style="margin-top:.5rem">Pinning writes a literal entity_id to <code>always_forward</code>
-      and needs an app restart to take effect. <code>never_forward</code> still wins over it.</div>
+      and is applied immediately — the allowlist rebuilds and panels pick it up on their next
+      reconnect, with no restart. <code>never_forward</code> still wins over it.</div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:10px">
       <input id="ent-q" type="search" placeholder="entity id or name — e.g. assist_satellite, porch, vacuum"
@@ -167,7 +168,7 @@
           <b>invisible</b> — the dashboard renders normally and only the behaviour stops. Pin it.</li>
       </ul>
       <div style="margin-top:.5rem">Pinning writes to <code>resources_always_forward</code> and
-      needs an app restart to take effect.</div>
+      is applied immediately — the resource scan re-runs, with no restart.</div>
     </div>
     <div id="tuning-wrap" class="tblwrap"><table id="tuning"><thead>
       <tr><th>Resource</th><th>Size</th><th></th></tr>

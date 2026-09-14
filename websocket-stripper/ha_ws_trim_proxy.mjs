@@ -49,7 +49,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.14';
+const VERSION = '2026.09.14.15';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -141,6 +141,14 @@ function parseRules(v) {
   });
 }
 const ALWAYS = parseRules(OPT.always_forward ?? process.env.ALWAYS_FORWARD);
+// Set by the control connection once it is up. Lets the stats panel ask for a rebuild after
+// pinning something, so a pin takes effect immediately instead of waiting for a restart.
+//
+// Deliberately narrow. General config hot-reload was considered and rejected — it would mean
+// mutable state for every option and half-applied configurations where old connections behave
+// differently from new ones. This is the opposite: two lists the panel itself writes, applied
+// through the rebuild path that already exists for a dashboard edit.
+let requestRecompute = null;
 const NEVER = parseRules(OPT.never_forward ?? process.env.NEVER_FORWARD);
 // Per-dashboard always/never, on top of the global lists above.
 //
@@ -757,10 +765,15 @@ function startController() {
           if (next !== null) scheduleRecompute(next);
         }
       };
+      // Published so a panel pin can trigger the same rebuild a dashboard edit does.
       const scheduleRecompute = (why) => {
         clearTimeout(recomputeTimer);
         recomputeTimer = setTimeout(() => runRecompute(why), 1500);
       };
+      // Cleared when this socket goes away, so a pin during an HA outage reports honestly that
+      // it needs a restart rather than silently doing nothing.
+      requestRecompute = scheduleRecompute;
+      ws.on('close', () => { if (requestRecompute === scheduleRecompute) requestRecompute = null; });
 
       ws.on('message', async (raw) => {
         // Guarded: this handler is async, so a throw here becomes an unhandled rejection —
@@ -2788,9 +2801,15 @@ const statsServer = http.createServer((req, res) => {
           return res.end(JSON.stringify({ error: 'fragment must be at least 3 characters' }));
         }
         const out = await pinResource(fragment.trim());
-        log(`resource pinned via panel: ${fragment.trim()}${out.already ? ' (already present)' : ''} — restart to apply`);
+        let live = false;
+        if (!out.already) {
+          RES_ALWAYS.push({ literal: fragment.trim() });
+          if (requestRecompute) { requestRecompute(`pinned resource ${fragment.trim()}`); live = true; }
+        }
+        log(`resource pinned via panel: ${fragment.trim()}${out.already ? ' (already present)' : ''}`
+          + `${live ? ' — rebuilding now' : ' — restart to apply'}`);
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, ...out, restartRequired: !out.already }));
+        res.end(JSON.stringify({ ok: true, ...out, applied: live, restartRequired: !out.already && !live }));
       } catch (e) {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));
@@ -2841,9 +2860,19 @@ const statsServer = http.createServer((req, res) => {
           return res.end(JSON.stringify({ error: `no such entity on this instance: ${id}` }));
         }
         const out = await pinEntity(id);
-        log(`entity pinned via panel: ${id}${out.already ? ' (already present)' : ''} — restart to apply`);
+        // Apply it now rather than at the next restart. The rule list is read on every rebuild,
+        // so appending and asking for a recompute is the whole mechanism — and the rebuild path
+        // already drops open dashboard connections when entities are ADDED, so panels pick the
+        // entity up on their own reconnect without anyone touching them.
+        let live = false;
+        if (!out.already) {
+          ALWAYS.push({ literal: id });
+          if (requestRecompute) { requestRecompute(`pinned ${id}`); live = true; }
+        }
+        log(`entity pinned via panel: ${id}${out.already ? ' (already present)' : ''}`
+          + `${live ? ' — rebuilding now' : ' — restart to apply'}`);
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, ...out, restartRequired: !out.already }));
+        res.end(JSON.stringify({ ok: true, ...out, applied: live, restartRequired: !out.already && !live }));
       } catch (e) {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026.09.14.15 — 2026-09-14
+
+**Pinning from the panel applies immediately. No restart.**
+
+Clicking **Always send** and then being told to restart the app was the worst part of the feature
+shipped in `.14` — a restart drops every panel's connection to deliver one entity.
+
+The allowlist already rebuilds live on a dashboard edit or a registry change, and the rule lists
+are read on every rebuild. So a pin now appends to the in-memory list and asks for the same
+recompute a dashboard edit triggers. The rebuild path already drops open dashboard connections
+when entities are **added**, so panels reconnect and pick the entity up on their own.
+
+Applies to resource pins too, which had the same restart footnote.
+
+**This is deliberately not the config hot-reload that was considered and rejected earlier.** That
+would have meant mutable state for all seventeen options and half-applied configurations where
+existing connections behave differently from new ones. This is two lists the panel itself writes,
+applied through a rebuild path that already exists.
+
+If the control connection is down — Home Assistant restarting — there is nothing to rebuild
+through, so the response says `restartRequired` and the panel says so too, rather than claiming
+success and silently doing nothing.
+
 ## 2026.09.14.14 — 2026-09-14
 
 **Search the whole instance for a missing entity, and send it — from the panel.**
