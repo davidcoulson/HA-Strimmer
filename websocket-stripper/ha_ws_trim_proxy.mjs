@@ -28,6 +28,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import { createProxyServer } from 'httpxy';
 import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
@@ -49,7 +50,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.19';
+const VERSION = '2026.09.14.20';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2698,9 +2699,49 @@ const PANEL_HTML = (() => {
   catch (e) { log(`stats: panel.html unreadable (${e.message}) — the JSON API still works`); return null; }
 })();
 
+// What the machine in front of us is called.
+//
+// "proxy" as a label is ambiguous in this add-on of all places, because the add-on IS a proxy —
+// a row reading `lan · proxy` invites the reading "went through the stripper", which every row
+// did. The honest generic is "reverse proxy", and that is the fallback. But the hop is a real
+// address and usually has a real name, so it is worth asking.
+//
+// Reverse DNS rather than the Supervisor API deliberately: Supervisor's resolver answers PTR for
+// the add-on network (172.30.33.5 -> a0d7b954-nginxproxymanager.local.hass.io), so a reverse
+// proxy running as an add-on names itself with no API call, no token and no role — and the same
+// lookup names a proxy on the LAN if the network's own DNS knows it. An /addons call would cover
+// only the first case and would need a Supervisor role this add-on has no other use for.
+const HOP_NAMES = new Map();          // ip -> { name, at } — name null means "asked, nothing there"
+const HOP_TTL_MS = 10 * 60 * 1000;
+
+// Add-on hostnames carry a repository prefix that is noise to a reader: `a0d7b954-` for a
+// community repo, `local-` for a local one, `core-` for a bundled one. The name after it is the
+// part anyone recognises.
+function tidyHostname(host) {
+  const first = String(host || '').split('.')[0];
+  return first.replace(/^(?:[0-9a-f]{8}|local|core|addon)[-_]/i, '') || null;
+}
+
+function hopNameFor(ip) {
+  if (!ip) return null;
+  const hit = HOP_NAMES.get(ip);
+  if (hit && Date.now() - hit.at < HOP_TTL_MS) return hit.name;
+  if (hit) HOP_NAMES.delete(ip);
+  // Mark it in flight before awaiting, so a burst of connections asks once.
+  HOP_NAMES.set(ip, { name: hit?.name ?? null, at: Date.now() });
+  dns.promises.reverse(ip)
+    .then((names) => HOP_NAMES.set(ip, { name: tidyHostname(names[0]), at: Date.now() }))
+    // No PTR record is the normal case on most networks; it is not worth a log line.
+    .catch(() => HOP_NAMES.set(ip, { name: null, at: Date.now() }));
+  return hit?.name ?? null;
+}
+
 function statsExtras() {
   return {
     version: VERSION,
+    // Same reasoning as deviceFor: resolved per snapshot, because the first lookup is still in
+    // flight when the connection that triggered it is recorded.
+    hopNameFor,
     // Resolved per snapshot rather than captured at connect: discovery is asynchronous, so a
     // client that connects in the first second of uptime is seen before any mDNS answer arrives.
     // A label frozen then would stay empty for the life of that connection.

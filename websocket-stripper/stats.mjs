@@ -76,6 +76,8 @@ let connTotal = 0;
 // flow diagram at all, because a Sankey's links ARE the pairings. The marginals below are derived
 // from this, so the table and the diagram can never disagree.
 const byFlow = new Map();       // "origin\0route\0host" -> count
+// route -> the addresses that delivered it, so a route can be named rather than described.
+const hopsByRoute = new Map();
 const FLOW_SEP = '\u0000';      // a byte no hostname or route label can contain
 
 const bump = (map, key) => {
@@ -131,6 +133,20 @@ export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, ho
   const id = nextConnId++;
   connTotal += 1;
   bump(byFlow, [origin || 'unknown', route || 'unknown', host || 'unknown'].join(FLOW_SEP));
+  // Which machines actually delivered each kind of route. Kept so the panel can NAME a route
+  // rather than calling it "proxy" — a label that is genuinely ambiguous here, since this add-on
+  // is itself a proxy. The addresses are resolved to names at snapshot time, not now: the lookup
+  // is asynchronous and the first connection always arrives before its own answer does.
+  // Only for `proxy`, and deliberately so. It is the one route whose hop is a genuine
+  // intermediary AND whose label is ambiguous. For `direct` the hop is the CLIENT, so naming the
+  // route after it would put a wall panel's own hostname where the route belongs; for `ingress`
+  // it is Supervisor, and "ingress" already says more than "hassio-supervisor" would; `cloudflare`
+  // names itself. Widening this to every route was tried and produced exactly those labels.
+  if (route === 'proxy' && hop && (hopsByRoute.has(route) || hopsByRoute.size < MAX_CATS)) {
+    let set = hopsByRoute.get(route);
+    if (!set) { set = new Set(); hopsByRoute.set(route, set); }
+    if (set.size < 8) set.add(hop);
+  }
   conns.set(id, {
     id, ip: ip || null, dash: dash || null, via: via || null, allowSize: allowSize || 0,
     // How this connection reached the add-on. Observational only — see route.mjs on why none
@@ -385,7 +401,29 @@ export function snapshot(extra = {}) {
     // Lifetime tallies of how connections arrived. Counted at open, so these keep counting
     // devices that have since disconnected — which is the whole point of having them next to
     // a list that only shows what is live.
-    paths: pathsSnapshot(),
+    paths: {
+      ...pathsSnapshot(),
+      // A name for each route, where the machines that delivered it agree on one.
+      //
+      // Only when they AGREE: two different reverse proxies answering the same route have no
+      // single name, and inventing one would put a label on the diagram that is true of some of
+      // the traffic and false for the rest. The panel falls back to the generic wording, which is
+      // never wrong.
+      routeNames: (() => {
+        const hopNameFor = typeof extra.hopNameFor === 'function' ? extra.hopNameFor : null;
+        if (!hopNameFor) return {};
+        const out = {};
+        for (const [route, ips] of hopsByRoute) {
+          const names = new Set();
+          for (const ip of ips) {
+            const n = hopNameFor(ip);
+            if (n) names.add(n);
+          }
+          if (names.size === 1) out[route] = [...names][0];
+        }
+        return out;
+      })(),
+    },
   };
 }
 
@@ -427,6 +465,7 @@ export function reset() {
   traffic.clear();
   conns.clear();
   byFlow.clear();
+  hopsByRoute.clear();
   recent.clear();
   nextConnId = 1; connTotal = 0;
 }

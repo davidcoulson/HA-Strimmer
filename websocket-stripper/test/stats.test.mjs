@@ -693,3 +693,60 @@ describe('clients seen in the last 24h', () => {
     assert.equal(recent.length, 2, 'one browser on two dashboards is two things worth seeing');
   });
 });
+
+// Naming a route after the machine that delivered it.
+//
+// "proxy" is ambiguous in this add-on specifically, because the add-on IS a proxy — so the panel
+// prefers the hop's real name when there is one. The rule that matters is the abstention: a name
+// is only offered when every machine serving that route agrees on it, because a label that is
+// true of some of the traffic and false for the rest is worse than the generic wording.
+describe('naming a route after its hop', () => {
+  const open = (route, hop) => stats.connOpen({ ip: '10.0.0.1', origin: 'lan', route, host: 'h', hop });
+
+  it('names a route when every hop that served it resolves to the same name', () => {
+    stats.reset();
+    open('proxy', '172.30.33.5');
+    open('proxy', '172.30.33.5');
+    const snap = stats.snapshot({ hopNameFor: (ip) => (ip === '172.30.33.5' ? 'nginxproxymanager' : null) });
+    assert.equal(snap.paths.routeNames.proxy, 'nginxproxymanager');
+  });
+
+  it('offers no name when two different machines serve the same route', () => {
+    stats.reset();
+    open('proxy', '172.30.33.5');
+    open('proxy', '10.2.9.9');
+    const snap = stats.snapshot({
+      hopNameFor: (ip) => (ip === '172.30.33.5' ? 'nginxproxymanager' : 'caddy'),
+    });
+    assert.equal(snap.paths.routeNames.proxy, undefined,
+      'two names for one route means the panel must fall back to the generic label');
+  });
+
+  it('offers no name when the hop does not resolve', () => {
+    stats.reset();
+    open('proxy', '10.2.9.9');
+    const snap = stats.snapshot({ hopNameFor: () => null });
+    assert.equal(snap.paths.routeNames.proxy, undefined);
+  });
+
+  // On a direct connection the hop IS the client, so a resolvable name there belongs to a wall
+  // panel, not to a front door. Naming the route after it would put "laundry-tablet" in the Route
+  // column — which is why only `proxy` is named at all.
+  it('never names a direct route, where the hop is the client itself', () => {
+    stats.reset();
+    open('proxy', '172.30.33.5');
+    open('direct', '10.2.4.209');
+    const snap = stats.snapshot({
+      hopNameFor: (ip) => (ip === '172.30.33.5' ? 'nginxproxymanager' : 'laundry-tablet'),
+    });
+    assert.equal(snap.paths.routeNames.proxy, 'nginxproxymanager');
+    assert.equal(snap.paths.routeNames.direct, undefined,
+      'a client hostname must never be presented as the route it arrived on');
+  });
+
+  it('reports nothing at all when no resolver is supplied', () => {
+    stats.reset();
+    open('proxy', '172.30.33.5');
+    assert.deepEqual(stats.snapshot().paths.routeNames, {});
+  });
+});

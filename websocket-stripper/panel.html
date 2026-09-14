@@ -312,7 +312,8 @@ const CL_COLS = [
   { th: 'Client', get: (c) => c.ip || '?', key: (c) => ipKey(c.ip) },
   { th: 'Device', get: (c) => (c.device ? (c.device.name || c.device.kind)
       + (c.device.kind && c.device.name ? ` (${c.device.kind})` : '') : '—') },
-  { th: 'From', get: (c) => (c.origin && c.route ? c.origin + ' · ' + c.route : c.origin || c.route || '—') },
+  { th: 'From', get: (c) => (c.origin && c.route ? c.origin + ' · ' + prettyRoute(c.route)
+      : c.origin || (c.route && prettyRoute(c.route)) || '—') },
   { th: 'Front door', get: (c) => c.host || '—' },
   { th: 'User', get: (c) => c.user || '—' },
   { th: 'Dashboard', get: (c) => c.dashboard || '(union — not attributed)' },
@@ -422,6 +423,22 @@ $('cl').querySelector('thead').addEventListener('keydown', (e) => {
 //
 // Hand-rolled SVG, no charting library: a CDN script cannot load here anyway, and a three-column
 // Sankey with no crossing-minimisation to do is about sixty lines.
+// Names for routes, where the hop that delivered them resolved to one (see stats.mjs).
+let routeNames = {};
+
+// What to CALL a route on screen.
+//
+// "proxy" is the one label that had to change. In this add-on it is ambiguous to the point of
+// being misleading: the add-on is itself a proxy, so `lan · proxy` reads as "came through the
+// stripper", which every single row did. "reverse proxy" says the thing that is actually true of
+// the connection, and when the machine in front has a resolvable name — an add-on like
+// nginxproxymanager, or anything the network's DNS knows — that name is better still.
+function prettyRoute(route) {
+  const r = String(route || 'unknown');
+  if (routeNames[r]) return routeNames[r];
+  return r === 'proxy' ? 'reverse proxy' : r;
+}
+
 let liveFlows = [];      // since restart, from stats.json
 let dayFlows = null;     // last 24h, from history.json (null until the first fetch lands)
 let pathsRange = 'live';
@@ -459,10 +476,15 @@ function drawSankey(host, flows) {
 
   // Group flows into nodes per column, preserving first-seen order within a descending sort so
   // the thickest band sits at the top and bands cross as little as possible.
+  // The middle column is labelled, not raw: nodes are identified by what they are CALLED, while
+  // colour still keys off the raw route value. labelToRoute carries that back.
+  const cellOf = (f, key) => (key === 'route' ? prettyRoute(f.route) : (f[key] || 'unknown'));
+  const labelToRoute = new Map(flows.map((f) => [prettyRoute(f.route), f.route || 'unknown']));
+  const colourOf = (label) => routeColour(labelToRoute.get(label) ?? label);
   const nodes = COLS.map(() => new Map());
   for (const f of flows) {
     COLS.forEach((key, i) => {
-      const v = f[key] || 'unknown';
+      const v = cellOf(f, key);
       nodes[i].set(v, (nodes[i].get(v) || 0) + f.n);
     });
   }
@@ -512,7 +534,7 @@ function drawSankey(host, flows) {
   for (let i = 0; i < COLS.length - 1; i++) {
     const links = new Map();
     for (const f of flows) {
-      const k = `${f[COLS[i]] || 'unknown'}\u0000${f[COLS[i + 1]] || 'unknown'}`;
+      const k = `${cellOf(f, COLS[i])}\u0000${cellOf(f, COLS[i + 1])}`;
       links.set(k, (links.get(k) || 0) + f.n);
     }
     for (const [k, n] of [...links].sort((a, b) => b[1] - a[1])) {
@@ -531,7 +553,7 @@ function drawSankey(host, flows) {
       const mid = (x0 + x1) / 2;
       const band = svgEl('path', {
         class: 'band',
-        fill: routeColour(i === 0 ? b : a),
+        fill: colourOf(i === 0 ? b : a),
         d: `M${x0},${y0} C${mid},${y0} ${mid},${y1} ${x1},${y1}`
          + ` L${x1},${y1 + h1} C${mid},${y1 + h1} ${mid},${y0 + h0} ${x0},${y0 + h0} Z`,
       });
@@ -549,7 +571,7 @@ function drawSankey(host, flows) {
         height: p.h, rx: 2 });
       // Only the route column is coloured; the other two stay neutral so the colour means one
       // thing on the whole diagram instead of three unrelated things.
-      if (i === 1) rect.setAttribute('fill', routeColour(name));
+      if (i === 1) rect.setAttribute('fill', colourOf(name));
       svg.appendChild(rect);
       const anchor = i === 2 ? 'end' : 'start';
       const tx = i === 2 ? p.x - 6 : p.x + NODE_W + 6;
@@ -579,7 +601,7 @@ function drawSankey(host, flows) {
     // textContent, not innerHTML: a route label is derived from request headers, and this panel
     // renders it. Same rule as every other row in here.
     item.appendChild(document.createTextNode(
-      `${route} — ${n} connection${n === 1 ? '' : 's'} (${Math.round((n / total) * 100)}%)`));
+      `${prettyRoute(route)} — ${n} connection${n === 1 ? '' : 's'} (${Math.round((n / total) * 100)}%)`));
     legend.appendChild(item);
   }
   host.appendChild(legend);
@@ -605,7 +627,7 @@ function renderPaths() {
   const flows = pathsRange === 'day' ? (dayFlows || []) : liveFlows;
   drawSankey($('sankey'), flows);
   const total = flows.reduce((a, f) => a + f.n, 0) || 1;
-  rows('paths', flows, (f) => [f.origin, f.route, f.host, f.n,
+  rows('paths', flows, (f) => [f.origin, prettyRoute(f.route), f.host, f.n,
     ((f.n / total) * 100).toFixed(0) + '%']);
   const span = $('paths-span');
   if (pathsRange === 'day') {
@@ -857,6 +879,7 @@ async function tick() {
   renderClients();
 
   // Kept for the "Since restart" view; the 24h view gets its flows from history.json instead.
+  routeNames = (s.paths && s.paths.routeNames) || {};
   liveFlows = (s.paths && s.paths.flows) || [];
   renderPaths();
 }

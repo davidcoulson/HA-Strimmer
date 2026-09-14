@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026.09.14.20 — 2026-09-14
+
+**A route is named after the machine that served it, instead of being called "proxy".**
+
+`proxy` was the one label in this panel that could mislead, and it did so in the worst possible
+place: **this add-on is itself a proxy**, so a row reading `lan · proxy` invites the reading "came
+through the stripper" — which every row did. The label said nothing and implied something false.
+
+The generic fallback is now **"reverse proxy"**, which is true of every connection it describes.
+But the hop is a real address and usually has a real name, so the add-on asks: a **reverse DNS
+lookup** of the machine that opened the TCP connection. On a Home Assistant install, Supervisor's
+own resolver answers PTR for the add-on network — `172.30.33.5` comes back as
+`a0d7b954-nginxproxymanager.local.hass.io` — so a reverse proxy running as an add-on names itself
+with **no Supervisor API call, no token and no role**. The same lookup names a proxy elsewhere on
+the network whenever local DNS knows it. The repository prefix (`a0d7b954-`, `local-`, `core-`)
+is stripped, because it is noise to a reader.
+
+The name appears in the Sankey, its legend, and the clients table's **From** column.
+
+**It abstains rather than guess, in two ways.** A name is only used when every machine serving
+that route resolves to the *same* one — two reverse proxies have no single name, and a label
+true of some traffic and false for the rest is worse than the generic wording. And only `proxy`
+is ever named: for `direct` the hop is the **client**, so naming the route after it would put a
+wall panel's own hostname in the Route column; for `ingress` it is Supervisor, and "ingress"
+already says more than `hassio-supervisor` would; `cloudflare` names itself.
+
+That second rule came out of a test that did not work. The first version of "keeps routes apart"
+passed against a deliberately broken build, because the unresolvable hop it used was discarded
+anyway. Making it resolve — to a client's hostname — exposed the real defect: naming every route
+put `laundry-tablet` where a front door belongs.
+
+---
+
+274 tests.
+
 ## 2026.09.14.19 — 2026-09-14
 
 **The stats panel answers "who is connected, from where" properly.**
