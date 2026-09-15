@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026.09.15.27 — 2026-09-15
+
+**The resource trim can see fonts.**
+
+A CSS resource names no custom element, so the card matcher had nothing to match on and **every
+stylesheet was dropped for every dashboard**. That is right by accident when nothing uses the
+font and wrong silently when something does: a missing `@font-face` throws nothing and logs
+nothing — the dashboard just renders in the fallback face, and the first report is someone saying
+"it looks different".
+
+A stylesheet is now kept for a dashboard that asks for one of the families it declares. Families
+are read from `@font-face` blocks in the body that is already fetched for the card scan, so this
+costs no extra request.
+
+**Themes are included, and that is the point.** A font is far more often set by a theme than by a
+card, so the check covers the dashboard config, the themes that dashboard names, and the instance
+default themes. Scanning only the config would have dropped the stylesheet a theme depends on.
+
+**Two traps avoided, both found by measuring rather than reasoning:**
+
+* Matching is against `font-family` declarations, not the raw config. Card bundles declare fonts
+  with names like `inter`, and a substring search finds that inside "printer", "interval" and
+  "winter" — a dashboard mentioning a printer would have kept a 663KB bundle.
+* "Could not check" and "checked, no fonts named" are different answers. Conflating them (an empty
+  string read as falsy) kept every bundle carrying an `@font-face` on every dashboard that simply
+  does not style fonts: **1,940KB per dashboard** on a live instance. Verified fixed by comparing
+  per-dashboard kept/dropped bytes against the pre-change baseline — all five identical.
+
+Dropped stylesheets now report the families they declare, because that drop is the silent one: a
+missing card says "Custom element doesn't exist", a missing font says nothing at all.
+
+**Not covered, and cannot be:** a `@import url(...)` inside a card's own `card_mod` CSS is not a
+Lovelace resource. The browser fetches it while rendering the card and this app never sees it —
+localise the font and point the import at `/local/...` instead.
+
+---
+
 ## 2026.09.15.26 — 2026-09-15
 
 **An access list for the panel status API, checked before authentication.**

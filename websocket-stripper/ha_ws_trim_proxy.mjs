@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.26';
+const VERSION = '2026.09.15.27';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -743,6 +743,25 @@ async function buildAllow(rpc, renderTemplate) {
   const union = new Set();
   const perDash = new Map();
   const keysByDash = new Map();
+  // Theme definitions, once, so a font set BY A THEME is not invisible to the resource trim.
+  // Each theme collapses to a lowercase blob of its own values; matching a font family against
+  // that is enough, and avoids caring which of the dozen font-related theme variables was used.
+  //
+  // Failure here must not cost a dashboard its fonts, so an empty map means "unknown", and the
+  // keep rule treats unknown the way it treats every other unreadable thing: keep.
+  const themeBlobs = new Map();
+  try {
+    const th = await rpc({ type: 'frontend/get_themes' });
+    for (const [name, def] of Object.entries(th?.themes || {})) {
+      themeBlobs.set(name, JSON.stringify(def).toLowerCase());
+    }
+    const defs = [th?.default_theme, th?.default_dark_theme].filter(Boolean);
+    if (defs.length) {
+      themeBlobs.set('__defaults__', defs.map((d) => themeBlobs.get(d) || '').join(' '));
+    }
+  } catch (e) {
+    log(`  themes: could not read them for the font check (${e.message}) — font stylesheets will be kept`);
+  }
   let failed = 0;
   for (const p of DASH_PATHS) {
     try {
@@ -756,15 +775,21 @@ async function buildAllow(rpc, renderTemplate) {
       // the entity registry, not in any dashboard's YAML, so a config-only scan misses it
       // and drops the icon pack that renders it. Measured here: 20 entities carry `phu:`
       // icons set in the registry, and the string "phu" appears in no dashboard config.
-      keysByDash.set(p, resourceKeys(cfg, set, byId));
+      const keys = resourceKeys(cfg, set, byId);
       // Theme names this dashboard asks for. A `theme:` can sit on the dashboard, on a view or
       // on a card, so the whole config tree is walked rather than a fixed set of places.
+      const dashThemes = new Set();
       (function collectThemes(n) {
         if (!n || typeof n !== 'object') return;
         if (Array.isArray(n)) { n.forEach(collectThemes); return; }
-        if (typeof n.theme === 'string' && n.theme) THEMES_USED.add(n.theme);
+        if (typeof n.theme === 'string' && n.theme) { THEMES_USED.add(n.theme); dashThemes.add(n.theme); }
         for (const v of Object.values(n)) collectThemes(v);
       })(cfg);
+      // Where this dashboard could name a font: its own config, the themes it asks for, and the
+      // instance defaults, which apply wherever a dashboard names none. Empty when themes could
+      // not be read, which the keep rule reads as "do not drop a font stylesheet".
+      keys.fontText = themeBlobs.size ? fontTextFor(cfg, dashThemes, themeBlobs) : null;
+      keysByDash.set(p, keys);
       set.forEach((e) => union.add(e));
     } catch (e) { failed++; log(`  ${p}: FAILED ${e.message}`); }
   }
@@ -1418,6 +1443,55 @@ const KNOWN_DASH_KEYS = new Set([
   'title', 'views', 'background', 'strategy', 'template', 'config', 'theme', 'max_columns',
 ]);
 
+// Font families a stylesheet declares, from its @font-face blocks.
+//
+// A CSS resource names no custom element, so the card matcher has nothing to match on and every
+// stylesheet was dropped for every dashboard. That is right by accident when nothing uses the
+// font and WRONG SILENTLY when something does: a missing font throws no error and logs nothing,
+// the dashboard simply renders in the fallback face. This gives stylesheets something to be
+// matched on.
+//
+// The body is already fetched for the card scan, so this costs no extra request.
+function fontsDeclaredIn(body) {
+  const out = new Set();
+  // Only inside @font-face: a `font-family: Quicksand` in an ordinary rule means the file USES
+  // the font, not that it provides it, and keeping a stylesheet because it mentions a font it
+  // does not carry would keep almost everything.
+  for (const m of String(body).matchAll(/@font-face\s*\{([^}]*)\}/gi)) {
+    const fam = m[1].match(/font-family\s*:\s*(['"]?)([^;'"]+)\1/i);
+    if (fam && fam[2]) out.add(fam[2].trim().toLowerCase());
+  }
+  return out;
+}
+
+// Everywhere a dashboard could ask for a font — but ONLY what is actually named as a font.
+//
+// Two sources, and the second is the one that matters: a font is far more often set by a THEME
+// than by a card. Scanning only the dashboard config would drop the stylesheet a theme depends
+// on — silently, which is the failure this exists to prevent.
+//
+// The values are extracted from `font-family` declarations rather than searched for in the raw
+// config, and that is not fussiness. Card bundles declare fonts with names like `inter`, and a
+// substring search finds that inside "printer", "interval" and "winter" — so a dashboard that
+// mentions a printer would have kept a 663KB bundle. Matching only what follows `font-family`
+// (in CSS, in card_mod, and in theme variables like `primary-font-family`) removes the entire
+// class of false positive without weakening the real match.
+function fontTextFor(cfg, themeNames, themeBlobs) {
+  let raw = '';
+  try { raw = JSON.stringify(cfg) || ''; } catch { raw = ''; }
+  for (const t of themeNames) raw += ' ' + (themeBlobs.get(t) || '');
+  // The default themes apply wherever a dashboard names none, so they always count.
+  const defaults = themeBlobs.get('__defaults__');
+  if (defaults) raw += ' ' + defaults;
+  raw = raw.toLowerCase();
+
+  const parts = [];
+  // Skips the punctuation between the property and its value, which differs between CSS
+  // (`font-family: x`) and a theme's JSON (`"primary-font-family":"x"`).
+  for (const m of raw.matchAll(/font-family["'\s:=]*([^;"',}\\]+)/g)) parts.push(m[1].trim());
+  return parts.join(' | ');
+}
+
 function resourceKeys(cfg, allowed = null, byId = null) {
   const cards = new Set();      // custom card/row/badge/feature types
   const icons = new Set();      // non-builtin icon namespaces
@@ -1605,6 +1679,19 @@ function keepResource(url, keys, providers = null) {
   const c = RESOURCE_CACHE.get(url);
   if (!c || c.unreadable) return true;            // cannot check, so keep
   for (const k of keys.icons) if (c.icons.has(k)) return true;
+  // A stylesheet that declares a font this dashboard asks for, in its config or in a theme it
+  // uses. Kept deliberately ahead of the card tests: a font resource has no card names to match,
+  // so without this it can only ever be dropped.
+  if (c.fonts?.size) {
+    // null means the themes could not be read, so we genuinely do not know — keep, the same rule
+    // an unreadable resource already follows. An EMPTY STRING is a different answer: we looked and
+    // this dashboard names no font at all, which is the common case and must drop.
+    //
+    // Conflating the two cost 1,940KB per dashboard on a live instance — every bundle that
+    // happens to carry an @font-face, kept on every dashboard that simply does not style fonts.
+    if (keys.fontText == null) return true;
+    for (const f of c.fonts) if (keys.fontText.includes(f)) return true;
+  }
   for (const k of keys.cards) {
     const prov = providers?.get(k);
     // A provider is known for this card type, so only the provider counts for it.
@@ -1706,11 +1793,12 @@ async function buildResources(rpc, keysByDash) {
         literal: new Set([...literalNames].filter((k) => body.includes(k))),
         icons: new Set([...unionIcons].filter((k) => bodyHasIcon(body, k))),
         frags: new Set([...unionFrags].filter((f) => body.includes(f))),
+        fonts: fontsDeclaredIn(body),
         unreadable: false,
         bytes: body.length,
       });
     } catch (e) {
-      RESOURCE_CACHE.set(r.url, { tested: new Set(unionKeys), literal: new Set(), icons: new Set(), frags: new Set(), unreadable: true, bytes: 0 });
+      RESOURCE_CACHE.set(r.url, { tested: new Set(unionKeys), literal: new Set(), icons: new Set(), frags: new Set(), fonts: new Set(), unreadable: true, bytes: 0 });
       logThrottled(`res:${r.url}`, `  resources: could not read ${r.url} (${e.message}) — always forwarding it`);
     }
   }
@@ -1799,7 +1887,16 @@ async function buildResources(rpc, keysByDash) {
     byDash.set(dash, keep);
     RESOURCE_DROPPED_BY_DASH.set(dash, rows
       .filter((r) => !keep.has(resourcePath(r.url)))
-      .map((r) => ({ url: r.url.split('?')[0], kb: Math.round((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024) }))
+      // `fonts` is reported for a dropped stylesheet because that drop is the silent one: a
+      // missing card says "Custom element doesn't exist", a missing font says nothing at all.
+      // Seeing "provides quicksand, and this dashboard never asks for it" is the difference
+      // between a five-minute answer and a typeface nobody can explain.
+      .map((r) => {
+        const c = RESOURCE_CACHE.get(r.url);
+        const row = { url: r.url.split('?')[0], kb: Math.round((c?.bytes || 0) / 1024) };
+        if (c?.fonts?.size) row.fonts = [...c.fonts];
+        return row;
+      })
       .sort((a, b) => b.kb - a.kb));
     RESOURCE_STATS.set(dash, {
       kept: keep.size, dropped: rows.length - keep.size,
@@ -1866,7 +1963,12 @@ async function buildResources(rpc, keysByDash) {
   for (const keep of byDash.values()) for (const u of keep) servedAnywhere.add(u);
   const droppedByAll = rows.filter((r) => !servedAnywhere.has(r.url));
   RESOURCE_DROPPED_ALL = droppedByAll
-    .map((r) => ({ url: r.url.split('?')[0], kb: Math.round((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024) }))
+    .map((r) => {
+      const c = RESOURCE_CACHE.get(r.url);
+      const row = { url: r.url.split('?')[0], kb: Math.round((c?.bytes || 0) / 1024) };
+      if (c?.fonts?.size) row.fonts = [...c.fonts];
+      return row;
+    })
     .sort((a, b) => b.kb - a.kb);
   if (droppedByAll.length) {
     const kb = droppedByAll.reduce((t, r) => t + (RESOURCE_CACHE.get(r.url)?.bytes || 0), 0) / 1024;
