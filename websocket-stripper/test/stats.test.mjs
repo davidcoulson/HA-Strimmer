@@ -750,3 +750,80 @@ describe('naming a route after its hop', () => {
     assert.deepEqual(stats.snapshot().paths.routeNames, {});
   });
 });
+
+// The configuration endpoints behind the console's Config tab.
+//
+// These WRITE configuration, so they carry the same Ingress-only rule as the pins — and two
+// things beyond it: a setup option can never be taken over, and a save must say plainly that it
+// applies on the next restart rather than now.
+describe('config endpoints', () => {
+  const post = (port, body) => new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const r = http.request({ host: '127.0.0.1', port, path: '/config', method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } },
+      (res) => { let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve({ status: res.statusCode, body: b })); });
+    r.on('error', reject); r.end(data);
+  });
+  const get = (port, path) => new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path }, (res) => {
+      let b = ''; res.on('data', (c) => b += c);
+      res.on('end', () => resolve({ status: res.statusCode, body: b }));
+    }).on('error', reject);
+  });
+
+  it('reports every option with the source answering for it', async () => {
+    const mock = await startMockHa();
+    const port = await getFreePort(); const sp = await getFreePort();
+    const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1' } });
+    try {
+      let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+      const deadline = Date.now() + 10000;
+      while (!/for live allowlist updates/.test(out)) {
+        if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const d = JSON.parse((await get(sp, '/config.json')).body);
+      // This proxy was started from the environment, with no options file at all. Every option
+      // must STILL be listed: the console's job is to offer settings that have never been set,
+      // and an earlier version derived the list from the options file, so on a fresh install it
+      // showed nothing at all.
+      assert.ok(Array.isArray(d.options) && d.options.length >= 20,
+        `every option must be offered even with no options file, got ${d.options?.length}`);
+      const themes = d.options.find((o) => o.key === 'trim_themes');
+      assert.ok(themes, 'an option that is not set must still be listed');
+      assert.equal(themes.editable, true);
+      assert.equal(themes.type, 'bool', 'the console needs the type to pick a control');
+
+      assert.ok(d.bootstrap.includes('proxy_port') && d.bootstrap.includes('ha_base'),
+        'setup options are named, so the console can explain why they are not editable');
+      for (const k of d.bootstrap) {
+        const row = d.options.find((o) => o.key === k);
+        assert.ok(row, `${k} must be listed, greyed, rather than silently absent`);
+        assert.equal(row.editable, false, `${k} must not be editable`);
+      }
+      // Structured options are shown but not offered until there is an editor for them.
+      assert.equal(d.options.find((o) => o.key === 'user_overrides').editable, false);
+    } finally { proxy.kill(); await mock.close(); }
+  });
+
+  it('refuses a write that did not come through Ingress', async () => {
+    const mock = await startMockHa();
+    const port = await getFreePort(); const sp = await getFreePort();
+    const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1' } });
+    try {
+      let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+      const deadline = Date.now() + 10000;
+      while (!/for live allowlist updates/.test(out)) {
+        if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const r = await post(sp, { key: 'trim_themes', action: 'adopt' });
+      assert.equal(r.status, 403, 'a direct write must be refused, exactly like the pins');
+      assert.match(r.body, /Ingress/);
+    } finally { proxy.kill(); await mock.close(); }
+  });
+});

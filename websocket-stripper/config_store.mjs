@@ -31,9 +31,51 @@ import path from 'node:path';
 export const STORE_VERSION = 1;
 
 // Setup, not functionality. These stay in add-on options forever.
+// Both spellings of each port, deliberately: the rename to proxy_port/mgmt_port would otherwise
+// leave the canonical names adoptable while only the legacy aliases were protected — and adopting
+// the port the console is served on is the one change that can make the console unreachable.
 export const BOOTSTRAP_KEYS = new Set([
-  'log_level', 'port', 'stats_port', 'ha_base', 'allow_ws_url',
+  'log_level', 'proxy_port', 'port', 'mgmt_port', 'stats_port', 'ha_base', 'allow_ws_url',
 ]);
+
+// Every option the console may take over, and what shape it is.
+//
+// This is declared rather than derived from whatever happens to be in /data/options.json, because
+// an option nobody has set yet is exactly the one someone came to the console to set. Deriving
+// the list from the options file shows only settings that already exist, so a default-valued
+// option is invisible — the console would appear to be missing the very toggle being looked for.
+//
+// Kept honest by a test that compares it against config.yaml's schema, the same way the stats
+// options block is pinned: a new option added to the schema and not listed here fails the suite.
+// `objects` are the list-of-dicts options. They are listed so the console can show what is set
+// and say where it comes from, but editing them needs a real editor rather than a text box —
+// that arrives with the unified overrides work.
+export const EDITABLE_KEYS = {
+  dashboards: 'list',
+  always_forward: 'list',
+  never_forward: 'list',
+  strip_entities: 'bool',
+  per_dashboard: 'bool',
+  trim_registries: 'bool',
+  compress_websocket: 'bool',
+  trim_resources: 'bool',
+  trim_extra_modules: 'bool',
+  trim_services: 'bool',
+  trim_repairs: 'bool',
+  trim_themes: 'bool',
+  trim_translations: 'bool',
+  mqtt_sensors: 'bool',
+  mdns_discovery: 'bool',
+  cert_monitor_host: 'str',
+  mdns_services: 'list',
+  exclude_device_categories: 'list',
+  resources_always_forward: 'list',
+  resources_never_forward: 'list',
+  user_agent_dashboards: 'objects',
+  user_overrides: 'objects',
+  dashboard_overrides: 'objects',
+  client_overrides: 'objects',
+};
 
 const emptyStore = () => ({ version: STORE_VERSION, managed: {}, history: [] });
 

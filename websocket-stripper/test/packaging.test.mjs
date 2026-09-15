@@ -51,3 +51,41 @@ describe('the image contains everything the proxy imports', () => {
   // Version agreement across config.yaml / package.json / VERSION is already covered by
   // config.test.mjs; deliberately not repeated here.
 });
+
+// panel.html is the one shipped file nothing else in the suite executes: it is served as a blob
+// and only ever runs in a browser. A syntax error in it therefore survives a fully green suite
+// and a successful deploy, and shows up as a console that renders its shell and then sits blank —
+// which reads as "the add-on is broken", not "the panel has a typo". Parsing it is cheap.
+describe('the panel', () => {
+  it('parses as JavaScript', async () => {
+    const vm = await import('node:vm');
+    const html = fs.readFileSync(path.join(ROOT, 'panel.html'), 'utf8');
+    const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    assert.ok(blocks.length, 'panel.html must contain a script block');
+    for (const [, code] of blocks) {
+      assert.doesNotThrow(() => new vm.Script(code), 'panel.html has a syntax error');
+    }
+  });
+
+  it('renders every table cell as text rather than markup', () => {
+    // Hostnames, user agents and dashboard names all come from whatever connected, so the panel
+    // treats them as hostile. rows() is the single chokepoint that enforces it; innerHTML on a
+    // value anywhere else would quietly reopen the hole.
+    const html = fs.readFileSync(path.join(ROOT, 'panel.html'), 'utf8');
+    const script = html.slice(html.indexOf('<script>'));
+    const lines = script.split('\n');
+    const bad = [];
+    lines.forEach((line, i) => {
+      const m = line.match(/\.innerHTML\s*=\s*(.+)/);
+      if (!m) return;
+      const rhs = m[1].trim();
+      // Clearing a container is not injection.
+      if (/^(''|""|``)\s*;/.test(rhs)) return;
+      // A deliberate exception must say so on the preceding lines and explain why it is safe.
+      if (lines.slice(Math.max(0, i - 4), i).some((l) => l.includes('safe-html:'))) return;
+      bad.push(`line ${i + 1}: ${rhs}`);
+    });
+    assert.deepEqual(bad, [],
+      `assign text, not innerHTML (or justify it with a "safe-html:" comment): ${bad.join(' | ')}`);
+  });
+});

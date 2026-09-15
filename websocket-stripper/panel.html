@@ -56,6 +56,17 @@
   #sankey .col { fill: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
   #paths-detail { margin-top: 12px; }
   #paths-detail summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+  .cfgbtn { font: inherit; font-size: 12px; color: var(--accent); background: none;
+    border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .cfgbtn:hover { border-color: var(--accent); }
+  .cfgbtn:disabled { opacity: .5; cursor: default; }
+  /* Values are typed as JSON, so the box is monospace and wide enough for a short list without
+     scrolling — an allowlist is the common edit here. */
+  .cfgval { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 4px; padding: 2px 6px; min-width: 240px; width: 100%; max-width: 420px; }
+  .cfgval:focus { outline: none; border-color: var(--accent); }
+  .cfgval:disabled { opacity: .5; }
   /* Route colours. The route is the question the diagram exists to answer — "which entry point
      did this come through" — so it is what carries the colour; origin and hostname nodes stay
      neutral rather than competing with it. Hues are separated enough to stay distinct for the
@@ -110,7 +121,8 @@
     <button type="button" data-tab="overview" class="on">Overview</button><button
       type="button" data-tab="clients">Clients</button><button
       type="button" data-tab="traffic">Traffic</button><button
-      type="button" data-tab="entities">Entities</button>
+      type="button" data-tab="entities">Entities</button><button
+      type="button" data-tab="config">Config</button>
   </nav>
 
   <div class="card" data-tab="overview">
@@ -301,6 +313,19 @@
       <span id="paths-span"></span></div>
   </div>
 
+  <div class="card" data-tab="config">
+    <h2>Configuration</h2>
+    <div class="note" id="cfg-intro">Every option this app is running with, and which source is
+      answering for it. <b>Add-on config</b> means the Configuration tab in Home Assistant.
+      <b>Managed here</b> means this console owns it and the Configuration tab no longer applies
+      — taking a setting over never changes it, it is seeded from whatever is already in effect.
+      Options are read once at startup, so a change here takes effect on the next restart.</div>
+    <div class="scroll"><table id="cfgtbl"><thead>
+      <tr><th>Option</th><th>Value</th><th>Source</th><th></th></tr>
+    </thead><tbody></tbody></table></div>
+    <div id="cfg-msg" class="note" style="display:none"></div>
+  </div>
+
   <div class="sub">Raw JSON: <a href="./stats.json" target="_blank">stats.json</a> — point a Home
     Assistant <code>rest</code> sensor at it to graph any of this over time.</div>
 
@@ -334,6 +359,44 @@ const ms = (v) => (v == null ? '—' : v < 1000 ? v + ' ms' : (v / 1000).toFixed
 const dur = (s) => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm'
   : s < 86400 ? Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'
   : Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h';
+// A confirmation naming a thing that came from the wire: the name is bolded but stays text.
+const setMsg = (el, name, tail) => {
+  el.textContent = '';
+  const b = document.createElement('b');
+  b.textContent = name;
+  el.append(b, tail);
+};
+
+// An error banner. The text usually ends in an exception message, which can carry a URL or a
+// server response, so it goes in as text.
+const setErr = (el, text) => {
+  el.textContent = '';
+  const s = document.createElement('span');
+  s.className = 'err';
+  s.textContent = text;
+  el.appendChild(s);
+};
+
+// Build a row from plain text, never markup.
+//
+// Request paths, methods, addresses and error messages all arrive from whoever connected to the
+// proxy — including anyone who can merely reach the listen port. Interpolating those into
+// innerHTML let a crafted request store markup that then ran in this console the next time an
+// admin opened it. Each cell here is filled with textContent, so the value can only ever be text.
+// `spec` is [text] or [text, {cls, style, el}].
+const trow = (specs) => {
+  const tr = document.createElement('tr');
+  for (const spec of specs) {
+    const [text, o = {}] = Array.isArray(spec) ? spec : [spec];
+    const td = tr.insertCell();
+    if (o.cls) td.className = o.cls;
+    if (o.style) td.style.cssText = o.style;
+    if (o.el) { const e = document.createElement(o.el); e.textContent = text ?? ''; td.appendChild(e); }
+    else td.textContent = text ?? '';
+  }
+  return tr;
+};
+
 const rows = (tbl, data, cells) => {
   const tb = $(tbl).querySelector('tbody');
   tb.innerHTML = '';
@@ -767,13 +830,12 @@ async function pinEntity(id, btn) {
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     btn.textContent = j.already ? 'already pinned' : 'pinned';
     msg.style.display = '';
-    msg.innerHTML = j.already
-      ? '<b>' + id + '</b> was already in <code>always_forward</code>.'
-      : '<b>' + id + '</b> added to <code>always_forward</code>. Restart the app to apply it.';
+    setMsg(msg, id, j.already ? ' was already in always_forward.'
+      : ' added to always_forward. Restart the app to apply it.');
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Always send';
     msg.style.display = '';
-    msg.innerHTML = '<span class="err">Could not pin ' + id + ': ' + e.message + '</span>';
+    setErr(msg, 'Could not pin ' + id + ': ' + e.message);
   }
 }
 
@@ -789,14 +851,12 @@ async function pinResource(fragment, btn) {
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     btn.textContent = j.already ? 'already pinned' : 'pinned';
     msg.style.display = '';
-    msg.innerHTML = j.already
-      ? '<b>' + fragment + '</b> was already in <code>resources_always_forward</code>.'
-      : '<b>' + fragment + '</b> added to <code>resources_always_forward</code>. '
-        + 'Restart the app to apply it.';
+    setMsg(msg, fragment, j.already ? ' was already in resources_always_forward.'
+      : ' added to resources_always_forward. Restart the app to apply it.');
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Always send';
     msg.style.display = '';
-    msg.innerHTML = '<span class="err">Could not pin ' + fragment + ': ' + e.message + '</span>';
+    setErr(msg, 'Could not pin ' + fragment + ': ' + e.message);
   }
 }
 
@@ -821,11 +881,12 @@ function renderTuning(s) {
   tb.innerHTML = '';
   for (const r of rows) {
     const frag = pinFragmentFor(r.url);
-    const tr = document.createElement('tr');
     const isPinned = pinned.has(frag);
-    tr.innerHTML = '<td style="word-break:break-all">' + r.url + '</td>'
-      + '<td>' + (r.kb >= 1024 ? (r.kb / 1024).toFixed(1) + ' MB' : r.kb + ' KB') + '</td>'
-      + '<td></td>';
+    const tr = trow([
+      [r.url, { style: 'word-break:break-all' }],
+      r.kb >= 1024 ? (r.kb / 1024).toFixed(1) + ' MB' : r.kb + ' KB',
+      '',
+    ]);
     const btn = document.createElement('button');
     btn.textContent = isPinned ? 'already pinned' : 'Always send';
     btn.disabled = isPinned;
@@ -853,24 +914,38 @@ async function renderHttp() {
     sum.style.display = '';
     const cls = Object.entries(h.byStatusClass).map(([k, v]) => k + ' ' + v.toLocaleString()).join(' · ');
     const slow = h.slowest[0];
-    sum.innerHTML = '<b>' + h.total.toLocaleString() + '</b> requests — ' + cls
-      + (slow ? ' · slowest <code>' + slow.path + '</code> at ' + slow.ms + 'ms' : '')
-      + (h.errors.length ? ' — <b>showing the ' + h.errors.length + ' most recent error'
-          + (h.errors.length === 1 ? '' : 's') + '</b>' : ' — no errors, showing recent traffic');
+    // slow.path is a request path, so it is built as an element with textContent rather than
+    // interpolated — see trow().
+    sum.textContent = '';
+    const b = document.createElement('b');
+    b.textContent = h.total.toLocaleString();
+    sum.append(b, ' requests — ' + cls);
+    if (slow) {
+      const code = document.createElement('code');
+      code.textContent = slow.path;
+      sum.append(' · slowest ', code, ' at ' + slow.ms + 'ms');
+    }
+    if (h.errors.length) {
+      const e = document.createElement('b');
+      e.textContent = `showing the ${h.errors.length} most recent error${h.errors.length === 1 ? '' : 's'}`;
+      sum.append(' — ', e);
+    } else {
+      sum.append(' — no errors, showing recent traffic');
+    }
   }
 
   const tb = document.querySelector('#httptbl tbody');
   tb.innerHTML = '';
   for (const r of show.slice(0, 40)) {
-    const tr = document.createElement('tr');
     const bad = r.status >= 400;
-    tr.innerHTML = '<td>' + new Date(r.at).toLocaleTimeString() + '</td>'
-      + '<td' + (bad ? ' class="err"' : '') + '>' + r.status + '</td>'
-      + '<td>' + r.method + '</td>'
-      + '<td style="word-break:break-all">' + r.path + '</td>'
-      + '<td>' + r.ms + ' ms</td>'
-      + '<td>' + (r.ip || '—') + '</td>';
-    tb.appendChild(tr);
+    tb.appendChild(trow([
+      new Date(r.at).toLocaleTimeString(),
+      [String(r.status), bad ? { cls: 'err' } : {}],
+      r.method,
+      [r.path, { style: 'word-break:break-all' }],
+      r.ms + ' ms',
+      r.ip || '—',
+    ]));
   }
 }
 
@@ -881,7 +956,7 @@ async function tick() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     s = await r.json();
   } catch (e) {
-    $('sub').innerHTML = '<span class="err">Cannot reach the app: ' + e.message + '</span>';
+    setErr($('sub'), 'Cannot reach the app: ' + e.message);
     return;
   }
 
@@ -889,16 +964,41 @@ async function tick() {
   renderHttp();
 
   const opts = s.options || {};
-  const pills = Object.entries(opts)
-    .filter(([, v]) => typeof v === 'boolean')
-    .map(([k, v]) => '<span class="pill' + (v ? ' on' : '') + '">' + k + (v ? ' on' : ' off') + '</span>')
-    .join(' ');
   // Node version alongside the add-on version: after a base-image change it is the only way to
   // confirm from outside the container that the rebuild actually took.
-  $('sub').innerHTML = 'v' + (s.version || '?')
+  const sub = $('sub');
+  sub.textContent = 'v' + (s.version || '?')
     + (s.node ? ' · node ' + s.node : '')
     + (s.os ? ' · ' + s.os : '')
-    + ' · up ' + dur(s.uptimeSec) + ' · ' + pills;
+    + ' · up ' + dur(s.uptimeSec) + ' · ';
+  // Almost every boolean here is a trim_*, so the prefix is the same on nearly every pill and
+  // carries no information — it just made the row twice as wide. The state word went the same
+  // way: green vs muted already says it, and the full name and state stay on hover.
+  const short = (k) => k.replace(/^trim_/, '').replace(/_/g, ' ');
+  const bools = Object.entries(opts).filter(([, v]) => typeof v === 'boolean');
+  const pillFor = (k, v) => {
+    const pill = document.createElement('span');
+    pill.className = v ? 'pill on' : 'pill';
+    pill.textContent = short(k);
+    pill.title = `${k} is ${v ? 'on' : 'off'}`;
+    return pill;
+  };
+  const on = bools.filter(([, v]) => v);
+  const off = bools.filter(([, v]) => !v);
+  for (const [k, v] of on) sub.append(pillFor(k, v), ' ');
+  // The off ones are the untouched defaults — a dozen pills of "not doing this" crowded out the
+  // line that says what IS on. Collapsed to a count, one click away, with the names on hover.
+  if (off.length) {
+    const more = document.createElement('span');
+    more.className = 'pill';
+    more.style.cursor = 'pointer';
+    more.textContent = '+' + off.length + ' off';
+    more.title = off.map(([k]) => k).join(', ');
+    more.onclick = () => {
+      more.replaceWith(...off.flatMap(([k, v]) => [pillFor(k, v), document.createTextNode(' ')]));
+    };
+    sub.append(more);
+  }
 
   $('savedPct').textContent = (s.savings.savedPct || 0) + '%';
   $('savedAbs').textContent = kb(s.savings.saved) + ' of ' + kb(s.savings.before) + ' not sent';
@@ -979,6 +1079,8 @@ function drawChart(id, vals, times, colour, fmt, stepped) {
 
   // A baseline, the series, and one label for the peak — enough to read a shape without
   // pretending to be a full chart with axes.
+  // safe-html: every interpolation below is a number this function computed or a CSS variable
+  // name from a fixed set — no value from the wire reaches it.
   el.innerHTML = `
     <line x1="0" y1="${H - PAD}" x2="${W}" y2="${H - PAD}" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>
     <path d="${area}" fill="${colour}" fill-opacity="0.16"/>
@@ -987,6 +1089,99 @@ function drawChart(id, vals, times, colour, fmt, stepped) {
   el.setAttribute('aria-label', `peak ${fmt(max)}`);
   if (times.length) el.setAttribute('title', `${new Date(times[0]).toLocaleString()} to ${new Date(times[times.length - 1]).toLocaleString()}`);
 }
+
+// ---- configuration ----
+//
+// Values are edited as JSON so a list or a string round-trips exactly as typed; a boolean is the
+// common case and gets a plain toggle instead. Writes go through Ingress only, like the pins.
+async function renderConfig() {
+  let d;
+  try {
+    const r = await fetch('./config.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    d = await r.json();
+  } catch { return; }
+  const msg = $('cfg-msg');
+  const say = (t) => { msg.style.display = ''; msg.textContent = t; };
+  const save = async (o, action, value) => {
+    try {
+      const r = await fetch('./config', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: o.key, action, value }),
+      });
+      const j = await r.json();
+      say(r.ok ? `${o.key}: ${j.note}` : `${o.key}: ${j.error}`);
+    } catch (e) { say(String(e)); }
+    renderConfig();
+  };
+
+  rows('cfgtbl', d.options, (o) => [
+    o.key,
+    o.type === 'bool' ? String(o.value ?? '') : JSON.stringify(o.value ?? null),
+    o.source === 'console' ? 'set here' : 'add-on config',
+    '',
+  ]);
+  // rows() writes text only (it is the XSS guard), so the controls are added afterwards.
+  const body = $('cfgtbl').querySelector('tbody');
+  [...body.rows].forEach((tr, i) => {
+    const o = d.options[i];
+    if (!o) return;
+    const valueCell = tr.cells[1];
+    const actionCell = tr.cells[3];
+
+    if (!o.editable) {
+      actionCell.textContent = o.type === 'objects' ? 'edit in add-on config' : 'setup';
+      actionCell.title = o.type === 'objects'
+        ? 'A structured list — edit it in the add-on Configuration tab'
+        : 'Decides how the app starts, so it is always read from the add-on configuration';
+      return;
+    }
+    if (!d.writable) { actionCell.textContent = 'read-only'; return; }
+
+    // Changing the value IS taking ownership — there is no separate "manage here" step, because
+    // adopting without changing anything does nothing observable (the key is seeded from the
+    // value already in effect). Handing it back is the one action that needs its own button.
+    valueCell.textContent = '';
+    if (o.type === 'bool') {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = Boolean(o.value);
+      cb.onchange = () => { cb.disabled = true; save(o, 'adopt', cb.checked); };
+      valueCell.appendChild(cb);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'cfgval';
+      inp.value = JSON.stringify(o.value ?? (o.type === 'list' ? [] : ''));
+      const commit = () => {
+        if (inp.value === JSON.stringify(o.value ?? (o.type === 'list' ? [] : ''))) return;
+        let parsed;
+        // Typed by hand, so it can be malformed. Say so and keep what was typed, rather than
+        // saving something that is not what was meant or silently discarding the edit.
+        try { parsed = JSON.parse(inp.value); }
+        catch { return say(`${o.key}: that is not valid JSON — a list looks like ["a","b"]`); }
+        if (o.type === 'list' && !Array.isArray(parsed)) return say(`${o.key}: expects a list, like ["a","b"]`);
+        if (o.type === 'str' && typeof parsed !== 'string') return say(`${o.key}: expects text in quotes, like "example.com"`);
+        inp.disabled = true;
+        save(o, 'adopt', parsed);
+      };
+      inp.onblur = commit;
+      inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+      valueCell.appendChild(inp);
+    }
+
+    if (o.source === 'console') {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Use add-on config';
+      b.className = 'cfgbtn';
+      b.title = 'Hand this option back to the add-on Configuration tab';
+      b.onclick = () => { b.disabled = true; save(o, 'release'); };
+      actionCell.appendChild(b);
+    }
+  });
+}
+renderConfig();
 
 async function tickHistory() {
   let h;

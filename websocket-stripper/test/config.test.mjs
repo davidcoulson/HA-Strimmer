@@ -171,3 +171,35 @@ test('the proxy still reads the pre-rename port option names', () => {
   assert.match(src, /process\.env\.PROXY_PORT\s*\|\|\s*process\.env\.PORT/);
   assert.match(src, /process\.env\.MGMT_PORT\s*\|\|\s*process\.env\.STATS_PORT/);
 });
+
+// EDITABLE_KEYS is the console's catalogue of what it may change. It is declared rather than
+// derived from /data/options.json, because an option nobody has set yet is precisely the one
+// someone opens the console to set — deriving the list would hide it. A declared list drifts,
+// though: the stats options block silently fell behind the schema three times. So it is pinned.
+test('EDITABLE_KEYS covers every schema option that is not a setup option', async () => {
+  const { EDITABLE_KEYS, BOOTSTRAP_KEYS } = await import('../config_store.mjs');
+  const schema = cfg.slice(cfg.indexOf('\nschema:'));
+  const declared = [...schema.matchAll(/^ {2}([a-z_]+):/gm)].map((m) => m[1]);
+  assert.ok(declared.length >= 20, `expected the full schema, parsed ${declared.length}`);
+
+  const missing = declared.filter((k) => !BOOTSTRAP_KEYS.has(k) && !EDITABLE_KEYS[k]);
+  assert.deepEqual(missing, [], `schema options the console cannot see: ${missing.join(', ')}`);
+
+  // And nothing invented: a key here that is not in the schema is a setting that would be
+  // written to the store, reported as managed, and read by nobody.
+  const known = new Set(declared);
+  const extra = Object.keys(EDITABLE_KEYS).filter((k) => !known.has(k));
+  assert.deepEqual(extra, [], `EDITABLE_KEYS names options that are not in the schema: ${extra.join(', ')}`);
+});
+
+// Adopting the port the console is served on is the one change that can make the console
+// unreachable — and the rename to proxy_port/mgmt_port briefly left the canonical spellings
+// unprotected while only the legacy aliases were refused.
+test('both spellings of both ports are setup options', async () => {
+  const { BOOTSTRAP_KEYS, adopt } = await import('../config_store.mjs');
+  for (const k of ['proxy_port', 'port', 'mgmt_port', 'stats_port', 'ha_base', 'log_level']) {
+    assert.ok(BOOTSTRAP_KEYS.has(k), `${k} must never be adoptable`);
+    assert.throws(() => adopt({ version: 1, managed: {}, history: [] }, k, 1, {}),
+      /setup option/, `adopt("${k}") must be refused`);
+  }
+});

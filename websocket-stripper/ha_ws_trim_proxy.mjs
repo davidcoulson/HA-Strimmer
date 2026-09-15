@@ -38,7 +38,7 @@ import { classify, normalizeIp } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
-import { readStore, effectiveOptions, ownership, BOOTSTRAP_KEYS } from './config_store.mjs';
+import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS } from './config_store.mjs';
 
 // ---- config (add-on options.json, overlaid by anything the panel owns) ----
 function loadOptions() {
@@ -51,7 +51,7 @@ const YAML_OPT = loadOptions();
 // very call is producing, so nothing can be written through log()/warn() yet.
 const CONFIG_WARNINGS = [];
 const CONFIG_DIR = fs.existsSync('/data') ? '/data' : (process.env.CONFIG_DIR || null);
-const CONFIG_STORE = CONFIG_DIR
+let CONFIG_STORE = CONFIG_DIR
   ? readStore(CONFIG_DIR, (m) => CONFIG_WARNINGS.push(m))
   : { version: 1, managed: {}, history: [] };
 const OPT = effectiveOptions(YAML_OPT, CONFIG_STORE);
@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.4';
+const VERSION = '2026.09.15.5';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3028,6 +3028,8 @@ function statsExtras() {
       // shipped, so the panel never showed whether MQTT or mDNS was actually on.
       mqtt_sensors: MQTT_SENSORS,
       mdns_discovery: MDNS_ENABLED,
+      proxy_port: PORT,
+      mgmt_port: STATS_PORT,
     },
     allowlist: {
       ready: ALLOW_READY,
@@ -3172,6 +3174,95 @@ const statsServer = http.createServer((req, res) => {
     return res.end(body);
   }
   // Always-forward one entity. Ingress only, exactly like /pin-resource.
+  // What each option is set to, and which source is answering for it.
+  if (path.endsWith('/config.json')) {
+    const own = ownership(YAML_OPT, CONFIG_STORE);
+    const eff = effectiveOptions(YAML_OPT, CONFIG_STORE);
+    // The declared catalogue first, so an option nobody has set yet is still offered — that is
+    // the one someone came here to set. Bootstrap keys and anything else present are appended so
+    // the console can show the whole picture rather than a filtered half of it.
+    const keys = [...new Set([
+      ...Object.keys(EDITABLE_KEYS), ...BOOTSTRAP_KEYS, ...Object.keys(eff), ...own.managed,
+    ])].sort();
+    const body = JSON.stringify({
+      // Writable only when the store has somewhere to live. Without /data every save would be
+      // lost on restart, and a console that silently forgets is worse than one that says it is
+      // read-only.
+      writable: Boolean(CONFIG_DIR),
+      storePath: CONFIG_DIR ? `${CONFIG_DIR}/config.json` : null,
+      // Setup options are listed so the console can show them, greyed, with the reason — rather
+      // than leaving someone hunting for a toggle that is deliberately not there.
+      bootstrap: [...BOOTSTRAP_KEYS],
+      options: keys.map((k) => ({
+        key: k,
+        value: eff[k],
+        type: EDITABLE_KEYS[k] || null,
+        source: own.managed.includes(k) ? 'console' : 'addon',
+        // `objects` needs a structured editor the console does not have yet, so it is shown but
+        // not offered — better than a text box that can only produce invalid JSON by hand.
+        editable: Boolean(EDITABLE_KEYS[k]) && EDITABLE_KEYS[k] !== 'objects' && !BOOTSTRAP_KEYS.has(k),
+      })),
+    }, null, 2);
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(body);
+  }
+
+  // Take over an option, change one already taken over, or hand it back. Ingress only, exactly
+  // like the pins below: this writes configuration.
+  if (path.endsWith('/config') && req.method === 'POST') {
+    if (!viaIngress(req)) {
+      logThrottled('config-denied', `refused a config write from ${clientIp(req) ?? '?'} — writes are Ingress-only`);
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
+    }
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
+    req.on('end', () => {
+      try {
+        if (!CONFIG_DIR) {
+          res.writeHead(409, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'no /data to write to — configuration is read-only here' }));
+        }
+        const { key, action, value } = JSON.parse(body || '{}');
+        if (typeof key !== 'string' || !key) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'key is required' }));
+        }
+        if (BOOTSTRAP_KEYS.has(key)) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `"${key}" decides how the app starts and reaches Home Assistant, so it is always read from the add-on configuration — it has to stay fixable when this console is what is broken`,
+          }));
+        }
+        // Only options this build knows about. Without this the store would happily accept a
+        // typo'd key, write it, and report it back as managed — a setting that looks saved and
+        // does nothing, which is the exact failure this whole ownership scheme exists to avoid.
+        if (!EDITABLE_KEYS[key]) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: `"${key}" is not an option this version knows about` }));
+        }
+        const next = action === 'release'
+          ? release(CONFIG_STORE, key)
+          : adopt(CONFIG_STORE, key, value, YAML_OPT);
+        writeStore(CONFIG_DIR, next);
+        CONFIG_STORE = next;
+        warn(`config: ${action === 'release' ? 'released' : 'set'} "${key}" via the console`
+          + ' — restart the app to apply it');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        // Honest about when it takes effect: every option is read once at startup, so a save here
+        // changes the file and nothing else until the add-on restarts.
+        return res.end(JSON.stringify({
+          ok: true, key, source: action === 'release' ? 'addon' : 'console',
+          note: 'saved — restart the app for it to take effect',
+        }));
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
   if (path.endsWith('/pin-entity') && req.method === 'POST') {
     if (!viaIngress(req)) {
       logThrottled('pin-denied', `refused an entity pin from ${clientIp(req) ?? '?'} — writes are Ingress-only`);
