@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.34';
+const VERSION = '2026.09.15.35';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2038,7 +2038,14 @@ async function buildResources(rpc, keysByDash) {
   // per-dashboard drop lists.
   const servedAnywhere = new Set();
   for (const keep of byDash.values()) for (const u of keep) servedAnywhere.add(u);
-  const droppedByAll = rows.filter((r) => !servedAnywhere.has(r.url));
+  // `servedAnywhere` holds resourcePath() values, so the lookup must normalise too. Comparing
+  // the raw `r.url` matched nothing the moment a URL carried a query string — which is EVERY
+  // HACS resource, since they all arrive as `?hacstag=…`. The effect was that this warning
+  // listed the entire resource list as "dropped by ALL dashboards", including bundles that were
+  // being served perfectly well, and told the reader to add them to resources_always_forward —
+  // i.e. it argued for undoing the trim. Reported against the live instance on 2026-09-15:
+  // 42 of 42 resources named, on an install where one dashboard alone keeps 21.
+  const droppedByAll = rows.filter((r) => !servedAnywhere.has(resourcePath(r.url)));
   RESOURCE_DROPPED_ALL = droppedByAll
     .map((r) => {
       const c = RESOURCE_CACHE.get(r.url);

@@ -1853,3 +1853,67 @@ describe('a unified rule that assumes a dashboard from the client app', () => {
       'a connection with no signal at all still gets the union');
   });
 });
+
+// The "dropped by ALL dashboards" warning is the one diagnostic that cannot be checked by
+// loading a page — it exists to catch resources that render nothing and only *do* something on
+// load. That makes its accuracy load-bearing: a reader cannot tell from the dashboard whether it
+// is lying, and the remedy it recommends (resources_always_forward) undoes the trim.
+//
+// It was lying. The warning compared each row's RAW url against a set of normalised PATHS, so the
+// moment a url carried a query string it matched nothing — and every HACS resource carries one,
+// as `...js?hacstag=NNN`. On the live instance it named 42 of 42 resources as dropped everywhere,
+// on an install where one dashboard alone keeps 21.
+//
+// The cache-buster in these urls is the entire point of the fixture: with clean urls this test
+// passes against the broken code.
+describe('the dropped-by-all resource warning', () => {
+  const CFG = { views: [{ cards: [{ type: 'custom:kept-card', entity: 'light.living_room' }] }] };
+  const RES = [
+    { id: 'k', type: 'module', url: '/res/kept-card.js?hacstag=1361984262163' },
+    { id: 'o', type: 'module', url: '/res/orphan-card.js?hacstag=9900112233445' },
+  ];
+  const BODIES = {
+    '/res/kept-card.js': 'customElements.define("kept-card", class extends HTMLElement {});',
+    '/res/orphan-card.js': 'customElements.define("orphan-card", class extends HTMLElement {});',
+  };
+
+  it('does not name a resource that a dashboard is actually served', async () => {
+    const m2 = await startMockHa({ configs: { 'r-dash': CFG }, resources: RES, resourceBodies: BODIES });
+    const p2 = await getFreePort();
+    const sp = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'r-dash', port: p2, statsPort: sp,
+      extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const stats = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
+      const named = (stats.resources?.droppedByAll || []).map((r) => r.url);
+
+      assert.ok(!named.includes('/res/kept-card.js'),
+        'kept-card.js is served to r-dash, so calling it "dropped by ALL dashboards" is false — '
+        + 'and it tells the reader to pin a resource the trim is already handling correctly');
+      assert.deepEqual(named, ['/res/orphan-card.js'],
+        'exactly the resource no dashboard references, and nothing else');
+
+      // The log carries the same claim, and is where a human actually meets it.
+      const line = (px.out.match(/resources: (\d+) dropped by ALL dashboards/) || [])[1];
+      assert.equal(line, '1', `the log must agree with the API, said ${line}`);
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // The other direction, so narrowing the set to nothing would not pass: a resource no dashboard
+  // references must still be named. That silent class is why the warning exists.
+  it('still names a resource nothing references', async () => {
+    const m2 = await startMockHa({ configs: { 'r-dash': CFG }, resources: RES, resourceBodies: BODIES });
+    const p2 = await getFreePort();
+    const sp = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'r-dash', port: p2, statsPort: sp,
+      extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const stats = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
+      const named = (stats.resources?.droppedByAll || []).map((r) => r.url);
+      assert.ok(named.includes('/res/orphan-card.js'),
+        'a resource no dashboard names is exactly what this warning is for');
+    } finally { px.kill(); await m2.close(); }
+  });
+});

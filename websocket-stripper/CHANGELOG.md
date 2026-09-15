@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026.09.15.35 — 2026-09-15
+
+**The "dropped by ALL dashboards" warning was naming every resource you have.** Trimming itself
+was never affected — no dashboard was ever served the wrong resources — but the diagnostic that
+exists to catch the *one* failure you cannot see was reporting nonsense.
+
+It compared each resource's **raw URL** against a set of **normalised paths**. Every HACS resource
+arrives as `…/card.js?hacstag=NNN`, so the comparison matched nothing and the warning concluded
+that nothing was served anywhere. On the instance this was found on it named **42 of 42**
+resources as dropped by every dashboard — on an install where one dashboard alone keeps 21.
+
+That is worse than a cosmetic bug, because of what the warning tells you to do next: pin the named
+resources with `resources_always_forward`. Following it would have un-trimmed the entire resource
+list, one bundle at a time, while every dashboard was in fact being served correctly. It is also
+the one diagnostic that cannot be sanity-checked by loading a page — it covers resources that
+render nothing and only act on load — so there was no way to notice from the dashboard that it was
+lying.
+
+The per-dashboard counts (`resources <dash>: 21/42 kept`) were always right, and the arithmetic
+between the two is how it was caught: with 42 resources and 21 kept by one dashboard, at most 21
+can be dropped by all of them.
+
+Both regression tests use URLs carrying a `?hacstag=` cache-buster, because that is the entire
+bug — **with clean URLs the test passes against the broken code.**
+
+---
+
 ## 2026.09.15.34 — 2026-09-15
 
 **Runtime hardening, now that this runs on Node 26. Nothing here changes what gets trimmed.**
