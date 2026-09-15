@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.20';
+const VERSION = '2026.09.15.21';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -90,6 +90,9 @@ const PORT = parseInt(process.env.PROXY_PORT || process.env.PORT
 // test/config.test.mjs. 9122 sits next to the proxy's own 9123; 8100 (the old value) is a popular
 // enough port to collide with, and under host_network a collision is not cosmetic: the server
 // cannot bind, so Ingress has nothing to reach either.
+// Where a panel asks about itself. A constant because two things have to agree on it: this
+// server, and every panel that was told the path — so it is quoted in the docs from here.
+const CLIENT_INFO_PATH = '/stripper/client.json';
 const INGRESS_PORT = 9122;
 // Configurable, but only the default can be reached over Ingress — see the warning at listen().
 const STATS_PORT = parseInt(process.env.MGMT_PORT || process.env.STATS_PORT
@@ -2233,11 +2236,104 @@ async function serveDashboardPage(req, res, dash) {
   return true;
 }
 
+// ---- what a panel may know about itself ----
+//
+// Panels (ha-paneld, Kiosk Satellite) want an admin screen saying "the trimmer is in front of me,
+// here is what it is cutting, here is what that is doing for me". Three constraints shaped this:
+//
+//   * NO COST ON A NORMAL PAGE LOAD. This is an admin screen, read occasionally, so it is a pull:
+//     nothing is added to the dashboard responses that every panel fetches on every boot.
+//   * REACHING IT IS THE PROOF. A panel cannot tell from a page alone whether the trimmer served
+//     it or whether it is talking straight to Home Assistant. It does not need a header to find
+//     out — this path exists only on the proxy, so a 200 here means the proxy is in the path and
+//     a 404 means it is not. That is the whole "is it running" question, answered by arriving.
+//   * A PANEL SEES ITSELF, NOT THE ESTATE. The reply describes the caller and nothing else. There
+//     is deliberately no way to ask about another address: this port is reachable by anything on
+//     the network, so every field here has to be something that network may read. That rules out
+//     the override rules, the allowlist contents, entity ids, Home Assistant user identities and
+//     any other client's address — none of which a panel needs to render its own status.
+function clientReport(ip) {
+  const snap = stats.snapshot(statsExtras());
+  const mine = (snap.clients?.list || []).filter((c) => c.ip === ip);
+
+  // Summed across this address's live connections: a panel may hold more than one (a reload
+  // overlaps briefly), and reporting only the newest would make its numbers jump backwards.
+  const sum = (f) => mine.reduce((n, c) => n + (Number(c[f]) || 0), 0);
+  const fromHA = sum('fromHA');
+  const toBrowser = sum('toBrowser');
+  // The newest connection answers the "what am I being served" questions, because that is the one
+  // the panel is actually looking at right now.
+  const newest = mine.slice().sort((a, b) => (a.connectedSec ?? 0) - (b.connectedSec ?? 0))[0] || null;
+
+  return {
+    stripper: {
+      running: true,
+      version: VERSION,
+      uptime_sec: snap.uptimeSec,
+    },
+    // Booleans only, and only the ones that describe what is being cut. No lists, no rules, no
+    // names — see the note above on what this port may say.
+    trimming: {
+      entities: STRIP,
+      by_dashboard: PER_DASH,
+      registries: TRIM_REGISTRIES,
+      resources: TRIM_RESOURCES,
+      extra_modules: TRIM_EXTRA_MODULES,
+      services: TRIM_SERVICES,
+      repairs: TRIM_REPAIRS,
+      themes: TRIM_THEMES,
+      translations: TRIM_TRANSLATIONS,
+      compress_websocket: COMPRESS_WS,
+    },
+    client: {
+      ip: ip ?? null,
+      // Zero is a real answer and worth rendering: the panel has reached the proxy over HTTP but
+      // has no open websocket, which is a different state from "not behind the trimmer at all".
+      connections: mine.length,
+      dashboard: newest?.dashboard ?? null,
+      attributed_via: newest?.attributedVia ?? null,
+      entities_served: newest?.allowSize ?? null,
+      first_payload: newest ? {
+        entities: newest.initialEntityCount ?? null,
+        bytes: newest.initialPayloadBytes ?? null,
+        ms_to_data: newest.msToEntityData ?? null,
+        drain_ms: newest.initialDrainMs ?? null,
+      } : null,
+      traffic: mine.length ? {
+        from_ha_bytes: fromHA,
+        to_browser_bytes: toBrowser,
+        // What this connection was spared. Stated as a difference between two measured totals
+        // rather than as a global "savings" figure, which means something narrower elsewhere in
+        // this codebase and must not be conflated with it.
+        not_sent_bytes: Math.max(0, fromHA - toBrowser),
+        not_sent_pct: fromHA > 0 ? Math.round(((fromHA - toBrowser) / fromHA) * 100) : null,
+        // Throughput, never a saving: the untrimmed volume of the event stream does not exist to
+        // be measured, because Home Assistant filters it server-side.
+        update_bytes_per_min: newest?.eventBytesPerMin ?? null,
+      } : null,
+      connected_sec: newest?.connectedSec ?? null,
+    },
+  };
+}
+
 const server = http.createServer((req, res) => {
   // Request logging goes to its own ring, not to stdout — see http_log.mjs on why a request log
   // and a service log do not belong in the same stream.
   httpLog.observe(req, res, clientIp);
   noteClientDash(req);
+  // Answered here rather than forwarded: this path exists only on the proxy, which is what makes
+  // reaching it meaningful. CORS is open because a panel's admin page may be served from its own
+  // origin rather than Home Assistant's, and the reply is already limited to what this network
+  // may read.
+  if (req.method === 'GET' && (req.url === CLIENT_INFO_PATH || req.url.startsWith(CLIENT_INFO_PATH + '?'))) {
+    const body = JSON.stringify(clientReport(clientIp(req)), null, 2);
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'access-control-allow-origin': '*',
+    });
+    return res.end(body);
+  }
   const dash = TRIM_EXTRA_MODULES && req.method === 'GET' ? dashFromUrl(req.url) : null;
   if (dash && /text\/html/i.test(String(req.headers.accept || ''))) {
     serveDashboardPage(req, res, dash)
