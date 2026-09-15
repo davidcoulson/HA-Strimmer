@@ -38,7 +38,7 @@ import { classify, normalizeIp } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
-import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor } from './config_store.mjs';
+import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
 
 // ---- config (add-on options.json, overlaid by anything the panel owns) ----
 function loadOptions() {
@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.13';
+const VERSION = '2026.09.15.15';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3040,6 +3040,12 @@ function statsExtras() {
       proxy_port: PORT,
       mgmt_port: STATS_PORT,
     },
+    // Which section each option belongs to, so the pill row groups exactly the way the Config tab
+    // does. The pills used to key off the `trim_` prefix instead, which filed by_dashboard under
+    // Trimming on one screen and on its own on the other — the same setting, two answers.
+    optionSections: Object.fromEntries(
+      Object.entries(OPTIONS).map(([k, o]) => [k, o.section]),
+    ),
     allowlist: {
       ready: ALLOW_READY,
       union: ALLOW.size,
@@ -3200,7 +3206,18 @@ const statsServer = http.createServer((req, res) => {
       // A renamed option keeps working but does not get a row: listing both spellings showed two
       // rows for one setting, with the value on whichever one the config happened to use.
       .filter((k) => !LEGACY_KEYS.has(k))
-      .sort();
+      // Declared order, not alphabetical. Within a section the order is editorial: the core
+      // switch first and the lossy ones last, which alphabetical actively destroys -- it opened
+      // the trim list with "Only the dashboard being viewed" and buried "Entity websocket".
+      // Anything not in the catalogue keeps a stable place at the end.
+      .sort((a, b) => {
+        const order = Object.keys(OPTIONS);
+        const ia = order.indexOf(a), ib = order.indexOf(b);
+        if (ia === -1 && ib === -1) return a < b ? -1 : a > b ? 1 : 0;
+        if (ia === -1) return 1;
+        if (ib === -1) return -1;
+        return ia - ib;
+      });
     const body = JSON.stringify({
       // Writable only when the store has somewhere to live. Without /data every save would be
       // lost on restart, and a console that silently forgets is worse than one that says it is
@@ -3215,12 +3232,15 @@ const statsServer = http.createServer((req, res) => {
       // Named, though not listed as rows, so the console can explain where they DO live if
       // someone comes looking for one.
       bootstrap: [...BOOTSTRAP_KEYS],
+      sections: SECTIONS,
       options: keys.map((k) => ({
         key: k,
         // Read through the old spelling too, or a config that predates a rename leaves the
         // canonical row blank while the setting is plainly in effect.
         value: eff[k] !== undefined ? eff[k] : eff[legacyNameFor(k)],
         type: EDITABLE_KEYS[k] || null,
+        section: OPTIONS[k]?.section || null,
+        label: OPTIONS[k]?.label || k,
         source: own.managed.includes(k) ? 'console' : 'addon',
         // `objects` needs a structured editor the console does not have yet, so it is shown but
         // not offered — better than a text box that can only produce invalid JSON by hand.

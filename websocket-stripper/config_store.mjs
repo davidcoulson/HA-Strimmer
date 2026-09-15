@@ -72,35 +72,71 @@ export function legacyNameFor(key) {
 // Kept honest by a test that compares it against config.yaml's schema, the same way the stats
 // options block is pinned: a new option added to the schema and not listed here fails the suite.
 //
-// `objects` are the list-of-dicts options. They are listed so the console can show what is set
-// and say where it comes from, but editing them needs a real editor rather than a text box —
-// that arrives with the unified overrides work.
-export const EDITABLE_KEYS = {
-  dashboards: 'list',
-  always_forward: 'list',
-  never_forward: 'list',
-  trim_entities: 'bool',
-  by_dashboard: 'bool',
-  trim_registries: 'bool',
-  compress_websocket: 'bool',
-  trim_resources: 'bool',
-  trim_extra_modules: 'bool',
-  trim_services: 'bool',
-  trim_repairs: 'bool',
-  trim_themes: 'bool',
-  trim_translations: 'bool',
-  mqtt_sensors: 'bool',
-  mdns_discovery: 'bool',
-  cert_monitor_host: 'str',
-  mdns_services: 'list',
-  exclude_device_categories: 'list',
-  resources_always_forward: 'list',
-  resources_never_forward: 'list',
-  user_agent_dashboards: 'objects',
-  user_overrides: 'objects',
-  dashboard_overrides: 'objects',
-  client_overrides: 'objects',
+// `objects` are the list-of-dicts options, which get a purpose-built editor rather than a text
+// box — nobody should be hand-writing JSON into a form field to add an override.
+//
+// Each option also declares the section it belongs in and a short label. An alphabetical list of
+// twenty-four raw option names is a reference, not a control panel: "is it trimming themes" meant
+// scanning for `trim_themes` among `mdns_services` and `cert_monitor_host`. Grouped, the trim
+// switches sit together and read as one decision with nine parts.
+//
+// The labels are deliberately NOT the add-on translations. Those carry several sentences of
+// warning each, which is right for a page you read once while setting up and wrong for a row you
+// scan. The long text stays in translations/en.yaml.
+export const SECTIONS = [
+  { id: 'trim', title: 'Trimming', blurb: 'What gets cut out of each connection. This is what the app is for.' },
+  { id: 'entities', title: 'Dashboards and entities', blurb: 'Which dashboards are served, and entities to force in or out regardless of what a dashboard references.' },
+  { id: 'resources', title: 'Custom cards', blurb: 'Lovelace resources to force in or out. Needed for anything that runs on load rather than rendering a card.' },
+  { id: 'overrides', title: 'Overrides', blurb: 'Rules that apply to one dashboard, user or device instead of everywhere.' },
+  { id: 'discovery', title: 'Device discovery', blurb: 'Ask the network what each connecting device is, so the Clients tab can name it.' },
+  { id: 'monitoring', title: 'Monitoring', blurb: 'Long-term metrics and checks, published back into Home Assistant.' },
+  { id: 'websocket', title: 'Websocket', blurb: 'How the browser connection itself is handled.' },
+];
+
+export const OPTIONS = {
+  // Trimming
+  trim_entities: { type: 'bool', section: 'trim', label: 'Entity websocket' },
+  by_dashboard: { type: 'bool', section: 'trim', label: 'Only the dashboard being viewed' },
+  trim_registries: { type: 'bool', section: 'trim', label: 'Entity, device and area registries' },
+  trim_resources: { type: 'bool', section: 'trim', label: 'Custom cards' },
+  trim_extra_modules: { type: 'bool', section: 'trim', label: 'Modules injected into the page' },
+  trim_services: { type: 'bool', section: 'trim', label: 'Service list' },
+  trim_repairs: { type: 'bool', section: 'trim', label: 'Repairs backlog' },
+  trim_themes: { type: 'bool', section: 'trim', label: 'Themes' },
+  trim_translations: { type: 'bool', section: 'trim', label: 'Frontend translations' },
+
+  // Dashboards and entities
+  dashboards: { type: 'list', section: 'entities', label: 'Dashboards to serve' },
+  always_forward: { type: 'list', section: 'entities', label: 'Always forward these entities' },
+  never_forward: { type: 'list', section: 'entities', label: 'Never forward these entities' },
+  exclude_device_categories: { type: 'list', section: 'entities', label: 'Drop these entity categories' },
+
+  // Custom cards
+  resources_always_forward: { type: 'list', section: 'resources', label: 'Always send these resources' },
+  resources_never_forward: { type: 'list', section: 'resources', label: 'Never send these resources' },
+
+  // Overrides
+  dashboard_overrides: { type: 'objects', section: 'overrides', label: 'Per-dashboard rules' },
+  user_overrides: { type: 'objects', section: 'overrides', label: 'Per-user rules' },
+  client_overrides: { type: 'objects', section: 'overrides', label: 'Per-device rules' },
+  user_agent_dashboards: { type: 'objects', section: 'overrides', label: 'Dashboard by client app' },
+
+  // Discovery
+  mdns_discovery: { type: 'bool', section: 'discovery', label: 'Identify devices via mDNS' },
+  mdns_services: { type: 'list', section: 'discovery', label: 'mDNS service types to look for' },
+
+  // Monitoring
+  mqtt_sensors: { type: 'bool', section: 'monitoring', label: 'Publish metrics over MQTT' },
+  cert_monitor_host: { type: 'str', section: 'monitoring', label: 'Certificate to watch' },
+
+  // Websocket
+  compress_websocket: { type: 'bool', section: 'websocket', label: 'Compress the websocket' },
 };
+
+// The shape the rest of the code already expects: key -> type.
+export const EDITABLE_KEYS = Object.fromEntries(
+  Object.entries(OPTIONS).map(([k, o]) => [k, o.type]),
+);
 
 const emptyStore = () => ({ version: STORE_VERSION, managed: {}, history: [] });
 

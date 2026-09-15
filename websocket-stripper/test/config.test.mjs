@@ -310,3 +310,67 @@ test('every renamed option reads the new name first and still reads the old one'
       `${canonical} must be consulted before ${old}`);
   }
 });
+
+// The console groups options into sections. An option that names a section which does not exist
+// renders into nothing — it vanishes from the page while still being a real, settable option,
+// which is the worst of both: present in the schema, absent from the UI meant to replace it.
+test('every option belongs to a section that exists, and no section is empty', async () => {
+  const { OPTIONS, SECTIONS, EDITABLE_KEYS } = await import('../config_store.mjs');
+  const ids = new Set(SECTIONS.map((s) => s.id));
+  assert.equal(ids.size, SECTIONS.length, 'section ids must be unique');
+
+  for (const [key, o] of Object.entries(OPTIONS)) {
+    assert.ok(o.section, `${key} declares no section`);
+    assert.ok(ids.has(o.section), `${key} is in section "${o.section}", which is not declared`);
+    assert.ok(o.label && o.label !== key, `${key} needs a human label, not its own key`);
+    assert.ok(o.type, `${key} declares no type`);
+  }
+  // A section with nothing in it renders as a heading over empty space.
+  for (const s of SECTIONS) {
+    assert.ok(Object.values(OPTIONS).some((o) => o.section === s.id),
+      `section "${s.id}" has no options`);
+    assert.ok(s.title && s.blurb, `section "${s.id}" needs a title and a blurb`);
+  }
+  // EDITABLE_KEYS is derived now rather than maintained twice; if that derivation broke, the
+  // endpoint's write guard would start refusing every key.
+  assert.deepEqual(Object.keys(EDITABLE_KEYS), Object.keys(OPTIONS));
+});
+
+// The pill row and the Config tab must group options the same way.
+//
+// They did not: the pills keyed off the `trim_` prefix while the page groups by declared section,
+// so by_dashboard sat inside Trimming on one screen and stood alone on the other. Two answers to
+// "is this a trim option" on two halves of the same panel. The page now reads the sections the
+// server declares, which only works if the server actually sends them.
+test('stats.json carries the section map the pill row groups by', () => {
+  const src = read('ha_ws_trim_proxy.mjs');
+  assert.match(src, /optionSections: Object\.fromEntries\(/,
+    'stats.json must publish which section each option is in');
+
+  const panel = read('panel.html');
+  assert.match(panel, /s\.optionSections/, 'the pill row must read the published sections');
+  // The prefix rule survives only as a fallback for an older server; if it were still the primary
+  // rule the map would be published and ignored.
+  const inTrim = panel.match(/const inTrim = \(k\) => [^;]+;/)?.[0];
+  assert.ok(inTrim, 'the pill row must decide trim membership in one place');
+  // Both must be present before comparing positions: indexOf returns -1 for a missing needle,
+  // and -1 sorts "before" everything, so an ordering check alone passes when the section lookup
+  // has been deleted entirely — which is the exact regression this test exists to catch.
+  const iSection = inTrim.indexOf('sections[k]');
+  const iPrefix = inTrim.indexOf("startsWith('trim_')");
+  assert.notEqual(iSection, -1, 'the declared section must be consulted');
+  assert.notEqual(iPrefix, -1, 'the name-prefix fallback must remain for an older server');
+  assert.ok(iSection < iPrefix,
+    'the declared section must be consulted before the name-prefix fallback');
+});
+
+// by_dashboard is the case that exposed the mismatch, so it is worth naming outright: it does not
+// start with trim_, and it IS a trimming option.
+test('by_dashboard is grouped with trimming despite its name', async () => {
+  const { OPTIONS } = await import('../config_store.mjs');
+  assert.equal(OPTIONS.by_dashboard.section, 'trim');
+  assert.equal(OPTIONS.trim_entities.section, 'trim');
+  assert.equal(OPTIONS.mdns_discovery.section, 'discovery', 'mDNS stays out of the trim count');
+  assert.equal(OPTIONS.mqtt_sensors.section, 'monitoring');
+  assert.equal(OPTIONS.compress_websocket.section, 'websocket');
+});
