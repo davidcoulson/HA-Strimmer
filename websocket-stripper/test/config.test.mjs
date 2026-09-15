@@ -287,3 +287,26 @@ test('a renamed option shows the value its old spelling carries', async () => {
   assert.match(src, /value: eff\[k\] !== undefined \? eff\[k\] : eff\[legacyNameFor\(k\)\]/,
     'the config endpoint must fall back to the old spelling for a value');
 });
+
+// The same guarantee as the entity-trim rename, for every renamed option at once.
+//
+// Turning by_dashboard off is a deliberate choice for panels that navigate between dashboards
+// without reloading; making the old key inert would re-scope those connections and blank half
+// their cards until someone reloaded. Every rename has a story like that, which is why the old
+// name is read at all — and why the new one has to be read FIRST, or a half-migrated config
+// carrying both would obey the name being retired.
+test('every renamed option reads the new name first and still reads the old one', async () => {
+  const { LEGACY_ALIASES } = await import('../config_store.mjs');
+  const src = read('ha_ws_trim_proxy.mjs');
+  // The ports resolve in their own expression, already covered by its own test.
+  const bools = Object.entries(LEGACY_ALIASES).filter(([old]) => !old.endsWith('port'));
+  assert.ok(bools.length >= 2, 'expected several renamed non-port options');
+
+  for (const [old, canonical] of bools) {
+    const decl = src.match(new RegExp(`const [A-Z_]+ = OPT\\.${canonical}[\\s\\S]*?;\\n`))?.[0];
+    assert.ok(decl, `the proxy must resolve ${canonical} starting from OPT.${canonical}`);
+    assert.ok(decl.includes(`OPT.${old}`), `${old} must still be read`);
+    assert.ok(decl.indexOf(`OPT.${canonical}`) < decl.indexOf(`OPT.${old}`),
+      `${canonical} must be consulted before ${old}`);
+  }
+});

@@ -38,20 +38,21 @@ export const BOOTSTRAP_KEYS = new Set([
   'log_level', 'proxy_port', 'port', 'mgmt_port', 'stats_port', 'ha_base', 'allow_ws_url',
 ]);
 
-// Option names that were renamed. Each is still READ, so an existing config keeps working, but
-// none of them gets a row in the console: listing both spellings showed two rows for one setting,
-// with the value on whichever row the config happened to use and `null` on the other.
+// Old name -> the name that replaced it.
+//
+// Each old name is still READ, so an existing config keeps working, but none of them gets a row in
+// the console: listing both spellings showed two rows for one setting, with the value on whichever
+// row the config happened to use and nothing on the other. The mapping matters as well as the
+// membership — a config still using the old spelling has nothing stored under the new one, so the
+// canonical row reads through this to show the value actually in effect.
 //
 // They stay in the schema deliberately. Removing a key from the schema makes Supervisor discard
 // it on upgrade, silently, which would cost someone a setting they had deliberately changed.
-// Old name -> the name that replaced it. The mapping matters as well as the membership: a config
-// still using the old spelling has nothing under the new one, so the canonical row would render
-// empty while the setting was plainly in effect. The console reads through this to show the value
-// that is actually being used.
 export const LEGACY_ALIASES = {
   port: 'proxy_port',
   stats_port: 'mgmt_port',
   strip_entities: 'trim_entities',
+  per_dashboard: 'by_dashboard',
 };
 
 export const LEGACY_KEYS = new Set(Object.keys(LEGACY_ALIASES));
@@ -79,7 +80,7 @@ export const EDITABLE_KEYS = {
   always_forward: 'list',
   never_forward: 'list',
   trim_entities: 'bool',
-  per_dashboard: 'bool',
+  by_dashboard: 'bool',
   trim_registries: 'bool',
   compress_websocket: 'bool',
   trim_resources: 'bool',

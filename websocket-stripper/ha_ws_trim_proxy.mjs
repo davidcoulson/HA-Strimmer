@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.12';
+const VERSION = '2026.09.15.13';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -418,11 +418,15 @@ let ALLOW = new Set();
 // instance this was built against the union was 388 entities while the kiosk's own dashboard
 // needed 60, so the union costs a small panel ~6x more state than it can display.
 let ALLOW_BY_DASH = new Map();
-// per_dashboard: serve each connection only its own dashboard's entities. Off => every
+// by_dashboard: serve each connection only its own dashboard's entities. Off => every
 // connection gets the union (the pre-2026.09 behaviour), which is also the automatic
 // fallback whenever a connection can't be attributed.
-const PER_DASH = OPT.per_dashboard !== undefined ? !!OPT.per_dashboard
-  : (process.env.PER_DASHBOARD ?? '1') !== '0';
+// `per_dashboard` is the original name and is still read: turning it off is a deliberate
+// choice for panels that navigate between dashboards without reloading, and making the key inert
+// would re-scope those connections and blank half their cards until someone reloaded.
+const PER_DASH = OPT.by_dashboard !== undefined ? !!OPT.by_dashboard
+  : OPT.per_dashboard !== undefined ? !!OPT.per_dashboard
+  : (process.env.BY_DASHBOARD ?? process.env.PER_DASHBOARD ?? '1') !== '0';
 // trim_registries: also cut the entity/device/area registries to what the connection can
 // see. Separate from strip_entities because it is the more invasive of the two — states are
 // self-describing, whereas a registry row missing here makes the frontend treat the entity as
@@ -2525,7 +2529,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // The page GET that precedes the websocket is the only signal that actually means "this
     // client is displaying this dashboard", so it is the only one used. The cost is that a
     // client-side navigation to a DIFFERENT dashboard keeps the old allowlist until the page
-    // reloads; set `per_dashboard: false` if that matters more than the trimming does.
+    // reloads; set `by_dashboard: false` if that matters more than the trimming does.
     if (m && m.type === 'unsubscribe_events' && m.subscription != null) {
       subEntityIds.delete(m.subscription);
       stateChangedSubs.delete(m.subscription);
@@ -3015,7 +3019,7 @@ function statsExtras() {
     mdns: MDNS_ENABLED ? discovery.snapshot() : { available: false, error: 'disabled', services: [], devices: [] },
     options: {
       trim_entities: STRIP,
-      per_dashboard: PER_DASH,
+      by_dashboard: PER_DASH,
       trim_registries: TRIM_REGISTRIES,
       compress_websocket: COMPRESS_WS,
       trim_resources: TRIM_RESOURCES,
@@ -3396,7 +3400,7 @@ for (const m of CONFIG_WARNINGS) warn(`  config: ${m}`);
   }
 }
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
-log(`options: per_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
+log(`options: by_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together
 // (host boot, a core update), and core can take minutes to answer — the proxy's job is to
 // wait for it, not to exit. HTTP proxies through immediately (502 while HA is down, like any

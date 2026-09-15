@@ -29,13 +29,21 @@ configuration:
       The previous name for "Trim the entity websocket". Still honoured so an existing
       configuration keeps working, and used only when the new name is not set. Set
       trim_entities instead; leave this one alone unless it is already in your config.
-  per_dashboard:
+  by_dashboard:
     name: Serve each connection only its own dashboard
     description: >-
       Each connection gets just the entities its dashboard needs, instead of the union of
       every dashboard above — so a panel showing one dashboard stops paying for the rest.
       A connection that can't be attributed falls back to the union, so nothing is ever
-      served less than it needs.
+      served less than it needs. Turn OFF if your panels navigate between dashboards
+      WITHOUT reloading: the allowlist is fixed when the websocket opens, so the new
+      dashboard's entities show as unavailable until the page reloads.
+  per_dashboard:
+    name: Serve each connection only its own dashboard (old name)
+    description: >-
+      The previous name for the option above. Still honoured so an existing configuration
+      keeps working, and used only when the new name is not set. Set by_dashboard instead;
+      leave this one alone unless it is already in your config.
   trim_registries:
     name: Trim the entity, device and area registries
     description: >-
