@@ -167,6 +167,60 @@
   proxy port — the same host and port a panel already loads dashboards from. Use whatever base URL
   the panel is configured with; do not hardcode 9123.</p>
 
+  <h2>Stability</h2>
+
+  <p>This endpoint is meant to be built against. What that commitment is, precisely:</p>
+
+  <h3>Will not change without being called out in the release notes</h3>
+  <ul>
+    <li>What a field <em>means</em> — a name is never reused for something else.</li>
+    <li>The detection semantics below: <code>200</code>, <code>401</code>, <code>403</code>,
+      <code>404</code>.</li>
+    <li>Authentication by Home Assistant bearer token.</li>
+    <li>The path, <code>/stripper/client.json</code>.</li>
+  </ul>
+
+  <h3>Will change, and your client must tolerate it</h3>
+  <ul>
+    <li><strong>New fields</strong>, anywhere in the payload. The schema is additive — do not
+      validate strictly, and do not fail on a key you have not seen.</li>
+    <li><strong>New keys in <code>trimming</code></strong> as options are added. Render it by
+      iterating the object, not by reading a fixed list of names.</li>
+    <li><strong>New <code>4xx</code>/<code>5xx</code> codes.</strong> Treat an unrecognised non-2xx
+      as <em>"the trimmer is there and did not answer"</em>, not <em>"the trimmer is gone"</em> —
+      that distinction is the whole point of the table below, and getting it wrong turns a
+      transient refusal into a false "offline".</li>
+  </ul>
+
+  <p><strong>Versioning.</strong> <code>stripper.version</code> is the add-on's own date-based
+  version (<code>2026.09.15.32</code>), which sorts lexically. There is no separate API version:
+  the payload tells you which build answered, and that is the thing to log when something looks
+  wrong.</p>
+
+  <h3>Breaking changes so far</h3>
+
+  <p>Both landed on 2026-09-15, and both are behind you if you are building against a current
+  release.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Version</th><th>Change</th><th>What broke</th></tr></thead>
+    <tbody>
+      <tr><td><code>2026.09.15.25</code></td><td>Authentication required</td>
+        <td>A client sending no <code>Authorization</code> header started getting <code>401</code>.</td></tr>
+      <tr><td><code>2026.09.15.26</code></td><td>Access list added</td>
+        <td>A remote caller can now get <code>403</code> where it previously got an answer. Local
+          callers are unaffected — the default is <code>lan</code>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <p>Nothing else has changed shape since the endpoint shipped in <code>2026.09.15.21</code>.
+    <strong>Treat the authentication requirement as the last breaking change</strong> — anything
+    further of that kind would be called out as such rather than slipped into a point release.</p>
+  </div>
+
   <h2>Detection: reaching it is the proof</h2>
 
   <p>A panel cannot tell from a dashboard page alone whether the Stripper served it or whether it

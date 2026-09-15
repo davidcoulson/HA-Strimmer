@@ -21,6 +21,44 @@ GET http://<your-ha-host>:9123/stripper/client.json
 Port 9123 is the Stripper's default proxy port — the same host and port the panel already loads
 dashboards from. **Use whatever base URL the panel is configured with; do not hardcode 9123.**
 
+## Stability
+
+This endpoint is meant to be built against. What that commitment is, precisely:
+
+**Will not change without being called out in the release notes:**
+
+- what a field means — a name is never reused for something else
+- the detection semantics below: `200`, `401`, `403`, `404`
+- authentication by Home Assistant bearer token
+- the path, `/stripper/client.json`
+
+**Will change, and your client must tolerate it:**
+
+- **new fields**, anywhere in the payload. The schema is additive — do not validate strictly, and
+  do not fail on a key you have not seen.
+- **new keys in `trimming`** as options are added. Render it by iterating the object, not by
+  reading a fixed list of names.
+- **new `4xx`/`5xx` codes**. Treat an unrecognised non-2xx as *"the trimmer is there and did not
+  answer"*, not as *"the trimmer is gone"* — that distinction is the whole point of the table
+  below, and getting it wrong turns a transient refusal into a false "offline".
+
+**Versioning.** `stripper.version` is the add-on's own date-based version (`2026.09.15.32`), which
+sorts lexically. There is no separate API version: the payload tells you which build answered, and
+that is the thing to log when something looks wrong.
+
+### Breaking changes so far
+
+Both landed on 2026-09-15, and both are behind you if you are building against a current release:
+
+| Version | Change | What broke |
+|---------|--------|------------|
+| `2026.09.15.25` | Authentication required | A client sending no `Authorization` header started getting `401`. |
+| `2026.09.15.26` | Access list added | A remote caller can now get `403` where it previously got an answer. Local callers are unaffected — the default is `lan`. |
+
+Nothing else has changed shape since the endpoint shipped in `2026.09.15.21`. **Treat the
+authentication requirement as the last breaking change**; anything further of that kind would be
+called out as such rather than slipped into a point release.
+
 ## Detection: reaching it is the proof
 
 A panel cannot tell from a dashboard page alone whether the Stripper served it or whether it is
