@@ -105,6 +105,8 @@
   .ovr-match code, .ovr-effect code { background: var(--bg); border-radius: 3px;
     padding: 0 4px; font-size: 12px; }
   .ovr-effect { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .ovr-tags { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;
+    max-width: 210px; }
   .ovr-kind { font-size: 11px; color: var(--muted); border: 1px solid var(--line);
     border-radius: 999px; padding: 0 7px; white-space: nowrap; }
   .ovr-del { font: inherit; font-size: 13px; line-height: 1; color: var(--muted);
@@ -1199,11 +1201,11 @@ const OVERRIDE_KINDS = {
   },
   client_overrides: {
     label: 'device',
-    match: (r) => [['client', r.client]],
+    match: (r) => [['device', r.client]],
   },
   user_agent_dashboards: {
     label: 'client app',
-    match: (r) => [['user agent', r.match]],
+    match: (r) => [['client app', r.match]],
   },
 };
 
@@ -1290,12 +1292,21 @@ function renderOverrides(box, d, save, say) {
 
     body.append(match, effect);
 
-    const tag = document.createElement('span');
-    tag.className = 'ovr-kind';
-    tag.textContent = kind.label;
-    tag.title = row.key;
-
-    el.append(body, tag);
+    el.append(body);
+    // One pill per matcher, so "which of my rules involve a user" is answerable by scanning the
+    // column rather than reading every sentence. A single pill naming the config list the rule
+    // came from could not do that: a rule matching a user AND a dashboard is both, and the list
+    // it happens to live in is an implementation detail — which is now the row's tooltip.
+    const tags = document.createElement('div');
+    tags.className = 'ovr-tags';
+    tags.title = row.key;
+    for (const [name] of pairs) {
+      const tag = document.createElement('span');
+      tag.className = 'ovr-kind';
+      tag.textContent = name;
+      tags.appendChild(tag);
+    }
+    el.append(tags);
 
     const canEdit = d.writable && d.editableHere;
     const del = document.createElement('button');

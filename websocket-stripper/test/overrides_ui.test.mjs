@@ -93,3 +93,40 @@ describe('the override wizard', () => {
     }
   });
 });
+
+// One word per concept across the whole screen.
+//
+// The same matcher was called "user agent" on the left of a row and "client app" on the right,
+// and a device rule said "when client is ..." under a tag reading "device" — one fact, printed
+// twice, in two vocabularies. It reads as two different things being described.
+describe('the override list vocabulary', () => {
+  const kinds = (() => {
+    const m = panel.match(/const OVERRIDE_KINDS = \{[\s\S]*?\n\};/);
+    assert.ok(m, 'OVERRIDE_KINDS must exist');
+    return m[0];
+  })();
+
+  it('uses the wizard\'s words for every matcher', () => {
+    const wizardWords = new Set(['dashboard', 'user', 'device', 'client app']);
+    // Every matcher name printed in a row must be one the wizard also uses.
+    const names = [...kinds.matchAll(/\['([a-z ]+)',/g)].map((m) => m[1]);
+    assert.ok(names.length >= 6, `expected several matcher names, found ${names.length}`);
+    for (const n of names) {
+      assert.ok(wizardWords.has(n), `"${n}" is not one of the wizard's words`);
+    }
+    // And specifically the two that were wrong.
+    assert.ok(!kinds.includes("'user agent'"), 'the User-Agent matcher must be called "client app"');
+    assert.ok(!kinds.includes("['client',"), 'the address matcher must be called "device"');
+  });
+
+  it('shows one pill per matcher, not one per config list', () => {
+    // A rule matching a user AND a dashboard is both; a single pill naming the list it lives in
+    // cannot say that, and the list is an implementation detail anyway.
+    const src = panel.match(/const tags = document\.createElement\('div'\);[\s\S]*?el\.append\(tags\);/)?.[0];
+    assert.ok(src, 'the row must render a pill per matcher');
+    assert.match(src, /for \(const \[name\] of pairs\)/,
+      'the pills must come from the rule\'s matchers');
+    assert.match(src, /tags\.title = row\.key/,
+      'which config list the rule came from belongs in the tooltip, not a pill');
+  });
+});
