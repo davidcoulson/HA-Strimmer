@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026.09.15.26 — 2026-09-15
+
+**An access list for the panel status API, checked before authentication.**
+
+Almost every caller of `/stripper/client.json` is a wall panel a few metres away; almost none is
+legitimately remote. `client_api_access` decides who may even try:
+
+* **`lan`** (default) — answer only requests that arrived locally. Internet and Cloudflare
+  requests are refused **before the token is looked at**, so a remote caller cannot make this
+  add-on open a websocket to Home Assistant to validate one.
+* **`any`** — no network check; the token alone decides.
+* **`off`** — the endpoint answers nobody.
+
+`client_api_allow` lists addresses or CIDRs that are allowed whatever the mode says, for a panel on
+a subnet this add-on does not consider local. Both are editable from the Config tab; the mode is a
+dropdown, which is a new control type the console did not have.
+
+**What it is worth, stated honestly.** Three signals, in descending order of trust: Cloudflare's
+own headers (set at the edge, a client cannot remove them), the peer address (the TCP source, not
+forgeable), and the resolved client address — which comes from `X-Forwarded-For`, whose leftmost
+entry is supplied by the caller. So a remote caller behind a proxy that appends rather than
+replaces can still look local. **This narrows who may try; the token is still the boundary.**
+
+A blocked request gets `403`, deliberately not `404`: a panel reads `404` as "the trimmer is not in
+front of me", and telling a blocked local panel that would be the opposite of the truth.
+
+---
+
 ## 2026.09.15.25 — 2026-09-15
 
 **Security: the management port was serving credentials and a full inventory of the house to

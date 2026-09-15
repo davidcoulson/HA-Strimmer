@@ -34,7 +34,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
-import { classify, normalizeIp } from './route.mjs';
+import { classify, normalizeIp, isPrivate } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.25';
+const VERSION = '2026.09.15.26';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -93,6 +93,48 @@ const PORT = parseInt(process.env.PROXY_PORT || process.env.PORT
 // Where a panel asks about itself. A constant because two things have to agree on it: this
 // server, and every panel that was told the path — so it is quoted in the docs from here.
 const CLIENT_INFO_PATH = '/stripper/client.json';
+
+// Who may reach the panel status endpoint, checked BEFORE the token.
+//
+// Most callers are a wall panel a few metres away; almost none are legitimately remote. Refusing
+// a remote one early means a caller from the internet cannot make this add-on open a websocket to
+// Home Assistant to validate a token — it never gets that far.
+//
+// HOW MUCH THIS IS WORTH, honestly. Three signals, in descending order of trust:
+//
+//   1. Cloudflare's own headers. The edge sets cf-connecting-ip / cf-ray and a client cannot
+//      remove them, so "came via Cloudflare" is reliable.
+//   2. The peer address. The TCP source cannot be forged, so a request arriving directly from a
+//      public address is reliably remote.
+//   3. The resolved client address, which comes from X-Forwarded-For. The LEFTMOST entry is
+//      whatever the original caller claimed, so a remote caller behind a reverse proxy that
+//      appends rather than replaces can assert a private address and look local.
+//
+// So this narrows who may TRY. The token is still the boundary, and the comment above the auth
+// block still holds. Anything else would be security theatre with a configuration page.
+const CLIENT_API_ACCESS = (() => {
+  const v = String(OPT.client_api_access ?? process.env.CLIENT_API_ACCESS ?? 'lan').toLowerCase();
+  return ['lan', 'any', 'off'].includes(v) ? v : 'lan';
+})();
+const CLIENT_API_ALLOW = toList(OPT.client_api_allow ?? process.env.CLIENT_API_ALLOW)
+  .map((c) => ({ raw: c, cidr: parseCidr(c), ip: normalizeIp(c) }))
+  .filter((r) => r.cidr || r.ip);
+
+// Returns null when the request may proceed, or a reason to refuse it.
+function clientApiRefusal(req, rt) {
+  if (CLIENT_API_ACCESS === 'off') return 'the panel status API is disabled';
+  // An explicit allow wins over everything, including the Cloudflare check: someone who lists an
+  // address has said what they mean more clearly than any heuristic here can.
+  const hop = normalizeIp(req.socket?.remoteAddress);
+  for (const a of CLIENT_API_ALLOW) {
+    if (a.cidr ? (a.cidr(rt.ip) || a.cidr(hop)) : (a.ip === rt.ip || a.ip === hop)) return null;
+  }
+  if (CLIENT_API_ACCESS === 'any') return null;
+  if (rt.route === 'cloudflare') return 'this endpoint does not answer requests that came through Cloudflare';
+  if (hop && !isPrivate(hop)) return 'this endpoint only answers requests from the local network';
+  if (rt.origin === 'internet') return 'this endpoint only answers requests from the local network';
+  return null;
+}
 const INGRESS_PORT = 9122;
 // Configurable, but only the default can be reached over Ingress — see the warning at listen().
 const STATS_PORT = parseInt(process.env.MGMT_PORT || process.env.STATS_PORT
@@ -2453,6 +2495,20 @@ const server = http.createServer((req, res) => {
     // distribute and rotate is a worse answer than the one the platform already provides. The
     // result is cached exactly like the per-user lookup — same map, same ten-minute TTL — so an
     // admin screen polling this does not open a websocket to Home Assistant every time.
+    // Where it came from, BEFORE who it is. A caller this add-on will not answer should not be
+    // able to make it open a websocket to Home Assistant to check a token.
+    const refusal = clientApiRefusal(req, classify(req));
+    if (refusal) {
+      logThrottled('client-api-blocked', `refused ${CLIENT_INFO_PATH} from ${clientIp(req) ?? '?'} — ${refusal}`);
+      // 403, deliberately not 404. A panel uses 404 to mean "the trimmer is not in front of me",
+      // and answering a blocked-but-local panel with 404 would tell it the opposite of the truth.
+      res.writeHead(403, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'access-control-allow-origin': '*',
+      });
+      return res.end(JSON.stringify({ error: refusal }));
+    }
     const auth = String(req.headers.authorization || '');
     const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
     if (!token) {
@@ -3347,6 +3403,7 @@ function statsExtras() {
       // shipped, so the panel never showed whether MQTT or mDNS was actually on.
       mqtt_sensors: MQTT_SENSORS,
       mdns_discovery: MDNS_ENABLED,
+      client_api_access: CLIENT_API_ACCESS,
       proxy_port: PORT,
       mgmt_port: STATS_PORT,
     },
@@ -3630,6 +3687,7 @@ const statsServer = http.createServer((req, res) => {
         type: EDITABLE_KEYS[k] || null,
         section: OPTIONS[k]?.section || null,
         // What an empty value means, when that is not simply "empty".
+        choices: OPTIONS[k]?.choices || null,
         emptyMeans: OPTIONS[k]?.emptyMeans
           ? (k === 'mdns_services' ? `the built-in set (${DEFAULT_SERVICES.join(', ')})` : OPTIONS[k].emptyMeans)
           : null,

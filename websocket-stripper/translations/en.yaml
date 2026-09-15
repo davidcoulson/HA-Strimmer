@@ -238,6 +238,24 @@ configuration:
     description: >-
       URL fragments of resources to withhold from every dashboard. Overrides the always
       list. Literal substring or /regex/.
+  client_api_access:
+    name: Panel status API — answer requests from
+    description: >-
+      Who may reach `/stripper/client.json`, the endpoint a wall panel uses to show whether this
+      app is in front of it. `lan` (default) answers only requests that arrived locally and
+      refuses internet and Cloudflare ones BEFORE checking the token, so a remote caller cannot
+      even make this app ask Home Assistant about a token. `any` drops the network check and
+      relies on the token alone. `off` disables the endpoint entirely.
+      A Home Assistant token is required either way — this narrows who may try, it does not
+      replace authentication. Note that the local/remote judgement partly rests on headers a
+      reverse proxy sets, and the leftmost X-Forwarded-For entry is supplied by the caller; the
+      Cloudflare check and the peer address are not forgeable, and those do the real work.
+  client_api_allow:
+    name: Panel status API — always allow these addresses
+    description: >-
+      Addresses or CIDRs that may reach the endpoint whatever the access mode says — for a panel
+      on a subnet this app does not consider local, or a management host reaching it from
+      elsewhere. Leave empty unless you need it.
   log_level:
     name: How much to log
     description: >-

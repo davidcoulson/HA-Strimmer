@@ -91,6 +91,7 @@ export const SECTIONS = [
   { id: 'discovery', title: 'Device discovery', blurb: 'Ask the network what each connecting device is, so the Clients tab can name it.' },
   { id: 'monitoring', title: 'Monitoring', blurb: 'Long-term metrics and checks, published back into Home Assistant.' },
   { id: 'websocket', title: 'Websocket', blurb: 'How the browser connection itself is handled.' },
+  { id: 'client_api', title: 'Panel status API', blurb: 'Who may ask this app what it is doing, at /stripper/client.json on the proxy port.' },
 ];
 
 export const OPTIONS = {
@@ -136,6 +137,18 @@ export const OPTIONS = {
 
   // Websocket
   compress_websocket: { type: 'bool', section: 'websocket', label: 'Compress the websocket' },
+
+  // Panel status API
+  client_api_access: {
+    type: 'choice', section: 'client_api', label: 'Answer requests from',
+    choices: [
+      { value: 'lan', label: 'Local network only' },
+      { value: 'any', label: 'Anywhere (token still required)' },
+      { value: 'off', label: 'Nobody — endpoint disabled' },
+    ],
+  },
+  client_api_allow: { type: 'list', section: 'client_api', label: 'Always allow these addresses',
+    emptyMeans: 'no extra addresses' },
 };
 
 // The shape the rest of the code already expects: key -> type.

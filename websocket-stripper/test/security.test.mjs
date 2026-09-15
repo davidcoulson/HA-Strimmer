@@ -184,3 +184,121 @@ describe('the client status endpoint', () => {
     assert.match(res.headers['access-control-allow-methods'] || '', /GET/);
   });
 });
+
+// Where a request came from, checked before who it is.
+//
+// Almost every caller is a wall panel a few metres away. Refusing a remote one early means a
+// caller from the internet cannot make this add-on open a websocket to Home Assistant to validate
+// a token — it never gets that far. That ordering is the entire point, so it is asserted directly
+// rather than inferred from a status code.
+//
+// What this is worth, and what it is not: the Cloudflare headers and the peer address cannot be
+// forged, and those carry the check. The resolved client address comes from X-Forwarded-For,
+// whose leftmost entry is supplied by the caller — so a remote caller behind a proxy that appends
+// can still look local. This narrows who may TRY. The token is still the boundary.
+describe('the panel status API access list', () => {
+  const spawnWith = async (env) => {
+    const mock = await startMockHa();
+    const port = await getFreePort();
+    const sp = await getFreePort();
+    const proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1', ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+    const deadline = Date.now() + 25000;
+    while (!/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return { mock, proxy, port, log: () => out };
+  };
+
+  it('refuses a Cloudflare request before it ever looks at the token', async () => {
+    const t = await spawnWith({});
+    try {
+      // cf-ray is stamped by Cloudflare's edge and a client cannot remove it, which is what makes
+      // this the trustworthy half of the check.
+      const res = await req(t.port, '/stripper/client.json', {
+        headers: { 'cf-ray': '8abc-DFW', authorization: 'Bearer david-token' },
+      });
+      assert.equal(res.status, 403, 'a Cloudflare request must be refused');
+      assert.match(res.body, /Cloudflare/i, 'and told why');
+      // 403, never 404: a panel reads 404 as "the trimmer is not in front of me", and a blocked
+      // local panel being told that would be the opposite of the truth.
+      assert.notEqual(res.status, 404);
+      // The valid token above must NOT have been spent. Asked of the MOCK, which counts the RPCs
+      // it actually received — an earlier version of this grepped the proxy's own log for
+      // `auth/current_user`, which the proxy never writes, so it passed against code that
+      // validated the token first. A test of ordering has to observe the thing being ordered.
+      //
+      // And it has to WAIT: the lookup is asynchronous, so reading the count the instant the 403
+      // arrives finds zero whether or not one was started. The pause is what gives a wrongly
+      // ordered implementation time to betray itself.
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(t.mock.rpcCount('auth/current_user'), 0,
+        'the network check must run before the token is validated');
+    } finally { t.proxy.kill(); await t.mock.close(); }
+  });
+
+  it('refuses a caller whose own address is public', async () => {
+    const t = await spawnWith({});
+    try {
+      // The peer here is loopback, so this stands in for the forwarded case: a proxy that says
+      // the original caller was public.
+      const res = await req(t.port, '/stripper/client.json', {
+        headers: { 'x-forwarded-for': '203.0.113.7', authorization: 'Bearer david-token' },
+      });
+      assert.equal(res.status, 403);
+      assert.match(res.body, /local network/i);
+    } finally { t.proxy.kill(); await t.mock.close(); }
+  });
+
+  it('still answers a local caller with a token', async () => {
+    const t = await spawnWith({});
+    try {
+      const res = await req(t.port, '/stripper/client.json', {
+        headers: { authorization: 'Bearer david-token' },
+      });
+      assert.equal(res.status, 200, `a local panel must still work, got ${res.body}`);
+    } finally { t.proxy.kill(); await t.mock.close(); }
+  });
+
+  it('honours an explicit allow entry over the heuristics', async () => {
+    const t = await spawnWith({ CLIENT_API_ALLOW: '203.0.113.7' });
+    try {
+      const res = await req(t.port, '/stripper/client.json', {
+        headers: { 'x-forwarded-for': '203.0.113.7', authorization: 'Bearer david-token' },
+      });
+      assert.equal(res.status, 200, 'an address someone listed on purpose is allowed');
+    } finally { t.proxy.kill(); await t.mock.close(); }
+  });
+
+  it('can be switched off entirely, and then answers nobody', async () => {
+    const t = await spawnWith({ CLIENT_API_ACCESS: 'off' });
+    try {
+      const res = await req(t.port, '/stripper/client.json', {
+        headers: { authorization: 'Bearer david-token' },
+      });
+      assert.equal(res.status, 403);
+      assert.match(res.body, /disabled/i);
+      assert.ok(!/trimming/.test(res.body), 'and carries none of the payload');
+    } finally { t.proxy.kill(); await t.mock.close(); }
+  });
+
+  it('can be opened up, leaving the token as the only check', async () => {
+    const t = await spawnWith({ CLIENT_API_ACCESS: 'any' });
+    try {
+      const open = await req(t.port, '/stripper/client.json', {
+        headers: { 'cf-ray': '8abc-DFW', authorization: 'Bearer david-token' },
+      });
+      assert.equal(open.status, 200, 'the network check is off');
+      // But the token still is not.
+      const noToken = await req(t.port, '/stripper/client.json', { headers: { 'cf-ray': '8abc-DFW' } });
+      assert.equal(noToken.status, 401, 'opening the network check must not open the endpoint');
+    } finally { t.proxy.kill(); await t.mock.close(); }
+  });
+});

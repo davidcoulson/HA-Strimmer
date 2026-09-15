@@ -1807,7 +1807,21 @@ function configRow(o, d, save, say) {
     label.title = o.key;
     row.appendChild(label);
 
-    if (o.type === 'list') {
+    if (o.type === 'choice') {
+      // A fixed set of answers is a dropdown, not a JSON string someone has to spell correctly.
+      const sel = document.createElement('select');
+      sel.className = 'cfgval';
+      sel.disabled = !canEdit;
+      for (const c of (o.choices || [])) {
+        const opt = document.createElement('option');
+        opt.value = c.value;
+        opt.textContent = c.label;
+        sel.appendChild(opt);
+      }
+      sel.value = o.value ?? (o.choices?.[0]?.value ?? '');
+      sel.onchange = () => { sel.disabled = true; save(o, 'adopt', sel.value); };
+      row.appendChild(sel);
+    } else if (o.type === 'list') {
       row.appendChild(chipList(o, d, save, say));
     } else if (o.type === 'objects') {
       // The structured lists get their own editor; until then say how many rules are set rather
