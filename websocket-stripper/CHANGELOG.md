@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026.09.15.22 — 2026-09-15
+
+**Documentation only. No behaviour changes.**
+
+The field-by-field guide to `GET /stripper/client.json` now lives in the repo, where the projects
+building against it can read it: [`docs/CLIENT-API.md`](docs/CLIENT-API.md), linked from the
+README. It covers detection (`200` means in-path, `404` means talking to Home Assistant directly),
+every field and what `null` means in each, the boundary of what the endpoint will never return,
+and the rules of engagement for a client — do not poll from a dashboard, ignore unknown fields,
+render `null` as "not known" rather than zero.
+
+`docs/client-api.html` is the same content as a standalone styled page, for sending to someone who
+is not working in this repo. Markdown is the in-repo format deliberately: GitHub renders it, while
+an HTML file shows as source to anyone reading it there.
+
+---
+
 ## 2026.09.15.21 — 2026-09-15
 
 **A panel can ask what the trimmer is doing for it.**
