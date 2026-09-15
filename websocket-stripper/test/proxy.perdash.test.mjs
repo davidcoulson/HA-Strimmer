@@ -1390,3 +1390,128 @@ describe('resources for modules that register no card', () => {
     } finally { px.kill(); await m2.close(); }
   });
 });
+
+// A bundle that only MENTIONS another card is not that card's provider.
+//
+// The literal test answers "could this bundle define this card". It cannot answer the reverse,
+// and on a real instance that cost real time: bubble-card.js and simple-swipe-card.js both
+// contain the string `grid-layout`, utility-cards.js and swipe-navigation.js both contain
+// `navbar-card`, because each integrates with them. A dashboard using only grid-layout and
+// navbar-card kept all four — 1,326 ms of parsing on a px30 wall panel, 10% of a 13.3 s cold
+// start, for cards that were never on the page.
+describe('resource matching: a mention is not a provider', () => {
+  const resourcesFor = async (p, pageUrl) => {
+    if (pageUrl) await httpGet(`http://127.0.0.1:${p}${pageUrl}`);
+    const c = haClient(`ws://127.0.0.1:${p}/api/websocket`);
+    await c.authed;
+    const rows = (await c.rpc({ type: 'lovelace/resources' })).result;
+    c.close();
+    return rows.map((r) => String(r.url).split('?')[0]);
+  };
+
+  // `navbar-card.js` is named for the card. `integrator.js` merely talks about it.
+  const RES = [
+    { id: 'a', type: 'module', url: '/res/navbar-card.js' },
+    { id: 'b', type: 'module', url: '/res/integrator.js' },
+  ];
+  const BODIES = {
+    '/res/navbar-card.js': 'customElements.define("navbar-card", C);',
+    '/res/integrator.js': 'const supported=["navbar-card","other-card"];// integrates with navbar-card',
+  };
+  const CFG = { views: [{ cards: [{ type: 'custom:navbar-card', entity: 'light.living_room' }] }] };
+
+  it('keeps the file named for the card and drops the one that only mentions it', async () => {
+    const m2 = await startMockHa({ configs: { 'p-dash': CFG }, resources: RES, resourceBodies: BODIES });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'p-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const urls = await resourcesFor(p2, '/p-dash');
+      assert.ok(urls.includes('/res/navbar-card.js'), 'the provider must survive');
+      assert.ok(!urls.includes('/res/integrator.js'),
+        'a bundle that only names the card is not needed to render it');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  it('does not report the card as unrenderable when only the mention was dropped', async () => {
+    const m2 = await startMockHa({ configs: { 'p-dash': CFG }, resources: RES, resourceBodies: BODIES });
+    const p2 = await getFreePort();
+    const sp = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'p-dash', port: p2, statsPort: sp, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const stats = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/stats.json`)).body);
+      assert.deepEqual(stats.resources.unmetByDashboard || {}, {},
+        'the provider is kept, so nothing is unrenderable');
+      assert.doesNotMatch(px.out, /will NOT render/);
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // Frequency has to be counted over PATHS, not bodies. On the instance this came from, the
+  // fragment `layout` appears in 24 of 42 bundle BODIES — far too common to identify anything —
+  // while naming exactly one file. Judged by bodies it is noise; judged by paths it is the
+  // answer. Here four decoys mention "layout" in passing, which is enough to disqualify the
+  // fragment if the wrong denominator is used, and the real provider then goes unrecognised.
+  it('counts fragment frequency over paths, not bodies', async () => {
+    const decoys = ['alpha', 'beta', 'gamma', 'delta'];
+    const m2 = await startMockHa({
+      configs: { 'l-dash': { views: [{ cards: [{ type: 'custom:grid-layout', entity: 'light.living_room' }] }] } },
+      resources: [
+        { id: 'p', type: 'module', url: '/res/layout-card.js' },
+        { id: 'm', type: 'module', url: '/res/bubble-card.js' },
+        ...decoys.map((d, i) => ({ id: 'd' + i, type: 'module', url: `/res/${d}.js` })),
+      ],
+      resourceBodies: {
+        '/res/layout-card.js': 'customElements.define("grid-layout", C);',
+        '/res/bubble-card.js': 'const supports=["grid-layout"];// works inside grid-layout',
+        ...Object.fromEntries(decoys.map((d) => [`/res/${d}.js`, `// mentions layout in passing\nconst layout=1;`])),
+      },
+    });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'l-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const urls = await resourcesFor(p2, '/l-dash');
+      assert.ok(urls.includes('/res/layout-card.js'), 'the file named for the card must survive');
+      assert.ok(!urls.includes('/res/bubble-card.js'),
+        'path frequency identifies the provider even when the fragment is common in bodies');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // The narrowing only applies where a provider is identifiable. When no file is named for the
+  // card — the runtime-built-name case — the old body test must still run, or bundles like
+  // mushroom.js would start being dropped, which is the dangerous direction.
+  //
+  // The second card exists to keep the keep-set non-empty. Without it this test cannot fail:
+  // an empty keep set disables resource trimming altogether (`if (keep?.size)`), so a build that
+  // wrongly dropped the anonymous bundle would forward every resource anyway and the assertion
+  // would pass on a bug. Found by reintroducing exactly that bug and watching it pass.
+  it('falls back to the body test when no file is named for the card', async () => {
+    const m2 = await startMockHa({
+      configs: { 'p-dash': { views: [{ cards: [
+        { type: 'custom:zzz-widget-card', entity: 'light.living_room' },
+        { type: 'custom:solid-card', entity: 'light.living_room' },
+      ] }] } },
+      resources: [
+        { id: 'a', type: 'module', url: '/res/anonymous-bundle.js' },
+        { id: 'b', type: 'module', url: '/res/solid-card.js' },
+        { id: 'c', type: 'module', url: '/res/decoy.js' },
+      ],
+      resourceBodies: {
+        '/res/anonymous-bundle.js': 'const t="zzz-widget-card";customElements.define(t,C);',
+        '/res/solid-card.js': 'customElements.define("solid-card", C);',
+        '/res/decoy.js': 'const unrelated = 1;',
+      },
+    });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'p-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const urls = await resourcesFor(p2, '/p-dash');
+      assert.ok(urls.includes('/res/solid-card.js'), 'the named provider is kept');
+      assert.ok(urls.includes('/res/anonymous-bundle.js'),
+        'with no provider identifiable, the literal body match must still keep it');
+      assert.ok(!urls.includes('/res/decoy.js'), 'and trimming is actually happening');
+    } finally { px.kill(); await m2.close(); }
+  });
+});

@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026.09.14.24 — 2026-09-14
+
+**A bundle that merely mentions a card is no longer treated as providing it.**
+
+The literal test answers "could this bundle define this card". It cannot answer the reverse, and a
+bundle that only *mentions* another card's name matches it just as convincingly. Measured on a
+real instance, that kept four bundles a dashboard never used:
+
+| Bundle | Why it was kept | Cost on a px30 wall panel |
+|---|---|---|
+| `bubble-card.js` | contains the literal `grid-layout` | 607 ms |
+| `swipe-navigation.js` | contains the literal `navbar-card` | 307 ms |
+| `simple-swipe-card.js` | contains the literal `grid-layout` | 259 ms |
+| `utility-cards.js` | contains the literal `navbar-card` | 153 ms |
+
+Each mentions those names because it *integrates with* them. The dashboard in question renders
+four card types and none of these was among them.
+
+A card's provider almost always says so in its **file name** — `navbar-card` lives in
+`navbar-card.js`, `whisker-card` in `whisker.js`, `grid-layout` in `layout-card.js`. So when a
+resource's path identifies it as the provider, only that resource satisfies the card type, and a
+bundle that name-drops it no longer counts. Where nothing identifies a provider — the
+runtime-built-name case, like `mushroom.js` — the previous body test runs unchanged, so the
+failure mode is the behaviour that already shipped, never a resource dropped on a guess.
+
+**Two measurements shaped the rule, and both contradicted the obvious version.**
+
+*Frequency must be counted over paths, not bodies.* The fragment `layout` appears in 24 of 42
+bundle bodies — far too common to identify anything — while naming exactly one file. Judged by
+bodies it is noise; judged by paths it is the answer.
+
+*A fragment shared across card names identifies nothing, but "shared at all" is too blunt.*
+`card` belongs to nearly every card type and names a file in almost every install. `layout`
+belongs to four names out of thirty-five and names one file. A flat "more than one type
+disqualifies it" was implemented first, shipped to a live instance, and left the 1 MB
+`bubble-card.js` in place; a proportional quarter-of-all-types threshold separates the two and
+scales with the instance rather than with the test fixture.
+
+**Result on the instance this was found on**, with no card reported unrenderable on any dashboard:
+
+| Dashboard | Resources kept | JavaScript kept |
+|---|---|---|
+| basement-stairs-panel | 9 → **5** | 2,319 KB → **871 KB** |
+| lovelace | 23 → 21 | 8,965 KB → 8,502 KB |
+| dashboard-test | 15 → 14 | 4,210 KB → 3,219 KB |
+
+**What this does not do is make that panel measurably faster, and the honest report is that it
+did not.** Warm load on the px30 panel measured 10.4 s before and 10.7 s after, inside a spread of
+8.0–12.6 s across six runs. 1.4 MB less JavaScript is parsed, downloaded and held in memory, and
+1,326 ms of attributed script work is genuinely gone from the trace — but the end-to-end time on
+that device is dominated by Home Assistant's own frontend (5,696 ms of the 8,828 ms of script on a
+cold load, 1,462 ms of it in `app.js` alone) and the run-to-run variance is larger than the saving.
+The byte reduction is real and verifiable; a speed-up is not claimed, because it could not be
+demonstrated.
+
+---
+
+286 tests. Four written here, each verified by reintroducing the bug it catches — and the
+fallback test was vacuous on the first three attempts: an empty keep-set disables resource
+trimming entirely, so a build that wrongly dropped everything forwarded everything instead and the
+assertion passed on a bug.
+
 ## 2026.09.14.22 — 2026-09-14
 
 **A card handed a device now gets that device's sub-devices too.**

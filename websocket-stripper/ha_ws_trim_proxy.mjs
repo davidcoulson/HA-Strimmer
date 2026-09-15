@@ -50,7 +50,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.22';
+const VERSION = '2026.09.14.24';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1409,13 +1409,59 @@ const matchesUrl = (rules, url) => rules.some((r) => (r.re ? r.re.test(url) : ur
 // version tag means genuinely different bytes to fetch and re-scan. Only identity is path-based.
 const resourcePath = (url) => String(url ?? '').split('?')[0];
 
-function keepResource(url, keys) {
+// Which resources actually PROVIDE a card type, judged by their own path.
+//
+// The literal test below is described as the strong signal, and for deciding "could this bundle
+// define this card" it is. It is not evidence of the reverse: a bundle that merely MENTIONS
+// another card's name matches it just as well. Measured on a real instance, that kept four
+// bundles a dashboard never used — bubble-card and simple-swipe-card both contain the string
+// `grid-layout`, utility-cards and swipe-navigation both contain `navbar-card`, because each
+// integrates with them. On a px30 wall panel those four cost 1,326 ms of parsing on every load,
+// 10% of a 13.3-second cold start, for cards that were never on the page.
+//
+// A card's provider almost always says so in its FILE NAME: `navbar-card` lives in
+// navbar-card.js, `whisker-card` in whisker.js, `grid-layout` in layout-card.js. So when some
+// resource's path identifies it as the provider, only those resources satisfy that card type,
+// and a bundle that merely name-drops it no longer counts.
+//
+// The frequency test uses PATH frequency, not body frequency, and the distinction matters: on
+// that instance `layout` appears in 24 of 42 bundle bodies — far too common to identify anything
+// — while naming exactly one file. Judged by bodies it is noise; judged by paths it is the answer.
+//
+// When nothing identifies a provider this returns null and the old body test runs unchanged, so
+// the failure mode is the behaviour that shipped before, never a resource dropped on a guess.
+const PATH_FRAG_MAX = 3;
+function pathProviders(type, rows, pathFragDf, sharedFrags, sharedMax) {
+  const t = String(type).toLowerCase();
+  const pathOf = (u) => resourcePath(u).toLowerCase();
+  const base = (u) => pathOf(u).split('/').pop().replace(/\.js$/, '');
+  // Strongest: the path spells the card type out, or the file is named exactly for it.
+  const exact = rows.filter((r) => pathOf(r.url).includes(t) || base(r.url) === t);
+  if (exact.length) return new Set(exact.map((r) => resourcePath(r.url)));
+  // Otherwise a fragment that names very few files is enough to point at the provider — but only
+  // if the fragment belongs to THIS card type alone. `card` names a file in almost every install
+  // and is a fragment of half the card types on a dashboard, so it identifies nothing; the test
+  // that catches it is scale-free, unlike a frequency threshold, which a small install defeats by
+  // making every fragment look rare.
+  const frs = cardFragments(type).filter((f) => (pathFragDf.get(f) ?? Infinity) <= PATH_FRAG_MAX
+    && (sharedFrags.get(f) ?? 0) <= sharedMax);
+  if (!frs.length) return null;
+  const hits = rows.filter((r) => frs.some((f) => pathOf(r.url).includes(f)));
+  return hits.length ? new Set(hits.map((r) => resourcePath(r.url))) : null;
+}
+
+function keepResource(url, keys, providers = null) {
   if (matchesUrl(RES_NEVER, url)) return false;
   if (matchesUrl(RES_ALWAYS, url)) return true;
   const c = RESOURCE_CACHE.get(url);
   if (!c || c.unreadable) return true;            // cannot check, so keep
   for (const k of keys.icons) if (c.icons.has(k)) return true;
-  for (const k of keys.cards) if (cardMatchesBody(k, c)) return true;
+  for (const k of keys.cards) {
+    const prov = providers?.get(k);
+    // A provider is known for this card type, so only the provider counts for it.
+    if (prov) { if (prov.has(resourcePath(url))) return true; continue; }
+    if (cardMatchesBody(k, c)) return true;
+  }
   // Same body test as a card, but kept in its own set so these never reach the "card will not
   // render" report — a config block is not a card, and warning that `kiosk_mode` failed to
   // render would be a warning about something that was never going to.
@@ -1478,6 +1524,32 @@ async function buildResources(rpc, keysByDash) {
   for (const f of unionFrags) {
     FRAG_DF.set(f, readable.filter((r) => RESOURCE_CACHE.get(r.url).frags.has(f)).length);
   }
+  // Path-frequency of every fragment, the denominator the provider test needs.
+  const PATH_FRAG_DF = new Map();
+  for (const f of unionFrags) {
+    PATH_FRAG_DF.set(f, rows.filter((r) => resourcePath(r.url).toLowerCase().includes(f)).length);
+  }
+  // How many distinct card types each fragment belongs to, as a PROPORTION of the types in play.
+  // A flat "more than one type disqualifies it" was tried and is too blunt: `layout` belongs to
+  // grid-layout, vertical-layout, horizontal-layout and layout-card — four names out of some
+  // thirty-five — yet names exactly one file, and disqualifying it left a 1 MB bundle in place on
+  // a wall panel. `card` belongs to nearly every type, which is what makes it meaningless. The
+  // quarter threshold separates the two and scales with the instance instead of the fixture.
+  const SHARED_FRAGS = new Map();
+  for (const t of unionCards) {
+    for (const f of new Set(cardFragments(t))) SHARED_FRAGS.set(f, (SHARED_FRAGS.get(f) || 0) + 1);
+  }
+  const SHARED_MAX = Math.max(1, Math.floor(unionCards.size * 0.25));
+  const PROVIDERS = new Map();
+  for (const t of unionCards) {
+    const p = pathProviders(t, rows, PATH_FRAG_DF, SHARED_FRAGS, SHARED_MAX);
+    if (p) PROVIDERS.set(t, p);
+  }
+  if (PROVIDERS.size) {
+    log(`  resources: ${PROVIDERS.size} of ${unionCards.size} card type(s) have an identifiable `
+      + 'provider file; for those, bundles that only mention the name are not kept');
+  }
+
   FRAG_DF_MAX = Math.max(1, Math.floor(readable.length * 0.25));
   FRAG_RARE_MAX = Math.max(2, Math.floor(readable.length * 0.05));
   const common = [...unionFrags].filter((f) => !isDistinctive(f));
@@ -1523,7 +1595,7 @@ async function buildResources(rpc, keysByDash) {
     let keptB = 0, dropB = 0;
     for (const r of rows) {
       const bytes = RESOURCE_CACHE.get(r.url)?.bytes || 0;
-      if (keepResource(r.url, keys)) { keep.add(resourcePath(r.url)); keptB += bytes; }
+      if (keepResource(r.url, keys, PROVIDERS)) { keep.add(resourcePath(r.url)); keptB += bytes; }
       else dropB += bytes;
     }
     byDash.set(dash, keep);
@@ -1545,6 +1617,13 @@ async function buildResources(rpc, keysByDash) {
       const provs = literalProviders.get(c);
       if (!provs || !provs.size) { unknowable.add(c); continue; }
       checkable.add(c);
+      // A file NAMED for this card, and kept, is enough to suppress the warning — but not enough
+      // to claim the card verified, which is why this sits after the unknowable test rather than
+      // before it. A filename is evidence about intent, not proof of what the bundle defines.
+      // Without this, dropping a bundle that merely name-drops the card would report it as
+      // unrenderable while the file that actually provides it sits in the keep set.
+      const byPath = PROVIDERS.get(c);
+      if (byPath && [...byPath].some((path) => keep.has(path))) continue;
       if (![...provs].some((path) => keep.has(path))) unmet.push(c);
     }
     if (unmet.length) {
