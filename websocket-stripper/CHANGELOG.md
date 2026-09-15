@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026.09.14.22 — 2026-09-14
+
+**A card handed a device now gets that device's sub-devices too.**
+
+Reported against the Bambu print-status card, which rendered nothing on a panel. The card is
+configured with the printer's device id and then goes looking for the AMS units and spool — which
+Home Assistant models as *separate devices*, linked back to the printer by `via_device_id`. The
+card says so itself:
+
+```js
+Object.values(hass.devices).filter((d) => d.via_device_id === printerId)
+```
+
+Nothing in the dashboard config named those devices, so their entities were never in the allowlist
+and their rows were trimmed out of the device registry the card was served. Both halves of what it
+needed were missing, and nothing reported it on either side — the resource was kept, no card was
+reported unmet, and the card simply drew nothing.
+
+**`via_device_id` on its own is not a safe rule.** Home Assistant uses it for "routes through",
+which covers hubs as much as sub-units. Measured on the 1,233-device registry this was found on,
+it makes a Z-Wave controller the parent of **75 devices carrying 2,870 entities**, and a
+Zigbee2MQTT bridge the parent of 62 more. Following it blindly would hand a wall panel an entire
+Z-Wave network — precisely the opposite of what this app is for.
+
+So the rule is `via_device_id` **and** a naming test: the child's name must begin with the
+parent's, followed by a separator. That is the convention integrations use when a device is a PART
+of another — `H2S_0938AC572400463_AMS_1` — and hubs never match it, because their children are
+independent things with their own names. Measured across the same registry: **every hub scored
+zero**, 65 parents qualified at all, and the largest addition to any single device was the
+printer's own 22 entities. An entity cap backstops naming schemes this was not measured against,
+so no device can silently become a network's worth of entities.
+
+Folding happens once, when the registry context is built, so every caller that asks for a device's
+entities gets the same answer — a card configured with a device, and a per-device client rule
+alike. It is resolved against a snapshot, so one fold can never feed another and a badly-named
+level cannot drag a whole subtree upward.
+
+Verified live: `office-tablet` went from 52 to 74 entities, exactly the 20 AMS and 2 spool
+entities, with no other dashboard changed.
+
+---
+
+282 tests. Five written here, each verified by reintroducing the bug it catches — the one-level
+test needed its fixture reordered before it could fail at all, because the fold walks parents in
+first-seen order and only a deepest-first arrangement exposes a cascading implementation.
+
 ## 2026.09.14.21 — 2026-09-14
 
 **A module that renders nothing is now found by the config block it reads.**
