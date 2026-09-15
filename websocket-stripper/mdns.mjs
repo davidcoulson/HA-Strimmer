@@ -49,6 +49,33 @@ const SERVICE_LABELS = {
 
 export const labelFor = (service) => SERVICE_LABELS[service] ?? service.replace(/^_|\._tcp\.local$/g, '');
 
+// Which announcement to believe when a device makes several.
+//
+// A panel commonly advertises itself more than once — as ha-paneld AND as Kiosk Satellite AND as
+// ESPHome — with a different version on each. Measured on a live instance: three of twenty-four
+// discovered addresses did this. Taking whichever record arrived first made the label depend on
+// multicast timing, so the same panel could show as ESPHome one boot and Kiosk Satellite the next.
+//
+// The order is most-specific-first. ha-paneld and Kiosk Satellite are the software actually
+// running the panel; ESPHome is the firmware underneath, true of the device but the least useful
+// answer to "what is this". Anything unrecognised sorts last rather than being discarded — an
+// unknown label beats no label.
+//
+// This decides what is DISPLAYED and nothing else. A rule matching on mdns_kind tests every
+// record for an address, so a panel is matchable as ESPHome whatever it is shown as.
+export const KIND_PRIORITY = ['ha-paneld', 'Kiosk Satellite', 'ESPHome', 'Cast'];
+
+export function preferredRow(rows) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const rank = (r) => {
+    const i = KIND_PRIORITY.indexOf(r?.kind);
+    return i === -1 ? KIND_PRIORITY.length : i;
+  };
+  // Stable: equal ranks keep discovery order, so a device announcing two unknown kinds does not
+  // flip between them.
+  return rows.map((r, i) => [r, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1])[0][0];
+}
+
 // TXT records arrive as an array of Buffers holding `key=value`. Decoded defensively: a device
 // can put anything in there, including bytes that are not valid UTF-8.
 export function parseTxt(txt) {

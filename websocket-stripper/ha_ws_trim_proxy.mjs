@@ -35,7 +35,7 @@ import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
 import { classify, normalizeIp, isPrivate } from './route.mjs';
-import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
+import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
 import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.30';
+const VERSION = '2026.09.15.31';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -334,9 +334,17 @@ function compileOverride(o) {
     // security boundary — the same reason discovery is observational everywhere else here.
     mdnsKind: typeof o.mdns_kind === 'string' && o.mdns_kind
       ? o.mdns_kind.trim().toLowerCase() : null,
-    // The hostname the client actually arrived on, which is how one instance can be reached by
-    // several names — an IoT entry point, a Cloudflare one, a bare address.
-    host: typeof o.host === 'string' && o.host ? o.host.trim().toLowerCase() : null,
+    // WHICH ENTRY POINT the client arrived through — the hostname it connected to, since one
+    // instance is reachable by several names: an IoT one, a Cloudflare one, a bare address.
+    //
+    // Called `entrypoint` rather than `host` because "host" is ambiguous here — this add-on
+    // already uses it for the Home Assistant it proxies TO, for the machine it runs on, and for
+    // the hop in front of it. `host` is still accepted: it was the name for one release.
+    entrypoint: (() => {
+      const v = typeof o.entrypoint === 'string' && o.entrypoint ? o.entrypoint
+        : typeof o.host === 'string' && o.host ? o.host : null;
+      return v ? v.trim().toLowerCase() : null;
+    })(),
     client,
     // A UA is matched the same way an entity pattern is: literal substring or /regex/.
     userAgent: typeof o.user_agent === 'string' && o.user_agent ? parseRules([o.user_agent])[0] : null,
@@ -369,7 +377,7 @@ const CONN_RULES = (() => {
     // reading of a rule someone thought they were scoping, so it is dropped and logged.
     .filter((r) => {
       const scoped = r.dashboard || r.user || r.role || r.authProvider
-        || r.client || r.userAgent || r.mdnsKind || r.host;
+        || r.client || r.userAgent || r.mdnsKind || r.entrypoint;
       if (!scoped) CONFIG_WARNINGS.push('ignoring an override with no matcher — it would apply to every connection; use always_forward/never_forward for that');
       return scoped;
     });
@@ -387,8 +395,8 @@ function matchesConnection(r, ctx) {
     const hit = r.userAgent.re ? r.userAgent.re.test(ctx.ua) : ctx.ua.includes(r.userAgent.literal);
     if (!hit) return false;
   }
-  if (r.host) {
-    if (!ctx.host || String(ctx.host).toLowerCase() !== r.host) return false;
+  if (r.entrypoint) {
+    if (!ctx.host || String(ctx.host).toLowerCase() !== r.entrypoint) return false;
   }
   if (r.mdnsKind) {
     // EVERY record for this address, not the first. A panel here advertises itself twice — as a
@@ -3620,7 +3628,10 @@ function statsExtras() {
     // A label frozen then would stay empty for the life of that connection.
     deviceFor: (ip) => {
       const rows = discovery.lookup(ip);
-      return rows ? { kind: rows[0].kind, name: rows[0].name, version: rows[0].version } : null;
+      // Most-specific announcement wins — see preferredRow. A panel advertising as both
+      // Kiosk Satellite and ESPHome should not be labelled by whichever answer was faster.
+      const best = preferredRow(rows);
+      return best ? { kind: best.kind, name: best.name, version: best.version } : null;
     },
     mdns: MDNS_ENABLED ? discovery.snapshot() : { available: false, error: 'disabled', services: [], devices: [] },
     options: {
@@ -4133,7 +4144,7 @@ log(`overrides: ${CONN_RULES.length} rule(s)`
       + `${CONN_RULES.filter((r) => r.dashboard).length} to a dashboard, `
       + `${CONN_RULES.filter((r) => r.userAgent).length} to a client app, `
       + `${CONN_RULES.filter((r) => r.mdnsKind).length} to a device kind, `
-      + `${CONN_RULES.filter((r) => r.host).length} to a hostname, `
+      + `${CONN_RULES.filter((r) => r.entrypoint).length} to an entry point, `
       + `${CONN_RULES.filter((r) => r.authProvider).length} to a sign-in method` : ''));
 log(`options: by_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together

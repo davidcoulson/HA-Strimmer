@@ -6,7 +6,7 @@
 // address -> device view the rest of the add-on asks for.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ingest, index, parseTxt, labelFor, DEFAULT_SERVICES } from '../mdns.mjs';
+import { ingest, index, parseTxt, labelFor, DEFAULT_SERVICES, preferredRow, KIND_PRIORITY } from '../mdns.mjs';
 
 const SERVICES = DEFAULT_SERVICES;
 const fresh = () => ({ instances: new Map(), hosts: new Map() });
@@ -93,4 +93,60 @@ test('TXT decoding survives whatever a device puts in it', () => {
 test('an unknown service still gets a readable label', () => {
   assert.equal(labelFor('_kiosk-satellite._tcp.local'), 'Kiosk Satellite');
   assert.equal(labelFor('_weird._tcp.local'), 'weird');
+});
+
+// Which announcement to believe when a device makes several.
+//
+// A panel commonly advertises itself more than once — ha-paneld AND Kiosk Satellite AND ESPHome —
+// with a different version on each. Three of twenty-four discovered addresses on a live instance
+// did this. Taking whichever record arrived first made the label depend on multicast timing, so
+// the same panel could show as ESPHome one boot and Kiosk Satellite the next.
+
+test('mDNS priority: prefers the software running the panel over the firmware underneath', () => {
+  const rows = [
+    { kind: 'ESPHome', name: 'Office Panel', version: '2026.8.0' },
+    { kind: 'Kiosk Satellite', name: 'Office Panel', version: '2026.9.53' },
+  ];
+  assert.equal(preferredRow(rows).kind, 'Kiosk Satellite',
+    'ESPHome is true of the device but the least useful answer to "what is this"');
+});
+
+test('mDNS priority: prefers ha-paneld above all of them', () => {
+  const rows = [
+    { kind: 'ESPHome', name: 'P' },
+    { kind: 'Kiosk Satellite', name: 'P' },
+    { kind: 'ha-paneld', name: 'P' },
+  ];
+  assert.equal(preferredRow(rows).kind, 'ha-paneld');
+});
+
+test('mDNS priority: does not depend on the order the answers arrived in', () => {
+  // The whole point: the same set in any order gives the same label.
+  const a = preferredRow([{ kind: 'Kiosk Satellite' }, { kind: 'ESPHome' }]);
+  const b = preferredRow([{ kind: 'ESPHome' }, { kind: 'Kiosk Satellite' }]);
+  assert.equal(a.kind, b.kind, 'multicast timing must not decide the label');
+  assert.equal(a.kind, 'Kiosk Satellite');
+});
+
+test('mDNS priority: keeps an unrecognised kind rather than discarding it', () => {
+  // An unknown label beats no label.
+  assert.equal(preferredRow([{ kind: 'Something New' }]).kind, 'Something New');
+  // ...but ranks below anything known.
+  assert.equal(preferredRow([{ kind: 'Something New' }, { kind: 'ESPHome' }]).kind, 'ESPHome');
+});
+
+test('mDNS priority: is stable for two unknown kinds, so the label does not flip', () => {
+  const rows = [{ kind: 'Alpha' }, { kind: 'Beta' }];
+  assert.equal(preferredRow(rows).kind, 'Alpha');
+  assert.equal(preferredRow(rows).kind, 'Alpha');
+});
+
+test('mDNS priority: answers nothing for nothing', () => {
+  assert.equal(preferredRow([]), null);
+  assert.equal(preferredRow(null), null);
+  assert.equal(preferredRow(undefined), null);
+});
+
+test('mDNS priority: orders ha-paneld, Kiosk Satellite, ESPHome', () => {
+  assert.deepEqual(KIND_PRIORITY.slice(0, 3), ['ha-paneld', 'Kiosk Satellite', 'ESPHome']);
 });

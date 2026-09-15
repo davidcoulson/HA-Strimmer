@@ -37,7 +37,7 @@ const PANEL = {
   '10.2.4.9': [{ kind: 'Google Cast', name: 'Kitchen display' }],
 };
 const rule = (over) => ({ dashboard: null, user: null, role: null, authProvider: null,
-  client: null, userAgent: null, mdnsKind: null, host: null, ...over });
+  client: null, userAgent: null, mdnsKind: null, entrypoint: null, ...over });
 
 describe('matching a device kind over mDNS', () => {
   const matches = load(PANEL);
@@ -66,23 +66,41 @@ describe('matching a device kind over mDNS', () => {
   });
 });
 
-describe('matching the hostname a client arrived on', () => {
+describe('matching the entry point a client arrived through', () => {
   const matches = load(PANEL);
 
   it('matches the entry point actually used', () => {
-    assert.equal(matches(rule({ host: 'home-iot.coulson.io' }),
+    assert.equal(matches(rule({ entrypoint: 'home-iot.coulson.io' }),
       { ip: '10.2.4.145', host: 'home-iot.coulson.io' }), true);
-    assert.equal(matches(rule({ host: 'home-iot.coulson.io' }),
+    assert.equal(matches(rule({ entrypoint: 'home-iot.coulson.io' }),
       { ip: '10.2.4.145', host: '10-2-3-6.coulson.io' }), false,
       'a different entry point on the same instance must not match');
   });
 
   it('does not match when the hostname is unknown', () => {
-    assert.equal(matches(rule({ host: 'home-iot.coulson.io' }), { ip: '10.2.4.145' }), false);
+    assert.equal(matches(rule({ entrypoint: 'home-iot.coulson.io' }), { ip: '10.2.4.145' }), false);
   });
 
   it('is case-insensitive, as hostnames are', () => {
-    assert.equal(matches(rule({ host: 'home-iot.coulson.io' }),
+    assert.equal(matches(rule({ entrypoint: 'home-iot.coulson.io' }),
       { ip: '10.2.4.145', host: 'HOME-IOT.Coulson.IO' }), true);
+  });
+});
+
+// `host` was the name `entrypoint` had for one release (2026.09.15.30).
+//
+// It is accepted for the same reason every other renamed key here is: a config written against a
+// published release must not quietly stop working. "host" was replaced because it is ambiguous in
+// this codebase — it already means the Home Assistant being proxied TO, the machine this runs on,
+// and the hop in front of it.
+describe('the entry point matcher under its old name', () => {
+  it('still accepts a rule written as host', () => {
+    const src2 = fs.readFileSync(path.join(DIR, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
+    const compiled = src2.match(/entrypoint: \(\(\) => \{[\s\S]*?\}\)\(\),/)?.[0];
+    assert.ok(compiled, 'entrypoint must be compiled from the rule');
+    assert.match(compiled, /o\.entrypoint/, 'the new name is read');
+    assert.match(compiled, /o\.host/, 'and the old one still is');
+    assert.ok(compiled.indexOf('o.entrypoint') < compiled.indexOf('o.host'),
+      'the new name wins when a config carries both');
   });
 });

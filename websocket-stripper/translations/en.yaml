@@ -111,7 +111,8 @@ configuration:
       One list for every override rule. Each rule may match on a dashboard, a Home Assistant
       user, a ROLE (admin or user), how they SIGNED IN (homeassistant or trusted_networks),
       the DEVICE KIND a panel announces over mDNS (Kiosk Satellite, ESPHome, ha-paneld), the
-      HOSTNAME the client arrived on, a device (IP, CIDR or hostname) and a client app (part
+      ENTRY POINT the client arrived through (the hostname it connected to, since one instance
+      is reachable by several names), a device (IP, CIDR or hostname) and a client app (part
       of its User-Agent); the
       matchers you set must ALL hold, so "David, on lovelace, from the office panel" is one
       rule — and `role: admin` attaches entities to whoever is an administrator rather than to a

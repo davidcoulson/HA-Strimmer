@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026.09.15.31 — 2026-09-15
+
+**A device that announces itself several times gets a stable label.**
+
+A panel commonly advertises more than once — as ha-paneld AND Kiosk Satellite AND ESPHome, each
+with its own version. Three of twenty-four discovered addresses here do it. The label was whichever
+record arrived first, so the same panel could show as ESPHome one boot and Kiosk Satellite the
+next, purely on multicast timing.
+
+The order is now **ha-paneld, then Kiosk Satellite, then ESPHome**, most-specific first: the first
+two are the software actually running the panel, ESPHome is the firmware underneath — true of the
+device, and the least useful answer to "what is this". An unrecognised kind sorts last rather than
+being discarded, because an unknown label beats no label.
+
+**This decides what is displayed and nothing else.** A rule matching `mdns_kind` still tests every
+record for an address, so a panel remains matchable as ESPHome whatever it is shown as.
+
+**`host` is now `entrypoint`.** "Host" is ambiguous in this codebase — it already means the Home
+Assistant being proxied to, the machine this runs on, and the hop in front of it. `entrypoint` says
+which door the client came through, matching the word the Clients tab already uses. `host` is still
+accepted, and the new name wins when a config carries both.
+
+---
+
 ## 2026.09.15.30 — 2026-09-15
 
 **Three more things an override rule can match on**, all from data this app already had and none

@@ -1214,7 +1214,8 @@ const OVERRIDE_KINDS = {
     label: 'rule',
     match: (r) => [['dashboard', r.dashboard], ['user', r.user], ['role', r.role],
       ['signed in via', r.auth_provider], ['device kind', r.mdns_kind],
-      ['hostname', r.host], ['device', r.client], ['client app', r.user_agent]],
+      ['entry point', r.entrypoint || r.host], ['device', r.client],
+      ['client app', r.user_agent]],
   },
   dashboard_overrides: {
     label: 'dashboard',
@@ -1390,7 +1391,7 @@ const MATCHERS = [
   { id: 'auth_provider', label: 'Signed in via', hint: 'how the user logged in',
     choices: ['homeassistant', 'trusted_networks'] },
   { id: 'mdns_kind', label: 'Device kind (mDNS)', hint: 'Kiosk Satellite, ESPHome, ha-paneld' },
-  { id: 'host', label: 'Hostname used', hint: 'the name this client connected to' },
+  { id: 'entrypoint', label: 'Entry point', hint: 'the hostname this client connected to' },
   { id: 'client', label: 'Device', hint: 'IP, CIDR (10.2.4.0/24) or hostname' },
   { id: 'user_agent', label: 'Client app', hint: 'part of the User-Agent, e.g. io.robbie.HomeAssistant' },
 ];
@@ -1417,7 +1418,7 @@ function buildRule(key, values, effects) {
   const list = (v) => (Array.isArray(v) ? v : String(v || '').split(','))
     .map((x) => String(x).trim()).filter(Boolean);
   const rule = {};
-  for (const id of ['dashboard', 'user', 'role', 'auth_provider', 'mdns_kind', 'host',
+  for (const id of ['dashboard', 'user', 'role', 'auth_provider', 'mdns_kind', 'entrypoint',
     'client', 'user_agent']) {
     if (values[id]) rule[id] = values[id];
   }
