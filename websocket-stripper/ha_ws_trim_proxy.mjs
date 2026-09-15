@@ -38,19 +38,28 @@ import { classify, normalizeIp } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
+import { readStore, effectiveOptions, ownership, BOOTSTRAP_KEYS } from './config_store.mjs';
 
-// ---- config (add-on options.json or env) ----
+// ---- config (add-on options.json, overlaid by anything the panel owns) ----
 function loadOptions() {
   try { if (fs.existsSync('/data/options.json')) return JSON.parse(fs.readFileSync('/data/options.json', 'utf8')); }
   catch (e) { console.error('could not read /data/options.json:', e.message); }
   return {};
 }
-const OPT = loadOptions();
+const YAML_OPT = loadOptions();
+// Warnings are collected rather than logged here: log levels are derived from the options this
+// very call is producing, so nothing can be written through log()/warn() yet.
+const CONFIG_WARNINGS = [];
+const CONFIG_DIR = fs.existsSync('/data') ? '/data' : (process.env.CONFIG_DIR || null);
+const CONFIG_STORE = CONFIG_DIR
+  ? readStore(CONFIG_DIR, (m) => CONFIG_WARNINGS.push(m))
+  : { version: 1, managed: {}, history: [] };
+const OPT = effectiveOptions(YAML_OPT, CONFIG_STORE);
 const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.1';
+const VERSION = '2026.09.15.3';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3252,6 +3261,18 @@ log(`history: sampling every ${history.INTERVAL_MS / 60000}min, keeping ${histor
 
 // ---- boot ----
 warn(`ha-ws-trim-proxy v${VERSION} starting`);
+// Anything the store had to say, now that logging exists.
+for (const m of CONFIG_WARNINGS) warn(`  config: ${m}`);
+// Which source answers for what. Without this, an option edited in the Configuration tab that
+// the panel has taken over appears to do nothing, with no way to find out why.
+{
+  const own = ownership(YAML_OPT, CONFIG_STORE);
+  if (own.managed.length) {
+    log(`config: ${own.managed.length} option(s) managed in the panel (${own.managed.join(', ')});`
+      + ' the rest come from add-on options. Editing a managed option in the Configuration tab'
+      + ' has no effect until it is released back.');
+  }
+}
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
 log(`options: per_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together
