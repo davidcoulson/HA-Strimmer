@@ -32,8 +32,20 @@ This path is served **by the proxy itself and never forwarded**. So:
 | --- | --- |
 | `200` | The Stripper is running **and is in the path** for this panel. Both halves of the question, answered by arriving. |
 | `401` | The Stripper IS in the path, but your token is missing or Home Assistant did not accept it. Still a positive detection — treat it as "present, not authorised". |
+| `403` | The Stripper IS in the path, but it does not answer callers from where you are. Also a positive detection. The `error` field says why — typically the request arrived from the internet or through Cloudflare, and the instance is set to answer local callers only. |
 | `404` | You are talking to Home Assistant directly. HA has no such route. |
 | connection error | Neither is reachable — a network problem, not a Stripper problem. Say so differently. |
+
+## Who may ask
+
+Separately from the token, the instance decides which callers it answers at all — `lan` (default),
+`any`, or `off`. A refusal here is a `403` and happens **before** the token is checked, so a remote
+caller cannot make the add-on validate a token on its behalf.
+
+Practically: a panel on the same network is unaffected. A panel reaching Home Assistant from
+outside, or through Cloudflare, will get `403` unless the operator sets `client_api_access: any` or
+lists its address in `client_api_allow`. If you ship an admin screen, say "this Home Assistant does
+not answer status requests from here" rather than treating it as an outage.
 
 ## Authentication
 
@@ -207,6 +219,8 @@ async function stripperStatus(haBaseUrl, haAccessToken) {
     if (res.status === 404) return { state: 'not-in-path' };
     // The trimmer IS in front of you; the token is the problem.
     if (res.status === 401) return { state: 'unauthorised' };
+    // Present, but not answering callers from here. Read `error` for the reason.
+    if (res.status === 403) return { state: 'blocked', reason: (await res.json()).error };
     if (!res.ok) return { state: 'error', status: res.status };
     return { state: 'ok', data: await res.json() };
   } catch {

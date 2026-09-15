@@ -180,6 +180,11 @@
     <li><span class="no">401</span> — the Stripper <em>is</em> in the path, but your token is
       missing or Home Assistant did not accept it. Still a positive detection: "present, not
       authorised".</li>
+    <li><span class="no">403</span> — the Stripper <em>is</em> in the path, but it does not answer
+      callers from where you are: the request came from the internet or through Cloudflare and the
+      instance answers local callers only. The <code>error</code> field says which. Also a positive
+      detection — say "this Home Assistant does not answer status requests from here", not
+      "offline".</li>
     <li><span class="no">404</span> — you are talking to Home Assistant directly. HA has no such
       route.</li>
     <li><strong>Connection error</strong> — neither is reachable; a network problem, not a
@@ -408,6 +413,7 @@
     });
     if (res.status === 404) return { state: 'not-in-path' };
     if (res.status === 401) return { state: 'unauthorised' };
+    if (res.status === 403) return { state: 'blocked' };
     if (!res.ok) return { state: 'error', status: res.status };
     return { state: 'ok', data: await res.json() };
   } catch {
