@@ -986,7 +986,10 @@ async function tick() {
   // Almost every boolean here is a trim_*, so the prefix is the same on nearly every pill and
   // carries no information — it just made the row twice as wide. The state word went the same
   // way: green vs muted already says it, and the full name and state stay on hover.
-  const short = (k) => k.replace(/^trim_/, '').replace(/_/g, ' ');
+  // `compress_websocket` is the only thing here that compresses, so the second word earns
+  // nothing on a line this tight.
+  const SHORT = { compress_websocket: 'compress' };
+  const short = (k) => SHORT[k] || k.replace(/^trim_/, '').replace(/_/g, ' ');
   const bools = Object.entries(opts).filter(([, v]) => typeof v === 'boolean');
   const pillFor = (k, v) => {
     const pill = document.createElement('span');
