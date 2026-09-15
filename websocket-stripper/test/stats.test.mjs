@@ -730,7 +730,7 @@ describe('naming a route after its hop', () => {
   });
 
   // On a direct connection the hop IS the client, so a resolvable name there belongs to a wall
-  // panel, not to a front door. Naming the route after it would put "laundry-tablet" in the Route
+  // panel, not to a entry point. Naming the route after it would put "laundry-tablet" in the Route
   // column — which is why only `proxy` is named at all.
   it('never names a direct route, where the hop is the client itself', () => {
     stats.reset();

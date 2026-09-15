@@ -56,7 +56,7 @@
   #sankey .col { fill: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
   #paths-detail { margin-top: 12px; }
   #paths-detail summary { color: var(--muted); font-size: 12px; cursor: pointer; }
-  /* Route colours. The route is the question the diagram exists to answer — "which front door
+  /* Route colours. The route is the question the diagram exists to answer — "which entry point
      did this come through" — so it is what carries the colour; origin and hostname nodes stay
      neutral rather than competing with it. Hues are separated enough to stay distinct for the
      common forms of colour blindness, and each has a dark-theme variant because the light-theme
@@ -200,7 +200,7 @@
     <input id="cl-filter" class="filter" type="search" autocomplete="off"
       placeholder="Filter — type any part of a row (10.2.4, office, cloudflare…)">
     <div class="scroll"><table id="cl"><thead>
-      <tr><th>Client</th><th>Device</th><th>From</th><th>Front door</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
+      <tr><th>Client</th><th>Device</th><th>From</th><th>Entry point</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
     </thead><tbody></tbody></table></div>
     <div id="cl-msg" class="note" style="display:none"></div>
     <div class="note"><b>Payload</b> is the first entity block this connection received, with the
@@ -275,7 +275,7 @@
       <code>internet</code>. <b>Route</b> is how the request arrived —
       <code>direct</code> to the port, through a reverse <code>proxy</code>, through
       <code>cloudflare</code>, or over Supervisor <code>ingress</code>. <b>Hostname</b> is the
-      name the client dialled, which is usually the clearest statement of which front door it
+      name the client dialled, which is usually the clearest statement of which entry point it
       used. This is reporting only: every signal except the peer address is a request header,
       so none of it is trustworthy enough to make access decisions with.
       <span id="paths-span"></span></div>
@@ -330,7 +330,7 @@ const CL_COLS = [
       + (c.device.kind && c.device.name ? ` (${c.device.kind})` : '') : '—') },
   { th: 'From', get: (c) => (c.origin && c.route ? c.origin + ' · ' + prettyRoute(c.route)
       : c.origin || (c.route && prettyRoute(c.route)) || '—') },
-  { th: 'Front door', get: (c) => c.host || '—' },
+  { th: 'Entry point', get: (c) => c.host || '—' },
   { th: 'User', get: (c) => c.user || '—' },
   { th: 'Dashboard', get: (c) => c.dashboard || '(union — not attributed)' },
   { th: 'Matched by', get: (c) => c.attributedVia || '—' },
@@ -432,7 +432,7 @@ $('cl').querySelector('thead').addEventListener('keydown', (e) => {
 // ---- "How clients reach this" -------------------------------------------------------------
 //
 // A Sankey rather than a table because the question is about PAIRINGS: "the internet traffic —
-// which front door does it use?" The old table stacked three independent distributions in one
+// which entry point does it use?" The old table stacked three independent distributions in one
 // column, each summing to the same total separately, which is why it read as three unrelated
 // lists bolted together. Bands carry the pairing; the table underneath is kept for exact numbers
 // and is now one row per real path rather than three sets of marginals.
@@ -536,7 +536,7 @@ function drawSankey(host, flows) {
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H,
     role: 'img', 'aria-label': 'Connection paths from origin through route to hostname' });
 
-  ['Origin', 'Route', 'Hostname'].forEach((label, i) => {
+  ['Origin', 'Route', 'Entry point'].forEach((label, i) => {
     const t = svgEl('text', { x: i === 2 ? W - PAD : colX[i], y: 11, class: 'col' });
     if (i === 2) t.setAttribute('text-anchor', 'end');
     t.textContent = label;
@@ -604,7 +604,7 @@ function drawSankey(host, flows) {
   host.appendChild(svg);
 
   // Legend. Built from the routes actually present rather than from the palette, so it never
-  // advertises a front door this instance does not have.
+  // advertises a entry point this instance does not have.
   const counts = new Map();
   for (const f of flows) counts.set(f.route || 'unknown', (counts.get(f.route || 'unknown') || 0) + f.n);
   const legend = document.createElement('div');

@@ -70,7 +70,7 @@ let connTotal = 0;
 // only ever holds what is connected right this second — a wall panel that reconnects hourly
 // and a laptop that visited once look identical there.
 // The JOINT distribution: one counter per (origin, route, host) combination actually seen,
-// rather than three independent tallies. Three marginals cannot answer "which front door did the
+// rather than three independent tallies. Three marginals cannot answer "which entry point did the
 // internet traffic come through" — each sums to the same total separately, and the pairing that
 // carries the answer is exactly what separate counting discards. They also cannot be drawn as a
 // flow diagram at all, because a Sankey's links ARE the pairings. The marginals below are derived

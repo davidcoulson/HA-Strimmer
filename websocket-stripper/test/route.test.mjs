@@ -1,4 +1,4 @@
-// Classifying where a connection came from and which front door it used.
+// Classifying where a connection came from and which entry point it used.
 //
 // The risk in this module is not that a label comes out wrong — it is that a label comes out
 // wrong and nobody notices, because it is reporting-only data nothing else depends on. So the
@@ -54,7 +54,7 @@ describe('classify: real topologies', () => {
     assert.equal(r.ip, '10.2.3.42');
     assert.equal(r.origin, 'lan');
     assert.equal(r.route, 'direct');
-    assert.equal(r.host, '10-2-3-6.coulson.io', 'the port is not part of the front door');
+    assert.equal(r.host, '10-2-3-6.coulson.io', 'the port is not part of the entry point');
     assert.equal(r.hop, '10.2.3.42', 'nothing in front, so the peer IS the client');
   });
 

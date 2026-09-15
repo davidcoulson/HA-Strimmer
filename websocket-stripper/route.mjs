@@ -1,4 +1,4 @@
-// Where did this connection come from, and through which front door?
+// Where did this connection come from, and through which entry point?
 //
 // Every trimmed websocket arrives with three independent facts about its path, all of them
 // already on the upgrade request and none of them currently recorded:
@@ -7,7 +7,7 @@
 //           A reverse proxy, a tunnel daemon, or the client itself when nothing is in front.
 //   chain   X-Forwarded-For — every hop that admitted to being one, oldest first.
 //   host    The Host header — WHICH hostname the client dialled, which in a multi-hostname
-//           setup is the most direct statement of which front door was used.
+//           setup is the most direct statement of which entry point was used.
 //
 // From those we derive two labels:
 //

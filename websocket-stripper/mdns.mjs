@@ -1,6 +1,6 @@
 // mdns.mjs — what KIND of thing is this client?
 //
-// The add-on already classifies how a connection arrived (LAN vs internet, which front door —
+// The add-on already classifies how a connection arrived (LAN vs internet, which entry point —
 // see route.mjs). This answers the other half: what the device at that address actually is.
 // Multicast DNS is how most of them already say so, unprompted:
 //
