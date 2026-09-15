@@ -20,7 +20,7 @@ and sends each dashboard **only what it actually shows**. Same HA, same dashboar
 | | |
 |---|---|
 | 📦 **Install it** | **[Installation guide →](docs/INSTALL.md)** — about five minutes on HA OS, or a plain Docker container |
-| ⚙️ **Configure it** | **[Every option, described →](websocket-stripper/DOCS.md)** — the same text appears in the app's Documentation tab |
+| ⚙️ **Configure it** | **Point and click in the app's own sidebar panel** — checkboxes, not YAML — or **[every option, described →](websocket-stripper/DOCS.md)** |
 | 📈 **Check the numbers** | **[Full method and raw runs →](docs/PERFORMANCE.md)** |
 | 🔀 **Upgrading an existing config** | **[Migration guide →](docs/MIGRATING.md)** — nothing is required; every old option name and override list still works |
 | 🔌 **Build a client against it** | **[Client status API →](docs/CLIENT-API.md)** — how a panel reads trimmer status and its own stats, for ha-paneld, Kiosk Satellite and friends |
@@ -54,6 +54,14 @@ way back there in time.
 - 📊 **A statistics page in your sidebar** showing what is being trimmed and what every panel is
   receiving right now — with a search box to find an entity a card is missing and send it
   **without restarting anything**.
+- 🎛️ **Settings you can click, in that same panel.** Every trim is a checkbox, every list is a
+  list you add to and remove from, grouped into sections — no YAML unless you want it. It takes
+  over an option only when you actually change one there, so anything you already set keeps
+  working exactly as it did.
+- 🧩 **Override rules you build with a wizard**, not by hand. Match on a dashboard, a person, a
+  **role** ("administrators see software updates, whoever they are"), how someone signed in, the
+  kind of device a panel announces itself as, or which address it arrived on — and combine them.
+  Entity and device fields search as you type.
 - 🖨️ **Cards set up with a device just work** — including devices made of other devices, like a
   3D printer with its filament units, or a hub with its sensors.
 - 📈 **Months of history, not minutes.** Around fifteen measurements are published as ordinary
@@ -62,7 +70,7 @@ way back there in time.
   than an IP address.
 - 🧯 **It tells you when it has gone too far.** If trimming would stop a card rendering, that is
   written to the log by name, rather than leaving you with a blank square and no explanation.
-- ✅ **Nothing ships untested.** Every change runs 282 automated tests, on the exact runtime the
+- ✅ **Nothing ships untested.** Every change runs 398 automated tests, on the exact runtime the
   add-on ships with.
 
 ---
@@ -145,6 +153,9 @@ the network, and parsed by a cheap wall tablet, so that it could be ignored.
   used to leave the card rendering blank with no error anywhere
 - 📊 **A stats panel in your sidebar** that shows what it is actually doing — per-client
   payload sizes, what each dashboard costs, and where every byte went
+- 🎛️ **And a settings tab in the same panel.** Checkboxes for what to trim, searchable pickers
+  for entities and devices, and a wizard for the override rules. YAML still works and still
+  wins where you have used it
 - 🐳 **Runs on plain Docker too**, if you have no Supervisor
 - 🧱 **Running on a current, supported stack — and kept there.** Node 26 on Alpine, with
   [httpxy](https://github.com/unjs/httpxy) (the maintained unjs fork of node-http-proxy, and

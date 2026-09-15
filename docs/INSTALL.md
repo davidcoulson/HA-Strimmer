@@ -385,7 +385,7 @@ Needs **Node 22 or newer** (the image ships 26; CI covers 22, 24 and 26).
 ```bash
 cd websocket-stripper
 npm ci                     # `ci`, not `install` — installs exactly the committed lockfile
-npm test                   # 229 tests, no network and no Home Assistant required
+npm test                   # 398 tests, no network and no Home Assistant required
 HA_TOKEN="<long-lived-token>" \
   HA_BASE="http://homeassistant.mgmt:8123" \
   DASH_PATHS="kitchen-panel,hallway-kiosk" \
