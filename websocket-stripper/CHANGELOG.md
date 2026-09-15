@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026.09.15.25 — 2026-09-15
+
+**Security: the management port was serving credentials and a full inventory of the house to
+anything on the network.**
+
+Writes were gated from the start. Reads were not, on the reasoning that statistics are harmless.
+They are not. The management server binds every interface, so all of this was readable without
+authentication by anything on the LAN — including the IoT VLAN the panels sit on:
+
+* **`/access.json` — the request log.** Home Assistant puts credentials in request PATHS as well
+  as in query strings. Measured on a live instance: **2 webhook ids, 37 HLS stream tokens and 4
+  signed camera-proxy paths** sitting in the ring. A webhook id is a bearer credential — anyone
+  holding one can POST to it with no authentication and fire whatever automation it drives. Query
+  strings were already stripped, which is why the JWT in `?authSig=` never reached the log. Paths
+  were not, and that was the half that mattered.
+* **`/entities.json` and `/devices.json`** — every entity and device on the instance, by name.
+* **`/config.json`** — the override rules, which name Home Assistant users.
+* **`/stats.json`** — every connected client: address, resolved Home Assistant user, User-Agent,
+  internal hostname, mDNS device name, and the routing breakdown keyed by hostname.
+
+All of the above now require Ingress, except `stats.json`.
+
+**`stats.json` stays public, and is redacted instead.** A `rest:` sensor polls it for a health
+signal, and that fetch comes from Home Assistant core rather than through Ingress — gating it
+wholesale would have silently taken that sensor down, which this add-on already did once by moving
+its port. So the aggregates stay and the identities go: counts instead of the client list, no
+discovered devices, no resolved hostnames, no routing breakdown. Dashboard names and installed-card
+paths are deliberately KEPT — they are configuration, not identity, and anyone who can load a
+dashboard already sees both.
+
+**`/stripper/client.json` now requires the caller's own Home Assistant token**, validated against
+Home Assistant and cached on the same ten-minute schedule as the per-user lookup. There is no new
+secret to provision. It started unauthenticated on the reasoning that it says little; that does not
+survive the company it keeps, and there is no good reason for a device that cannot log into Home
+Assistant to learn which dashboard a panel is on or how much traffic it moves. A `401` is still a
+positive detection — the trimmer is in the path, the token is the problem. The endpoint answers the
+CORS preflight the `Authorization` header forces, so a panel admin page on its own origin still
+works.
+
+The Config tab now explains the refusal instead of rendering blank when opened on the app's own
+port.
+
+**Not affected:** tokens are never logged or written anywhere, the panel is served from memory
+rather than from a path (no traversal), and query strings were already stripped from the log.
+
+---
+
 ## 2026.09.15.24 — 2026-09-15
 
 **The user cache survives a restart.**

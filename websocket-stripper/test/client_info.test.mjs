@@ -16,8 +16,11 @@ import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
 
-const get = (port, p) => new Promise((resolve, reject) => {
-  http.get({ host: '127.0.0.1', port, path: p }, (res) => {
+// The endpoint authenticates with the caller's own Home Assistant token now — a panel already
+// has one, and this port is reachable by anything on the network.
+const get = (port, p, token = 'david-token') => new Promise((resolve, reject) => {
+  http.get({ host: '127.0.0.1', port, path: p,
+    headers: token ? { authorization: `Bearer ${token}` } : {} }, (res) => {
     let b = ''; res.on('data', (c) => b += c);
     res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }));
   }).on('error', reject);

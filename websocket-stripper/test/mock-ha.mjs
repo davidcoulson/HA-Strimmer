@@ -167,6 +167,14 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     ws.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
       if (m.type === 'auth') {
+        // One token is always rejected, so a test can exercise the path where Home Assistant
+        // says no. Without it this mock accepts anything, and a test asserting that a bad token
+        // is refused passes for the wrong reason — the mock handed back a user, so the code under
+        // test never had a refusal to make.
+        if (m.access_token === 'invalid-token') {
+          ws.send(JSON.stringify({ type: 'auth_invalid', message: 'Invalid access token' }));
+          return;
+        }
         // Remember which token authenticated, so auth/current_user can answer per-token the
         // way HA does — that is the whole mechanism the per-user rules rely on.
         conn.token = m.access_token;

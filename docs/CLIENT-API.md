@@ -3,7 +3,7 @@
 How a panel asks the WebSocket Stripper what it is doing, and what that is worth on this
 connection.
 
-> Available from **2026.09.15.21**. Unauthenticated, LAN-readable, additive schema.
+> Available from **2026.09.15.21**. **Requires a Home Assistant access token from 2026.09.15.25.** Additive schema.
 >
 > A standalone, styled version of this page is at [`client-api.html`](client-api.html) — open it
 > in a browser if you would rather read it that way, or send it to someone who is not working in
@@ -31,8 +31,29 @@ This path is served **by the proxy itself and never forwarded**. So:
 | Result | Meaning |
 | --- | --- |
 | `200` | The Stripper is running **and is in the path** for this panel. Both halves of the question, answered by arriving. |
+| `401` | The Stripper IS in the path, but your token is missing or Home Assistant did not accept it. Still a positive detection — treat it as "present, not authorised". |
 | `404` | You are talking to Home Assistant directly. HA has no such route. |
 | connection error | Neither is reachable — a network problem, not a Stripper problem. Say so differently. |
+
+## Authentication
+
+Send the panel's own Home Assistant access token:
+
+```
+Authorization: Bearer <the panel's HA access token>
+```
+
+There is no separate secret to provision. The token is validated against Home Assistant and the
+result is cached for ten minutes, so an admin screen refreshing does not cost a round trip each
+time.
+
+This port is reachable by anything on the network and has no other authentication in front of it.
+Even though the reply is small — booleans and the caller's own figures — there is no good reason
+for a device that cannot log into Home Assistant to learn which dashboard a panel is on, how many
+entities it is served, or how much traffic it moves.
+
+A browser calling this cross-origin will **preflight** because of the `Authorization` header; the
+endpoint answers `OPTIONS` with `Access-Control-Allow-Headers: authorization`.
 
 **Why not a header on the dashboard load?** It was considered and rejected. Adding bytes to the
 response every panel fetches on every boot, to carry a snapshot taken *before the websocket even
@@ -176,13 +197,16 @@ Fetch on demand, when the admin screen opens. It is cheap but not free — it ta
 per call.
 
 ```js
-async function stripperStatus(haBaseUrl) {
+async function stripperStatus(haBaseUrl, haAccessToken) {
   try {
     const res = await fetch(new URL('/stripper/client.json', haBaseUrl), {
       cache: 'no-store',
+      headers: { Authorization: `Bearer ${haAccessToken}` },
       signal: AbortSignal.timeout(2000),
     });
     if (res.status === 404) return { state: 'not-in-path' };
+    // The trimmer IS in front of you; the token is the problem.
+    if (res.status === 401) return { state: 'unauthorised' };
     if (!res.ok) return { state: 'error', status: res.status };
     return { state: 'ok', data: await res.json() };
   } catch {

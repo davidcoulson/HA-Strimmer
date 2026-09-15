@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.24';
+const VERSION = '2026.09.15.25';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2427,14 +2427,67 @@ const server = http.createServer((req, res) => {
   // reaching it meaningful. CORS is open because a panel's admin page may be served from its own
   // origin rather than Home Assistant's, and the reply is already limited to what this network
   // may read.
-  if (req.method === 'GET' && (req.url === CLIENT_INFO_PATH || req.url.startsWith(CLIENT_INFO_PATH + '?'))) {
-    const body = JSON.stringify(clientReport(clientIp(req)), null, 2);
-    res.writeHead(200, {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
+  // The preflight. An Authorization header makes this a non-simple cross-origin request, so a
+  // panel admin page served from its own origin asks permission first — and never sends the real
+  // request if nobody answers. Adding the header without this would have quietly broken exactly
+  // the callers the endpoint exists for.
+  if (req.method === 'OPTIONS' && req.url.split('?')[0] === CLIENT_INFO_PATH) {
+    res.writeHead(204, {
       'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'access-control-allow-headers': 'authorization, content-type',
+      'access-control-max-age': '86400',
     });
-    return res.end(body);
+    return res.end();
+  }
+  if (req.method === 'GET' && (req.url === CLIENT_INFO_PATH || req.url.startsWith(CLIENT_INFO_PATH + '?'))) {
+    // Authenticated with the caller's OWN Home Assistant token, validated against Home Assistant.
+    //
+    // This started unauthenticated on the reasoning that it says little: booleans and the
+    // caller's own figures. That reasoning does not survive the company it keeps — the same
+    // network can reach it, and "little" is still the dashboard a panel is on, how many entities
+    // it is served and how much it moves. There is no good reason for a device that cannot log
+    // into Home Assistant to learn any of it.
+    //
+    // A token rather than a shared secret, because a panel already has one and a second secret to
+    // distribute and rotate is a worse answer than the one the platform already provides. The
+    // result is cached exactly like the per-user lookup — same map, same ten-minute TTL — so an
+    // admin screen polling this does not open a websocket to Home Assistant every time.
+    const auth = String(req.headers.authorization || '');
+    const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
+    if (!token) {
+      res.writeHead(401, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'www-authenticate': 'Bearer',
+        'access-control-allow-origin': '*',
+      });
+      return res.end(JSON.stringify({
+        error: 'send your Home Assistant access token as Authorization: Bearer <token>',
+      }));
+    }
+    resolveUser(token).then((user) => {
+      if (!user) {
+        // Same answer for an absent token and a rejected one: this must not become an oracle for
+        // testing whether a token is valid any faster than asking Home Assistant directly.
+        res.writeHead(401, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+          'access-control-allow-origin': '*',
+        });
+        return res.end(JSON.stringify({ error: 'Home Assistant did not accept that token' }));
+      }
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'access-control-allow-origin': '*',
+      });
+      res.end(JSON.stringify(clientReport(clientIp(req)), null, 2));
+    }).catch(() => {
+      res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ error: 'could not check that token with Home Assistant' }));
+    });
+    return;
   }
   const dash = TRIM_EXTRA_MODULES && req.method === 'GET' ? dashFromUrl(req.url) : null;
   if (dash && /text\/html/i.test(String(req.headers.accept || ''))) {
@@ -3341,6 +3394,64 @@ function statsExtras() {
 // Ingress requests are proxied by Supervisor, which authenticates the Home Assistant user first
 // and stamps `X-Ingress-Path`. Requiring both that header and the Supervisor source address means
 // a write can only originate from someone Home Assistant already logged in.
+// Refuse a read that did not come through Ingress, and say why.
+//
+// The management server binds every interface, so these are reachable by anything on the network
+// — including the IoT VLAN the panels live on. Writes were gated from the start; reads were not,
+// on the reasoning that statistics are harmless. They are not:
+//
+//   * /access.json is a request log, and Home Assistant puts credentials in PATHS as well as in
+//     query strings. Measured on a live instance: 2 webhook ids, 37 HLS stream tokens and 4
+//     signed camera-proxy paths sitting in the ring. A webhook id is a bearer credential — anyone
+//     who knows one can POST to it with no authentication and fire whatever it drives.
+//   * /entities.json and /devices.json are a complete inventory of the house, by name.
+//   * /config.json carries the override rules, which name Home Assistant users.
+//   * /stats.json names every connected client: address, resolved user, User-Agent, internal
+//     hostname and mDNS device name.
+//
+// Query strings were already stripped from the log, which is why the JWT in ?authSig= never
+// reached it. Paths were not, and that is the half that mattered.
+// Everything in a snapshot that names a person, a machine or a network, removed.
+//
+// Counts and byte totals are kept, because that is what a health check and a dashboard card are
+// actually for. The per-client list becomes a number: "6 connected" is the useful part, and
+// "10.2.4.129, Kiosk Satellite, Office Test Panel, home-iot.coulson.io" is the part that has no
+// business being readable by the network the panels sit on.
+function redactForNetwork(snap) {
+  const out = { ...snap, redacted: true };
+  out.clients = {
+    open: snap.clients?.open ?? 0,
+    total: snap.clients?.total ?? 0,
+    list: [],
+    recent: [],
+  };
+  // Discovered devices are names and addresses of things on the network, by definition.
+  if (out.mdns) out.mdns = { available: snap.mdns.available, services: [], devices: [] };
+  // Hop names resolve to internal hostnames.
+  if (out.routeNames) delete out.routeNames;
+  // The routing breakdown behind the Sankey: every flow carries the hostname a client reached the
+  // proxy on, and byHost is keyed BY those names. Found by grepping the live payload for known
+  // internal names rather than by reasoning about the field list — which is the only way this
+  // kind of miss gets caught, and why the test does the same.
+  if (out.paths) delete out.paths;
+  // Dashboard names and installed-card paths are deliberately KEPT. They are configuration, not
+  // identity: no person, machine or credential is named by them, and anyone who can load a
+  // dashboard already sees both. Stripping them bought nothing and cost the health sensor the
+  // detail it reports.
+  return out;
+}
+
+function requireIngress(req, res, what) {
+  if (viaIngress(req)) return false;
+  logThrottled('read-denied', `refused ${what} from ${clientIp(req) ?? '?'} — open it from the Home Assistant sidebar`);
+  res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+  res.end(JSON.stringify({
+    error: 'this endpoint is only readable through Home Assistant Ingress',
+    hint: 'open the panel from the Home Assistant sidebar',
+  }));
+  return true;
+}
+
 function viaIngress(req) {
   if (!req.headers['x-ingress-path']) return false;
   const peer = normalizeIp(req.socket?.remoteAddress) || '';
@@ -3430,6 +3541,7 @@ const statsServer = http.createServer((req, res) => {
   // about how much it pulls in, and the ids themselves are what the picker exists to avoid
   // making anyone type.
   if (path.endsWith('/devices.json')) {
+    if (requireIngress(req, res, '/devices.json')) return;
     const u = new URL(req.url, 'http://x');
     const q = (u.searchParams.get('q') || '').trim().toLowerCase();
     const limit = Math.min(Number(u.searchParams.get('limit')) || 50, 200);
@@ -3446,6 +3558,7 @@ const statsServer = http.createServer((req, res) => {
   // Search every entity on the instance, flagging which the union allowlist already carries.
   // Read-only, so it is not behind the Ingress gate that writes are.
   if (path.endsWith('/entities.json')) {
+    if (requireIngress(req, res, '/entities.json')) return;
     const u = new URL(req.url, 'http://x');
     const q = (u.searchParams.get('q') || '').trim().toLowerCase();
     const limit = Math.min(Number(u.searchParams.get('limit')) || 50, 200);
@@ -3466,6 +3579,7 @@ const statsServer = http.createServer((req, res) => {
   // Always-forward one entity. Ingress only, exactly like /pin-resource.
   // What each option is set to, and which source is answering for it.
   if (path.endsWith('/config.json')) {
+    if (requireIngress(req, res, '/config.json')) return;
     const own = ownership(YAML_OPT, CONFIG_STORE);
     const eff = effectiveOptions(YAML_OPT, CONFIG_STORE);
     // The declared catalogue first, so an option nobody has set yet is still offered — that is
@@ -3627,20 +3741,31 @@ const statsServer = http.createServer((req, res) => {
     return;
   }
   if (path.endsWith('/access.json')) {
+    // The worst of them: this one carries webhook ids and stream tokens.
+    if (requireIngress(req, res, '/access.json')) return;
     const limit = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('limit')) || 100, 500);
     const body = JSON.stringify(httpLog.snapshot({ limit }), null, 2);
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     return res.end(body);
   }
   if (path.endsWith('/history.json')) {
+    if (requireIngress(req, res, '/history.json')) return;
     const body = JSON.stringify(history.history());
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     return res.end(body);
   }
   if (path.endsWith('/stats.json')) {
-    const body = JSON.stringify(stats.snapshot(statsExtras()), null, 2);
+    // Deliberately NOT Ingress-only, unlike the reads above: a `rest:` sensor in Home Assistant
+    // polls this for a health signal, and that fetch comes from core rather than through Ingress.
+    // Gating it wholesale would silently take that sensor down — which is exactly the failure this
+    // add-on caused once already by moving its port.
+    //
+    // So the aggregates stay public and the IDENTITIES do not. What a health check needs is
+    // "is it up and is the allowlist built"; what it does not need is every client's address,
+    // Home Assistant user, User-Agent, internal hostname and device name.
+    const snap = stats.snapshot(statsExtras());
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(body);
+    return res.end(JSON.stringify(viaIngress(req) ? snap : redactForNetwork(snap), null, 2));
   }
   if (path === '/' || path.endsWith('/index.html')) {
     if (!PANEL_HTML) { res.writeHead(500, { 'content-type': 'text/plain' }); return res.end('panel.html missing'); }

@@ -18,6 +18,19 @@ import * as stats from '../stats.mjs';
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
 
+// The console's reads go through Ingress in production, and the server now requires it for
+// anything that names a person, a machine or a credential. Tests that stand in for the console
+// have to say so; the header plus a loopback peer is what Ingress looks like from here.
+const httpGetIng = (url) => new Promise((resolve, reject) => {
+  const u = new URL(url);
+  const req = http.get({ host: u.hostname, port: u.port, path: u.pathname + u.search,
+    headers: { 'x-ingress-path': '/api/hassio_ingress/test' } }, (res) => {
+    let body = ''; res.on('data', (c) => body += c);
+    res.on('end', () => resolve({ status: res.statusCode, body, type: res.headers['content-type'] }));
+  });
+  req.on('error', reject);
+});
+
 const httpGet = (url) => new Promise((resolve, reject) => {
   const req = http.get(url, (res) => {
     let body = ''; res.on('data', (c) => body += c);
@@ -186,7 +199,7 @@ describe('stats API over HTTP', () => {
     await new Promise((r) => setTimeout(r, 400));
     c.close();
 
-    const s = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body);
+    const s = JSON.parse((await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`)).body);
     const states = s.savings.byCategory.states;
     assert.ok(states, 'a states trim was recorded');
     assert.ok(states.before > states.after, `expected a real reduction, got ${states.before} -> ${states.after}`);
@@ -239,7 +252,7 @@ describe('stats API over HTTP', () => {
     mock.pushEntityEvent({ a: { 'light.living_room': { s: 'on' }, 'sensor.temperature': { s: '21' } } });
     await new Promise((r) => setTimeout(r, 400));
 
-    const s = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body);
+    const s = JSON.parse((await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`)).body);
     const me = s.clients.list.find((x) => x.msToEntityData != null);
     assert.ok(me, `no connection reported a timing; clients: ${JSON.stringify(s.clients.list)}`);
     assert.ok(me.msToEntityData >= 0, 'time from connect to payload delivered');
@@ -271,7 +284,7 @@ describe('stats API over HTTP', () => {
     mock.pushEntityEventBatched({ a }, filler);
     await new Promise((r) => setTimeout(r, 500));
 
-    const s = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body);
+    const s = JSON.parse((await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`)).body);
     const me = s.clients.list.find((x) => x.initialPayloadBytes != null && x.initialEntityCount === 2);
     assert.ok(me, `no connection reported the batched initial state; got ${JSON.stringify(s.clients.list.map((x) => [x.id, x.initialPayloadBytes, x.initialEntityCount]))}`);
     assert.equal(me.initialPayloadBytes, aBytes,
@@ -294,7 +307,7 @@ describe('stats API over HTTP', () => {
     mock.pushEntityEvent({ a: { 'light.living_room': { s: 'on' } } });
     await new Promise((r) => setTimeout(r, 300));
 
-    const first = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body)
+    const first = JSON.parse((await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`)).body)
       .clients.list.find((x) => x.msToEntityData != null);
     assert.ok(first, 'a first payload was timed');
 
@@ -304,7 +317,7 @@ describe('stats API over HTTP', () => {
     mock.pushEntityEvent({ a: big });
     await new Promise((r) => setTimeout(r, 400));
 
-    const after = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body)
+    const after = JSON.parse((await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`)).body)
       .clients.list.find((x) => x.id === first.id);
     assert.equal(after.initialPayloadBytes, first.initialPayloadBytes,
       'the cold-start payload size must be immutable once recorded');
@@ -352,7 +365,7 @@ describe('batched frame accounting', () => {
     c.send({ type: 'subscribe_entities', id: 70 });
     await new Promise((r) => setTimeout(r, 200));
 
-    const before = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body).byMessage;
+    const before = JSON.parse((await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`)).body).byMessage;
     const noTypeBefore = before['(no type field)']?.count ?? 0;
 
     // A batch carrying an entity event plus an unrelated result — HA's real shape.
@@ -362,7 +375,7 @@ describe('batched frame accounting', () => {
     );
     await new Promise((r) => setTimeout(r, 400));
 
-    const after = JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body).byMessage;
+    const after = JSON.parse((await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`)).body).byMessage;
     const batched = Object.entries(after).filter(([k]) => k.startsWith('batched '));
     assert.ok(batched.length, `a batched row was recorded; got ${JSON.stringify(Object.keys(after))}`);
 
@@ -453,7 +466,7 @@ describe('resource pinning is Ingress-only', () => {
   });
 
   it('still serves reads to anyone, which is unchanged behaviour', async () => {
-    const res = await httpGet(`http://127.0.0.1:${statsPort}/stats.json`);
+    const res = await httpGetIng(`http://127.0.0.1:${statsPort}/stats.json`);
     assert.equal(res.status, 200, 'read access must not be affected by the write gate');
   });
 });
@@ -548,7 +561,8 @@ describe('entity search', () => {
   }
 
   const get = (p) => new Promise((resolve, reject) => {
-    const r = http.get({ host: '127.0.0.1', port: statsPort, path: p }, (res) => {
+    const r = http.get({ host: '127.0.0.1', port: statsPort, path: p,
+      headers: { 'x-ingress-path': '/api/hassio_ingress/test' } }, (res) => {
       let b = ''; res.on('data', (c) => b += c);
       res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(b) }));
     });
@@ -783,7 +797,7 @@ describe('device search', () => {
         if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
         await new Promise((r) => setTimeout(r, 50));
       }
-      const all = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/devices.json`)).body);
+      const all = JSON.parse((await httpGetIng(`http://127.0.0.1:${sp}/devices.json`)).body);
       assert.ok(Array.isArray(all.matches), 'a device list is returned');
       assert.equal(typeof all.total, 'number');
       for (const m of all.matches) {
@@ -805,7 +819,7 @@ describe('device search', () => {
         assert.ok(m.devices >= 1, 'each row says how many devices it covers');
       }
 
-      const limited = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/devices.json?limit=1`)).body);
+      const limited = JSON.parse((await httpGetIng(`http://127.0.0.1:${sp}/devices.json?limit=1`)).body);
       assert.ok(limited.matches.length <= 1, 'limit is honoured');
     } finally { proxy.kill(); await mock.close(); }
   });
@@ -819,8 +833,10 @@ describe('config endpoints', () => {
       (res) => { let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve({ status: res.statusCode, body: b })); });
     r.on('error', reject); r.end(data);
   });
+  // Stands in for the console, which reads through Ingress.
   const get = (port, path) => new Promise((resolve, reject) => {
-    http.get({ host: '127.0.0.1', port, path }, (res) => {
+    http.get({ host: '127.0.0.1', port, path,
+      headers: { 'x-ingress-path': '/api/hassio_ingress/test' } }, (res) => {
       let b = ''; res.on('data', (c) => b += c);
       res.on('end', () => resolve({ status: res.statusCode, body: b }));
     }).on('error', reject);
@@ -912,12 +928,16 @@ describe('config editability is reported per request', () => {
         if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
         await new Promise((r) => setTimeout(r, 50));
       }
+      // Stronger than it used to be: a request without the Ingress header is not told
+      // "you cannot edit", it is not given the configuration at all — it names HA users.
       const plain = await new Promise((resolve, reject) => {
         http.get({ host: '127.0.0.1', port: sp, path: '/config.json' }, (res) => {
-          let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve(JSON.parse(b)));
+          let b = ''; res.on('data', (c) => b += c);
+          res.on('end', () => resolve({ status: res.statusCode, body: b }));
         }).on('error', reject);
       });
-      assert.equal(plain.editableHere, false, 'a request without the Ingress header cannot edit');
+      assert.equal(plain.status, 403, 'the configuration is not readable off Ingress at all');
+      assert.ok(!/always_forward/.test(plain.body), 'and the refusal carries none of it');
 
       // And the same request through Ingress can — otherwise the flag would just be "false"
       // always, which would disable the editor everywhere and still pass the assertion above.

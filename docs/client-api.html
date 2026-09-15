@@ -148,9 +148,9 @@
   worth on this connection.</p>
 
   <div class="meta">
-    <span class="pill on">available from 2026.09.15.21</span>
-    <span class="pill">no auth</span>
-    <span class="pill">LAN-readable</span>
+    <span class="pill on">auth required from 2026.09.15.25</span>
+    <span class="pill on">HA token required</span>
+    <span class="pill">proxy port</span>
     <span class="pill">additive schema</span>
   </div>
 
@@ -177,6 +177,9 @@
   <ul>
     <li><span class="yes">200</span> — the Stripper is running <em>and is in the path</em> for this
       panel. Both halves of the question, answered by arriving.</li>
+    <li><span class="no">401</span> — the Stripper <em>is</em> in the path, but your token is
+      missing or Home Assistant did not accept it. Still a positive detection: "present, not
+      authorised".</li>
     <li><span class="no">404</span> — you are talking to Home Assistant directly. HA has no such
       route.</li>
     <li><strong>Connection error</strong> — neither is reachable; a network problem, not a
@@ -190,6 +193,28 @@
     occasionally. The pull costs nothing until someone opens the admin screen — and it returns
     live numbers rather than boot-time ones.</p>
   </div>
+
+  <h2>Authentication</h2>
+
+  <p>Send the panel's own Home Assistant access token:</p>
+
+<pre><code>Authorization: Bearer &lt;the panel's HA access token&gt;</code></pre>
+
+  <p>There is no separate secret to provision. The token is validated against Home Assistant and
+  the result is cached for ten minutes, so an admin screen refreshing does not cost a round trip
+  each time.</p>
+
+  <div class="note warn">
+    <p><strong>Why this needs a token at all.</strong> The proxy port is reachable by anything on
+    the network. The reply is small — booleans and the caller's own figures — but there is no good
+    reason for a device that cannot log into Home Assistant to learn which dashboard a panel is on,
+    how many entities it is served, or how much traffic it moves.</p>
+  </div>
+
+  <p>A browser calling this cross-origin will <strong>preflight</strong> because of the
+  <code>Authorization</code> header. The endpoint answers <code>OPTIONS</code> with
+  <code>Access-Control-Allow-Headers: authorization</code>, so this works from a panel admin page
+  served on its own origin.</p>
 
   <h2>The response</h2>
 
@@ -374,13 +399,15 @@
   <p>Fetch on demand, when the admin screen opens. It is cheap but not free — it takes a stats
   snapshot per call.</p>
 
-<pre><code>async function stripperStatus(haBaseUrl) {
+<pre><code>async function stripperStatus(haBaseUrl, haAccessToken) {
   try {
     const res = await fetch(new URL('/stripper/client.json', haBaseUrl), {
       cache: 'no-store',
+      headers: { Authorization: `Bearer ${haAccessToken}` },
       signal: AbortSignal.timeout(2000),
     });
     if (res.status === 404) return { state: 'not-in-path' };
+    if (res.status === 401) return { state: 'unauthorised' };
     if (!res.ok) return { state: 'error', status: res.status };
     return { state: 'ok', data: await res.json() };
   } catch {

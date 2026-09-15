@@ -1867,6 +1867,20 @@ async function renderConfig() {
   let d;
   try {
     const r = await fetch('./config.json', { cache: 'no-store' });
+    // The configuration is only readable through Ingress: it carries the override rules, which
+    // name Home Assistant users. Served on the app's own port this returns 403, and a blank card
+    // would read as a bug rather than as a boundary — so it says which door to use.
+    if (r.status === 403) {
+      const host = $('cfgsections');
+      host.textContent = '';
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = 'Configuration is only shown when this panel is opened from the Home '
+        + 'Assistant sidebar — it lists rules that name Home Assistant users, and this port is '
+        + 'reachable by anything on your network.';
+      host.appendChild(note);
+      return;
+    }
     if (!r.ok) return;
     d = await r.json();
   } catch { return; }
