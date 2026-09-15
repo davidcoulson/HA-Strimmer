@@ -84,11 +84,8 @@ with **9,751 entities**:
 
 ### 📱 And on a phone, where it matters most
 
-The table above is a wall panel — a slow client, where the cost is *parsing* 5.8 MB of JSON rather
-than moving it. Cellular is where payload size turns directly into waiting.
-
-Headless Chrome, same dashboard, loaded through the app and then straight at Home Assistant.
-Median of three runs (five on LAN), timed to the first `<ha-card>` actually rendered:
+The wall-panel table above is dominated by *parsing* 5.8 MB of JSON. On cellular, payload size
+turns straight into waiting. Headless Chrome, same dashboard, timed to the first `<ha-card>`:
 
 | Link | 😴 Untrimmed | 🚀 Trimmed | | Time saved |
 |---|---|---|---|---|
@@ -96,41 +93,11 @@ Median of three runs (five on LAN), timed to the first `<ha-card>` actually rend
 | **4G** (9 Mbps, 40 ms) | 8.6 s | **3.3 s** | **2.6× faster** | **−5.4 s** |
 | **Unthrottled LAN** | 0.66 s | **0.43 s** | **1.5× faster** | −0.23 s |
 
-| | Untrimmed | Trimmed |
-|---|---|---|
-| WebSocket payload | 5,799 KB | **844 KB** (85% less) |
-| HTTP payload (frontend bundle) | ~2.6 MB | ~2.3 MB (untouched) |
+Websocket payload **5,799 KB → 844 KB**. The frontend bundle is untouched.
 
-**The ratio is the same 2.6× on both cellular profiles.** That is not a coincidence: the ratio is
-set by the byte counts, which do not change with the link. What the link decides is how many
-seconds that ratio is worth — 5 on 4G, 29 on a weak cell. Slower link, same multiple, more waiting
-removed. Both cellular rows land just above their theoretical transfer time at the stated bitrate,
-which is the check that they are measuring the link and not the harness.
-
-**On a fast LAN the margin narrows, as it must** — when the link is not the bottleneck, deleting
-5 MB from it buys less. The app is still ahead, and noticeably steadier: across five runs the
-trimmed loads sat between 412 and 630 ms while the untrimmed ones ranged from 474 to 2,028 ms.
-
-> **A cautionary tale, kept here because it cost a real second.** An earlier version of this table
-> showed the app **2.2× slower** on LAN. That was real, and the cause was a per-user rule scoped
-> to a dashboard the benchmark never opened: every connection was held while the app resolved
-> the user, to reach a conclusion that could not change anything. Skipping that lookup when no rule
-> could match took the same load from **2,043 ms to 429 ms**. If you use `user_overrides`, scope
-> them to a dashboard — it is a correctness feature and a speed feature at once.
-
-Two things worth knowing if you are reasoning about where the time goes. Proxying the frontend is
-**not** a cost: measured against this instance the app serves it *faster* than Home Assistant
-does — 0.029 s versus 0.043 s for the same 564 KB bundle, and 31 ms versus 75 ms per request over
-40 sequential requests. And the HTTP column is the control throughout: the app does not trim
-the frontend bundle, and it stays put.
-
-**[Full data and methodology → `docs/PERFORMANCE.md`](docs/PERFORMANCE.md)** — every run, the
-validity checks, the limitations, a profile that produced invalid results and why it was
-discarded, and a measurement that was wrong for an hour before it was explained.
-
-Reproduce any of it with
-[`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs) — it needs no
-configuration change, because it compares the app's port against Home Assistant's own.
+**[Every run, the validity checks, the limitations, and a benchmark that said the opposite for an
+hour → `docs/PERFORMANCE.md`](docs/PERFORMANCE.md)** — reproduce it with
+[`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs).
 
 ### 📅 Now scale that to a day
 
