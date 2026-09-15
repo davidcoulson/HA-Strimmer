@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026.09.15.28 — 2026-09-15
+
+**A restart no longer costs every panel its dashboard.**
+
+Per-dashboard attribution rests on a hint: a panel's dashboard page request records "this address
+is looking at office-tablet", and the websocket that follows is served that dashboard's entities
+rather than the union of every one. The map lived only in memory, so **every restart threw it
+away** — and a panel whose websocket reconnects without re-fetching its page then has no hint at
+all.
+
+Measured on a live instance after a rebuild: a panel served **488 entities where it should have had
+108**, and it stayed that way until something made it reload. That is the app quietly not doing its
+job, triggered by the most ordinary event there is.
+
+The hints are kept in `/data` now. Verified by restarting with hints in place:
+`client hints: 5 still valid, 0 expired`.
+
+**The TTL is unchanged at ten minutes**, exactly as with the user cache. A restart takes about
+twelve seconds, so ten minutes already spans one; persisting buys the restart case with no increase
+in staleness. A hint older than the TTL is dropped on load, and so is one naming a dashboard this
+app no longer serves — resurrecting that would label a panel with something it is not being served.
+
+Writes are debounced and atomic: a wall panel reloading would otherwise rewrite the file several
+times a second, and a crash mid-write must not leave one that fails to parse on the next boot.
+
+What is written is an address and a dashboard `url_path` — no identity, no token, nothing about
+what the panel was served. It is still a list of addresses, and `/data` is in Home Assistant
+backups.
+
+Note that a client attributed by COOKIE was never affected: the cookie lives in the browser and
+survives a restart on its own. This is for the connections that have no cookie — a panel's first
+connection, and clients that do not keep one.
+
+---
+
 ## 2026.09.15.27 — 2026-09-15
 
 **The resource trim can see fonts.**

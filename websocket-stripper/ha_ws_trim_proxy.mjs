@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.27';
+const VERSION = '2026.09.15.28';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2358,6 +2358,79 @@ function learnClientEntity(ip, entityId) {
 
 const clientDash = new Map();                 // ip -> { path, at }
 
+// Kept across restarts, in /data, for the same reason the user cache is.
+//
+// This map is what per-dashboard attribution rests on: a panel's dashboard page request records
+// "this address is looking at office-tablet", and the websocket that follows is served that
+// dashboard's entities rather than the union of every one. It lived only in memory, so EVERY
+// RESTART THREW IT AWAY — and a panel whose websocket reconnects without re-fetching its page
+// then has no hint at all. Measured on a live instance after a rebuild: a panel served 488
+// entities where it should have had 108, and it stayed that way until something made it reload.
+//
+// That is the add-on quietly not doing its job, triggered by the most ordinary event there is.
+//
+// THE TTL IS UNCHANGED, exactly as with the user cache. A restart takes about twelve seconds, so
+// the existing ten minutes already spans one; persisting buys the restart case with no increase
+// in staleness. An entry older than the TTL is dropped on load.
+//
+// What is written: address -> { dashboard url_path, when }. No identity, no token, nothing about
+// what the panel was served — but it is still a list of addresses on the network, and /data is
+// included in Home Assistant backups.
+const CLIENT_DASH_FILE = CONFIG_DIR ? `${CONFIG_DIR}/client-dash.json` : null;
+let clientDashDirty = false;
+let clientDashTimer = null;
+
+function loadClientDash() {
+  if (!CLIENT_DASH_FILE || !fs.existsSync(CLIENT_DASH_FILE)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(CLIENT_DASH_FILE, 'utf8'));
+    const now = Date.now();
+    let kept = 0, expired = 0, stale = 0;
+    for (const [ip, v] of Object.entries(raw?.hints || {})) {
+      if (typeof v?.path !== 'string' || typeof v?.at !== 'number') continue;
+      if (now - v.at >= CLIENT_DASH_TTL_MS) { expired++; continue; }
+      // A dashboard that is no longer configured must not be resurrected from disk: it would
+      // attribute a panel to something this app does not serve, and allowFor would fall back to
+      // the union anyway — with a misleading label on the panel in the meantime.
+      if (!DASH_PATHS.includes(v.path)) { stale++; continue; }
+      clientDash.set(ip, { path: v.path, at: v.at });
+      kept++;
+    }
+    if (kept || expired || stale) {
+      log(`client hints: ${kept} still valid, ${expired} expired`
+        + (stale ? `, ${stale} for dashboards no longer served` : ''));
+    }
+  } catch (e) {
+    // Losing these costs one reload's worth of attribution, never the boot.
+    warn(`could not read ${CLIENT_DASH_FILE} (${e.message}) — starting with no client hints`);
+  }
+}
+
+// Debounced: a page request writes a hint, and a wall panel reloading its dashboard would
+// otherwise rewrite this file several times a second for no benefit. Losing the last few seconds
+// of hints to a hard kill costs one reload, which is the thing this file exists to avoid needing
+// — but only once, not repeatedly.
+function saveClientDashSoon() {
+  if (!CLIENT_DASH_FILE) return;
+  clientDashDirty = true;
+  if (clientDashTimer) return;
+  clientDashTimer = setTimeout(() => {
+    clientDashTimer = null;
+    if (!clientDashDirty) return;
+    clientDashDirty = false;
+    try {
+      const hints = {};
+      for (const [ip, v] of clientDash) hints[ip] = v;
+      const tmp = `${CLIENT_DASH_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ version: 1, hints }));
+      fs.renameSync(tmp, CLIENT_DASH_FILE);
+    } catch (e) {
+      logThrottled('clientdash-write', `could not write the client hints (${e.message})`);
+    }
+  }, 5000);
+  if (typeof clientDashTimer.unref === 'function') clientDashTimer.unref();
+}
+
 // One implementation of "who is this", shared with the route classifier, so the IP a client
 // is attributed by and the IP the panel reports about it can never disagree.
 const clientIp = (req) => classify(req).ip;
@@ -2378,6 +2451,7 @@ function noteClientDash(req) {
   if (!ip) return;
   const prev = clientDash.get(ip);
   clientDash.set(ip, { path, at: Date.now() });
+  saveClientDashSoon();
   if (prev?.path !== path) log(`client ${ip} -> dashboard ${path}`);
   // Bounded: a busy instance must not accumulate an entry per client forever.
   if (clientDash.size > 500) {
@@ -3986,6 +4060,8 @@ log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${A
 // complaint and the first thing worth knowing is whether it was parsed at all.
 // Before anything can ask for a user: a restart should not make every session pay again.
 loadUserCache();
+// Same reason: a restart must not cost every panel its dashboard attribution.
+loadClientDash();
 log(`overrides: ${CONN_RULES.length} rule(s)`
   + (CONN_RULES.length ? ` — ${CONN_RULES.filter((r) => r.user).length} keyed to a user, `
       + `${CONN_RULES.filter((r) => r.client).length} to a device, `
