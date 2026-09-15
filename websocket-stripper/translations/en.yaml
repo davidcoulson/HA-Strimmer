@@ -222,6 +222,18 @@ configuration:
       is not written at all otherwise: which dashboard a connection was attributed to and why,
       which resource matched which card, and cache hits. Turn it on while chasing something and
       turn it back down afterwards — it is genuinely noisy.
+  mgmt_port:
+    name: Management console port
+    description: >-
+      Where the management console and its JSON API listen — statistics, the client list, entity
+      search and configuration. Defaults to 9122, next to the proxy's own 9123. ONLY THE DEFAULT
+      IS REACHABLE FROM THE SIDEBAR: Home Assistant routes the Ingress panel to `ingress_port`,
+      which is fixed when the app is installed and cannot be changed at runtime. Move this and the
+      console is still served, but only directly at `http://<host>:<port>/`; the app says so in
+      its log when the two differ. Worth moving only when something else already holds 9122 —
+      under host networking a collision means the server cannot bind at all, which costs the
+      console and the API both. Proxying is unaffected either way. Formerly `stats_port`, which is
+      still accepted; it stopped being only about statistics several releases ago.
   stats_port:
     name: Stats panel port
     description: >-
@@ -233,6 +245,13 @@ configuration:
       when something else already holds 9122: under host networking a collision means the server
       cannot bind at all, which costs the panel and the API both. Proxying is unaffected either
       way.
+  proxy_port:
+    name: Listen port
+    description: >-
+      The port browsers and wall panels connect to (default 9123). Because the app runs with
+      host networking this option is the only way to move it — the Network tab cannot remap a
+      host-network port. Formerly called `port`, which is still accepted: with two listeners a
+      bare "port" did not say which one.
   port:
     name: Listen port
     description: >-

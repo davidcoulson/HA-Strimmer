@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.3';
+const VERSION = '2026.09.15.4';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -69,7 +69,17 @@ const HA_WS = HA_BASE.replace(/^http/, 'ws') + '/api/websocket';     // browser 
 // Port precedence: PORT env (dev) > `port` add-on option > 9123. Under host_network the
 // add-on binds this directly on the host, so the option is the only way to move it off
 // 9123 (the Network tab can't remap a host-network port) — see issue #6.
-const PORT = parseInt(process.env.PORT || OPT.port || '9123', 10);
+// `port` and `stats_port` were the original names and both aged badly: with two listeners,
+// a bare `port` does not say which, and the second one stopped being only about stats several
+// releases ago. They are now `proxy_port` (what browsers and wall panels connect to) and
+// `mgmt_port` (where the management console and its JSON API live).
+//
+// Both old names keep working, permanently rather than deprecated-then-removed: `port` is
+// upstream's and `stats_port` is in every config written before this. New name first, old name
+// second, default last — so an install that sets neither is unaffected and an install that sets
+// the old one never notices the rename.
+const PORT = parseInt(process.env.PROXY_PORT || process.env.PORT
+  || OPT.proxy_port || OPT.port || '9123', 10);
 // The Ingress panel + JSON API live on their own port, deliberately NOT on PORT: everything
 // on PORT is the proxied Home Assistant namespace, and a dashboard whose url_path collided
 // with a stats path would be a genuinely confusing failure. Fixed rather than an option
@@ -82,7 +92,8 @@ const PORT = parseInt(process.env.PORT || OPT.port || '9123', 10);
 // cannot bind, so Ingress has nothing to reach either.
 const INGRESS_PORT = 9122;
 // Configurable, but only the default can be reached over Ingress — see the warning at listen().
-const STATS_PORT = parseInt(process.env.STATS_PORT || OPT.stats_port || INGRESS_PORT, 10);
+const STATS_PORT = parseInt(process.env.MGMT_PORT || process.env.STATS_PORT
+  || OPT.mgmt_port || OPT.stats_port || INGRESS_PORT, 10);
 // Where the Dockerfile's HEALTHCHECK learns which port to probe. It cannot work it out for
 // itself: as an add-on the config arrives in /data/options.json, so STATS_PORT is NOT in the
 // container's environment and a shell default in the Dockerfile is the ONLY value that ever

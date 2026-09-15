@@ -15,9 +15,12 @@ test('config.yaml has no top-level ports: / ports_description: block (inert unde
   assert.ok(!/^ports_description:/m.test(cfg), 'ports_description: should be removed');
 });
 
-test('config.yaml exposes the port option in both options and schema', () => {
-  assert.match(cfg, /^\s{2}port:\s*9123\s*$/m, 'options.port default present');
-  assert.match(cfg, /^\s{2}port:\s*"int\(1,65535\)\?"\s*$/m, 'schema.port present');
+test('config.yaml exposes the listen port in both options and schema', () => {
+  // proxy_port is the canonical name; `port` (upstream's) stays schema-only so an existing
+  // config keeps working without Supervisor discarding it.
+  assert.match(cfg, /^\s{2}proxy_port:\s*9123\s*$/m, 'options.proxy_port default present');
+  assert.match(cfg, /^\s{2}proxy_port:\s*"int\(1,65535\)\?"\s*$/m, 'schema.proxy_port present');
+  assert.match(cfg, /^\s{2}port:\s*"int\(1,65535\)\?"\s*$/m, 'schema still accepts the old name');
 });
 
 test('host_network stays on (trusted-network kiosk login depends on it)', () => {
@@ -110,8 +113,16 @@ test('ingress_port matches the INGRESS_PORT the proxy compiles in', () => {
 
   // And the option's default must be the same, or a fresh install has a panel that cannot be
   // reached from the sidebar out of the box.
-  const dflt = Number((cfg.match(/^  stats_port:\s*(\d+)/m) || [])[1]);
-  assert.equal(dflt, declared, `stats_port default ${dflt} must equal ingress_port ${declared}`);
+  const dflt = Number((cfg.match(/^  mgmt_port:\s*(\d+)/m) || [])[1]);
+  assert.ok(dflt, 'config.yaml must declare a mgmt_port default');
+  assert.equal(dflt, declared, `mgmt_port default ${dflt} must equal ingress_port ${declared}`);
+
+  // Both spellings must stay in the schema. `port` is upstream's name and `stats_port` is in
+  // every config written before the rename; dropping either from the schema would make Supervisor
+  // discard a working setting on upgrade, which is silent and costs someone their listen port.
+  for (const k of ['proxy_port', 'port', 'mgmt_port', 'stats_port']) {
+    assert.match(cfg, new RegExp(`^  ${k}: `, 'm'), `${k} must remain in the schema`);
+  }
 });
 
 // The healthcheck used to carry its own copy of the stats port as a shell default. As an add-on
@@ -141,4 +152,22 @@ test('the Dockerfile healthcheck reads the bound port instead of hardcoding one'
   const literal = probe.split(portFile).join('').match(/\b\d{4,5}\b/);
   assert.equal(literal, null,
     `the healthcheck must not hardcode a port (found ${literal && literal[0]})`);
+});
+
+// Both spellings of each port must stay readable in the source.
+//
+// `port` is upstream's name and `stats_port` is in every config written before the rename, so
+// dropping either read would break a working install on upgrade — silently, since the option
+// would simply stop being seen and the default would quietly take over. The env aliases are
+// exercised by the whole suite, which spawns the proxy with PORT and STATS_PORT throughout; the
+// options-file aliases have no such coverage, hence this.
+test('the proxy still reads the pre-rename port option names', () => {
+  const src = read('ha_ws_trim_proxy.mjs');
+  for (const pair of [['proxy_port', 'port'], ['mgmt_port', 'stats_port']]) {
+    const [canonical, legacy] = pair;
+    assert.match(src, new RegExp(`OPT\\.${canonical}\\s*\\|\\|\\s*OPT\\.${legacy}`),
+      `the proxy must read OPT.${canonical} and fall back to OPT.${legacy}`);
+  }
+  assert.match(src, /process\.env\.PROXY_PORT\s*\|\|\s*process\.env\.PORT/);
+  assert.match(src, /process\.env\.MGMT_PORT\s*\|\|\s*process\.env\.STATS_PORT/);
 });

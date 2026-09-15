@@ -145,7 +145,7 @@ Measured per page load on the instance this was built against (9,751 entities):
   Home Assistant through the same URL. Keep a normal HA address for that.
 
 3. Start it. Browse `http://<ha-host>:9123/<your-dashboard>`. Point your kiosk browser
-   there. To move it off `9123`, set the `port` option — because the app runs
+   there. To move it off `9123`, set the `proxy_port` option — because the app runs
    `host_network: true`, the **Network** tab can't remap it.
 
 > **Tip — keep broad admin dashboards out of the `dashboards` list.** The allowlist is the
@@ -237,8 +237,8 @@ are JSON.
 | `HA_BASE` | — | Your HA, reachable **from the container**. |
 | `HA_TOKEN` | — | Long-lived access token. Required; the app uses `SUPERVISOR_TOKEN` instead. |
 | `DASH_PATHS` | `dashboards` | `url_path` of each dashboard to serve. **Required** — empty means the proxy refuses websockets rather than serving the untrimmed firehose. |
-| `PORT` | `port` | Listen port (default `9123`). |
-| `STATS_PORT` | `stats_port` | Stats panel + JSON API (default `9122`). Only the default is reachable from the HA sidebar — Ingress routes to `ingress_port`, fixed at install. |
+| `PROXY_PORT` | `proxy_port` | Port browsers and wall panels connect to (default `9123`). The old names `PORT` / `port` still work. |
+| `MGMT_PORT` | `mgmt_port` | Management console + JSON API (default `9122`). Only the default is reachable from the HA sidebar — Ingress routes to `ingress_port`, fixed at install. The old names `STATS_PORT` / `stats_port` still work. |
 | `ALWAYS_FORWARD` | `always_forward` | Literal ids or `/regex/`. |
 | `NEVER_FORWARD` | `never_forward` | Wins over everything. |
 | `STRIP_ENTITIES` | `strip_entities` | `0` = plain passthrough, for an A/B comparison. |

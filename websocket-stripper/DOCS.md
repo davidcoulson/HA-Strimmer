@@ -27,7 +27,7 @@ uses, so kiosk/wall-panel pages load fast on large instances — with no loss of
 | `exclude_device_categories` | list | Empty by default. When a **device** is expanded — by a card configured with a device rather than entities, or by a `client_overrides` rule — drop entities Home Assistant labels `config` (controls that configure the device: panel brightness, a reset button, a firmware update) or `diagnostic` (readings about its health: last seen, signal, status code). A litter robot carries 21 entities and a card rendering a fill level needs a handful. **Empty on purpose:** whether a given card renders a diagnostic sensor is not knowable from here, and a wrongly dropped entity blanks part of a card with no error anywhere. Every device expansion logs its split — `+21 entities (8 primary, 7 config, 6 diagnostic)` — so decide with the real numbers for *your* devices in front of you. Note a browser voice satellite measured 18 of 21 entities as `config`, because its pipeline and wake-word selects are configuration controls that the page's JavaScript nonetheless reads to work. |
 | `resources_always_forward` | list | URL patterns (literal substring, or `/regex/`) always sent. Needed for plugins that patch the frontend instead of registering a card — they contain none of the dashboard's card names, so the content match cannot tell they're used. In practice: icon packs, and anything that restyles core cards. A module with its own top-level config block on the dashboard (`kiosk_mode:`, `swipe_nav:`) is detected from that block and does not need listing. |
 | `resources_never_forward` | list | URL patterns never sent to any dashboard. Wins over `resources_always_forward`. |
-| `port` | int | Port the app listens on (default `9123`). Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another app (e.g. Zigbee2MQTT). |
+| `proxy_port` | int | Port browsers and wall panels connect to (default `9123`). The older name `port` is still accepted. Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another app (e.g. Zigbee2MQTT). |
 | `ha_base` | string | Optional. Override the Home Assistant base URL the app proxies to (default `http://homeassistant:8123`). Set this if `host_network` is on and the internal `homeassistant` hostname doesn't resolve — e.g. `http://192.168.4.2:8123`. |
 | `allow_ws_url` | string | Optional. Override the websocket URL used once at startup to precompute the allowlist (default `ws://supervisor/core/websocket`). Set if `supervisor` doesn't resolve under `host_network` — e.g. `ws://192.168.4.2:8123/api/websocket` (also requires a token via `ALLOW_TOKEN`). |
 
@@ -82,7 +82,7 @@ After starting, browse to `http://<ha-host>:9123/<dashboard-url-path>`, e.g.
 
 > **Port:** because this app runs with `host_network: true` (see the tradeoff below),
 > it binds directly on the host and the **Network** tab cannot remap it. If `9123` collides
-> with another app (e.g. Zigbee2MQTT), set the `port` option instead.
+> with another app (e.g. Zigbee2MQTT), set the `proxy_port` option instead.
 
 The first visit prompts a normal HA login (it's a different origin); after that it's your
 real dashboard.
