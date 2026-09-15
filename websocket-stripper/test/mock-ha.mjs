@@ -68,7 +68,7 @@ const DEFAULT_REGISTRIES = {
 
 // `port` pins the listen port so a test can take HA down and bring it back on the same
 // address — i.e. simulate an HA restart under a running proxy.
-export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CONFIGS, states = STATES, registries = DEFAULT_REGISTRIES, templates = DEFAULT_TEMPLATES, resources = DEFAULT_RESOURCES, resourceBodies = DEFAULT_RESOURCE_BODIES, port: fixedPort } = {}) {
+export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CONFIGS, states = STATES, registries = DEFAULT_REGISTRIES, templates = DEFAULT_TEMPLATES, resources = DEFAULT_RESOURCES, resourceBodies = DEFAULT_RESOURCE_BODIES, extraModules = null, port: fixedPort } = {}) {
   const port = fixedPort ?? await getFreePort();
   configs = { ...configs };    // per-mock copy, so a setConfig() in one test can't leak into the next
   const state = {
@@ -113,6 +113,15 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     if (Object.prototype.hasOwnProperty.call(resourceBodies, path)) {
       res.writeHead(200, { 'content-type': 'application/javascript' });
       return res.end(resourceBodies[path]);
+    }
+    // A dashboard page, shaped like Home Assistant's: each injected module is one
+    // import(...).catch(...) block. Tests that exercise trim_extra_modules need the real shape,
+    // because that shape is exactly what the rewrite matches on.
+    if (extraModules && /text\/html/i.test(String(req.headers.accept || ''))) {
+      const blocks = extraModules.map((u) => `        import(${JSON.stringify(u)}).catch(function (err) {\n`
+        + `          console.error("Failed to load extra module ${u}", err);\n        });`).join('\n');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(`<!DOCTYPE html><html><head><script type="module">\n${blocks}\n</script></head><body></body></html>`);
     }
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('MOCK_HA_BODY ' + req.url);

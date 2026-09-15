@@ -50,7 +50,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.24';
+const VERSION = '2026.09.15.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -144,6 +144,10 @@ const TRIM_SERVICES = OPT.trim_services !== undefined ? !!OPT.trim_services
 // renders as "Custom element doesn't exist" — so this is opt-in, and every drop is logged.
 const TRIM_RESOURCES = OPT.trim_resources !== undefined ? !!OPT.trim_resources
   : (process.env.TRIM_RESOURCES ?? '0') !== '0';
+// Requires trim_resources: the whole decision is "did the resource trim already drop this?", so
+// with the resource trim off there is no decision to apply and nothing is ever removed.
+const TRIM_EXTRA_MODULES = (OPT.trim_extra_modules !== undefined ? !!OPT.trim_extra_modules
+  : (process.env.TRIM_EXTRA_MODULES ?? '0') !== '0') && TRIM_RESOURCES;
 const RES_ALWAYS = parseRules(OPT.resources_always_forward ?? process.env.RESOURCES_ALWAYS_FORWARD);
 const RES_NEVER = parseRules(OPT.resources_never_forward ?? process.env.RESOURCES_NEVER_FORWARD);
 
@@ -1226,6 +1230,7 @@ const BUILTIN_ICON_NS = new Set(['mdi', 'hass', 'hassio', 'homeassistant', 'cust
 
 const RESOURCE_CACHE = new Map();     // url -> { tested:Set, present:Set|null, bytes }
 let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
+let RESOURCE_ALL_PATHS = new Set();   // every resource path HA has registered
 // Per-dashboard resource figures for the stats panel. Populated by buildResources().
 let RESOURCE_STATS = new Map();       // dash -> { kept, dropped, keptKB, droppedKB }
 // The URLs behind those counts. Held so the panel can show WHICH resources were dropped and how
@@ -1469,6 +1474,55 @@ function keepResource(url, keys, providers = null) {
   return false;
 }
 
+// Modules Home Assistant injects into the page itself, via `frontend.add_extra_js_url`.
+//
+// These never appear in `lovelace/resources`, so `trim_resources` cannot see them — an
+// integration simply adds a <script> import to every page and every dashboard pays for it. On the
+// instance this was written against that is 814KB, of which 669KB is a card
+// (`voice-satellite-card.js`) that the resource trim had ALREADY decided a given dashboard does
+// not need. It was dropped from the resource list and loaded anyway, through the other door.
+//
+// The rule is deliberately narrow: a module is removed only when it is ALSO a registered Lovelace
+// resource AND the resource trim dropped it for this dashboard. That is not a new inference — it
+// is the existing decision, applied to the channel it was leaking through. Icon packs, frontend
+// patchers and anything else injected but never registered as a resource are left alone, because
+// nothing here knows what they do. `resources_never_forward` / `resources_always_forward` still
+// win, in that order, so there is a manual override in both directions.
+//
+// HA renders each injected module as one self-contained block:
+//
+//     import("/x/y.js?v=1").catch(function (err) {
+//       console.error("Failed to load extra module /x/y.js?v=1", err);
+//     });
+//
+// so removing a module means removing exactly that block. The pattern is anchored on both ends
+// and cannot span two blocks, and if it matches nothing the page is returned untouched.
+const EXTRA_MODULE_RE = /\bimport\("([^"]+)"\)\.catch\(function \(err\) \{\s*console\.error\("Failed to load extra module [^"]*", err\);\s*\}\);/g;
+
+// What the last served page for each dashboard removed, and what it left behind. Recorded rather
+// than merely logged, because this trim edits a page that is then cached by the browser: a person
+// debugging a missing behaviour days later needs to see what was taken out without having to
+// catch a log line at the moment it happened.
+const EXTRA_MODULES_BY_DASH = new Map();   // dash -> { removed: [...], kept: [...] }
+
+function stripExtraModules(html, dash) {
+  const keep = RESOURCES_BY_DASH.get(dash);
+  const dropped = [];
+  const survived = [];
+  const out = html.replace(EXTRA_MODULE_RE, (block, url) => {
+    const path = resourcePath(url);
+    if (matchesUrl(RES_ALWAYS, url)) return block;
+    const isDroppedResource = RESOURCE_ALL_PATHS.has(path) && keep?.size && !keep.has(path);
+    if (!isDroppedResource && !matchesUrl(RES_NEVER, url)) { survived.push(path); return block; }
+    dropped.push(path);
+    return '';
+  });
+  if (dropped.length || survived.length) {
+    EXTRA_MODULES_BY_DASH.set(dash, { removed: dropped.slice(0, 40), kept: survived.slice(0, 40) });
+  }
+  return { html: out, dropped };
+}
+
 async function buildResources(rpc, keysByDash) {
   if (!TRIM_RESOURCES) return;
   let rows;
@@ -1644,6 +1698,10 @@ async function buildResources(rpc, keysByDash) {
       + `and cannot be verified from here.`);
   }
   RESOURCES_BY_DASH = byDash;
+  // Every resource path Home Assistant knows about. An injected module is only ever removed when
+  // it appears here — i.e. when it is ALSO a Lovelace resource, and therefore something the
+  // resource trim has already formed a tested opinion about.
+  RESOURCE_ALL_PATHS = new Set(rows.map((r) => resourcePath(r.url)));
 
   // Resources dropped by EVERY dashboard get their own warning, because this set is the
   // exact signature of the one failure the tuning loop cannot catch.
@@ -2049,11 +2107,63 @@ function ipHint(req) {
   return hit.path;
 }
 
+// Serve one dashboard page ourselves so its injected-module list can be rewritten.
+//
+// This is the ONLY request the add-on does not stream straight through, and it is handled apart
+// from the proxy rather than inside it because the body has to be read whole before it can be
+// edited. `Accept-Encoding` is dropped on the way up so Home Assistant answers in plain text:
+// the page is about 10KB, so re-compressing it would save a few KB of LAN traffic in exchange for
+// a Brotli round trip on every load and a second way to corrupt the one response that must not be
+// corrupted.
+//
+// FAILS OPEN, everywhere. A bad page here is not a blank card, it is a panel that never boots, so
+// every error path — fetch failure, non-HTML answer, a page the pattern does not match, anything
+// thrown — hands the request back to the ordinary proxy with nothing written to the socket yet.
+async function serveDashboardPage(req, res, dash) {
+  const upstream = new URL(req.url, HA_BASE);
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    const key = k.toLowerCase();
+    if (key === 'host' || key === 'connection' || key === 'accept-encoding') continue;
+    headers[k] = v;
+  }
+  const r = await fetch(upstream, { headers, redirect: 'manual',
+    signal: AbortSignal.timeout(20000) });
+  const type = r.headers.get('content-type') || '';
+  if (!r.ok || !/text\/html/i.test(type)) return false;   // not ours to touch
+  const body = await r.text();
+  const { html, dropped } = stripExtraModules(body, dash);
+  if (!dropped.length) return false;                      // nothing to do; let the proxy serve it
+
+  const out = Buffer.from(html, 'utf8');
+  for (const [k, v] of r.headers) {
+    const key = k.toLowerCase();
+    if (key === 'content-length' || key === 'content-encoding' || key === 'transfer-encoding') continue;
+    res.setHeader(k, v);
+  }
+  res.setHeader('content-length', String(out.length));
+  res.writeHead(r.status);
+  res.end(out);
+  logThrottled(`extramod:${dash}`, `  extra modules trimmed for ${dash}: removed ${dropped.length} `
+    + `(${dropped.join(', ')})`);
+  return true;
+}
+
 const server = http.createServer((req, res) => {
   // Request logging goes to its own ring, not to stdout — see http_log.mjs on why a request log
   // and a service log do not belong in the same stream.
   httpLog.observe(req, res, clientIp);
   noteClientDash(req);
+  const dash = TRIM_EXTRA_MODULES && req.method === 'GET' ? dashFromUrl(req.url) : null;
+  if (dash && /text\/html/i.test(String(req.headers.accept || ''))) {
+    serveDashboardPage(req, res, dash)
+      .then((handled) => { if (!handled) proxy.web(req, res).catch(() => {}); })
+      .catch((e) => {
+        logThrottled('extramod-fail', `  extra-module trim failed (${e.message}) — serving the page untouched`);
+        if (!res.headersSent) proxy.web(req, res).catch(() => {});
+      });
+    return;
+  }
   // httpxy returns a promise. The 'error' listener below already handles failures and resolves
   // them, but an unhandled rejection would still be a process-level crash, so swallow here too.
   proxy.web(req, res).catch(() => {});
@@ -2884,6 +2994,7 @@ function statsExtras() {
       trim_registries: TRIM_REGISTRIES,
       compress_websocket: COMPRESS_WS,
       trim_resources: TRIM_RESOURCES,
+      trim_extra_modules: TRIM_EXTRA_MODULES,
       trim_services: TRIM_SERVICES,
       // Every option belongs here. This list was hand-maintained and silently fell behind:
       // log_level, trim_repairs and trim_translations were all added without it, so the panel
@@ -2915,6 +3026,10 @@ function statsExtras() {
       // Card types that will NOT render, proven rather than guessed — the file that literally
       // defines them was dropped. `unmetCoverage` says how much of the question is answerable:
       // cards whose bundle builds the element name at runtime cannot be checked at all.
+      // Modules Home Assistant injects into the page itself. `kept` is the important half: those
+      // are the ones this add-on deliberately will not judge, so if a panel has lost a behaviour
+      // the answer is either in `removed` or nowhere in this add-on at all.
+      extraModulesByDashboard: Object.fromEntries(EXTRA_MODULES_BY_DASH),
       unmetByDashboard: Object.fromEntries(RESOURCE_UNMET_BY_DASH),
       unmetCoverage: RESOURCE_UNMET_COVERAGE,
       alwaysForward: RES_ALWAYS.map((r) => r.literal ?? String(r.re)),

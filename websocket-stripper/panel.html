@@ -175,6 +175,22 @@
   </div>
 
   <div class="card">
+    <h2>Modules injected into the page</h2>
+    <div class="scroll"><table id="extramod"><thead>
+      <tr><th>Dashboard</th><th>Removed</th><th>Still loaded</th></tr>
+    </thead><tbody></tbody></table></div>
+    <div class="note">Some integrations add JavaScript to every page through Home Assistant's
+      <code>extra_module_url</code> rather than registering a Lovelace resource, so
+      <code>trim_resources</code> never sees them. With <code>trim_extra_modules</code> on, one is
+      removed only when it is <b>also</b> a registered resource that this dashboard already
+      dropped — the decision the resource trim already made, applied to the channel it was leaking
+      through. <b>Still loaded</b> is the half worth reading: those are modules this app
+      deliberately will not judge, because nothing here knows what an icon pack or a frontend
+      patcher does. If a panel has quietly lost a behaviour, it is either in <b>Removed</b> or it
+      is not this app's doing.</div>
+  </div>
+
+  <div class="card">
     <h2>Clients
       <span class="seg" id="cl-range" role="group" aria-label="Time range">
         <button type="button" data-range="live" class="on">Connected now</button><button
@@ -879,6 +895,12 @@ async function tick() {
   renderClients();
 
   // Kept for the "Since restart" view; the 24h view gets its flows from history.json instead.
+  const em = Object.entries((s.resources && s.resources.extraModulesByDashboard) || {});
+  rows('extramod', em, ([dash, v]) => [
+    dash,
+    (v.removed || []).length ? (v.removed || []).join(', ') : '—',
+    (v.kept || []).length ? (v.kept || []).join(', ') : '—',
+  ]);
   routeNames = (s.paths && s.paths.routeNames) || {};
   liveFlows = (s.paths && s.paths.flows) || [];
   renderPaths();

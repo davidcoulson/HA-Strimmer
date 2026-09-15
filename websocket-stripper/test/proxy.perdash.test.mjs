@@ -1515,3 +1515,99 @@ describe('resource matching: a mention is not a provider', () => {
     } finally { px.kill(); await m2.close(); }
   });
 });
+
+// Modules Home Assistant injects into the page via frontend.add_extra_js_url.
+//
+// These never reach `lovelace/resources`, so trim_resources cannot see them: an integration adds
+// a script import to every page and every dashboard pays for it whatever it renders. Measured on
+// a live instance, 814KB arrived this way, 669KB of it a card the resource trim had already
+// dropped for that dashboard — removed from the resource list and loaded anyway, through the
+// other door.
+describe('trim_extra_modules', () => {
+  // `/res/unrelated-widget.js` is a registered resource that no dashboard references, so the
+  // resource trim drops it. `/res/icon-pack-x.js` is injected but registered nowhere, which is
+  // what an icon pack or a frontend patcher looks like.
+  const CFG = { views: [{ cards: [{ type: 'custom:my-fancy-card', entity: 'light.living_room' }] }] };
+  const MODS = ['/res/my-fancy-card.js', '/res/unrelated-widget.js', '/res/icon-pack-x.js'];
+  const pageOf = async (port) => (await httpGet2(`http://127.0.0.1:${port}/res-dash`)).body;
+
+  const httpGet2 = (url) => new Promise((resolve, reject) => {
+    const req = http.get(url, { headers: { accept: 'text/html' } }, (res) => {
+      let body = ''; res.on('data', (c) => body += c);
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', reject);
+  });
+
+  const boot = async (extraEnv) => {
+    const mock = await startMockHa({ configs: { 'res-dash': CFG }, extraModules: MODS });
+    const port = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: 'res-dash', port,
+      extraEnv: { TRIM_RESOURCES: '1', ...extraEnv } });
+    await px.waitForLog(READY);
+    return { mock, port, px };
+  };
+
+  it('removes an injected module the resource trim already dropped, and nothing else', async () => {
+    const { mock, port, px } = await boot({ TRIM_EXTRA_MODULES: '1' });
+    try {
+      const html = await pageOf(port);
+      assert.ok(!html.includes('/res/unrelated-widget.js'),
+        'a module that is also a dropped resource must go');
+      assert.ok(html.includes('/res/my-fancy-card.js'),
+        'a module that is also a KEPT resource must stay');
+      assert.ok(html.includes('/res/icon-pack-x.js'),
+        'a module that is not a resource at all is not ours to judge — it must stay');
+    } finally { px.kill(); await mock.close(); }
+  });
+
+  it('is off by default', async () => {
+    const { mock, port, px } = await boot({});
+    try {
+      const html = await pageOf(port);
+      for (const m of MODS) assert.ok(html.includes(m), `${m} must survive with the option off`);
+    } finally { px.kill(); await mock.close(); }
+  });
+
+  // The page is the one response that must never be mangled: a broken card is a blank square, a
+  // broken page is a panel that never boots.
+  it('leaves the page byte-identical apart from the removed blocks', async () => {
+    const on = await boot({ TRIM_EXTRA_MODULES: '1' });
+    const off = await boot({});
+    try {
+      const a = await pageOf(on.port), b = await pageOf(off.port);
+      // No leading \s* here: the rewrite removes the block and leaves the surrounding
+      // indentation exactly as Home Assistant wrote it, which is the point — it edits one
+      // statement out, it does not reformat the page.
+      const stripped = b.replace(/import\("\/res\/unrelated-widget\.js"\)\.catch\(function \(err\) \{[\s\S]*?\}\);/, '');
+      assert.equal(a.trim(), stripped.trim(), 'only the one import block may differ');
+      assert.ok(a.startsWith('<!DOCTYPE html>') && a.trimEnd().endsWith('</html>'),
+        'the document must still be a whole document');
+    } finally { on.px.kill(); await on.mock.close(); off.px.kill(); await off.mock.close(); }
+  });
+
+  // The manual lever. An injected module that is registered nowhere is never removed
+  // automatically — nothing here knows what an icon pack or a frontend patcher does — so
+  // `resources_never_forward` is the only way to drop one, and it has to reach these too.
+  it('removes a non-resource module when resources_never_forward names it', async () => {
+    const { mock, port, px } = await boot({ TRIM_EXTRA_MODULES: '1', RESOURCES_NEVER_FORWARD: 'icon-pack-x' });
+    try {
+      const html = await pageOf(port);
+      assert.ok(!html.includes('/res/icon-pack-x.js'),
+        'an explicit never rule must reach an injected module too');
+      assert.ok(html.includes('/res/my-fancy-card.js'), 'and must not touch anything else');
+    } finally { px.kill(); await mock.close(); }
+  });
+
+  // always beats never, the same precedence the resource rules use. This is the only situation in
+  // which the always-list does any work here: a module that is also a dropped resource is already
+  // kept out by the resource decision, so without a never rule to overrule there is nothing to win.
+  it('lets resources_always_forward overrule a never rule', async () => {
+    const { mock, port, px } = await boot({ TRIM_EXTRA_MODULES: '1',
+      RESOURCES_NEVER_FORWARD: 'icon-pack-x', RESOURCES_ALWAYS_FORWARD: 'icon-pack-x' });
+    try {
+      const html = await pageOf(port);
+      assert.ok(html.includes('/res/icon-pack-x.js'), 'always must win over never');
+    } finally { px.kill(); await mock.close(); }
+  });
+});

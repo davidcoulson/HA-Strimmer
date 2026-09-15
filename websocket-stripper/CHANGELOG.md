@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026.09.15.1 — 2026-09-15
+
+**`trim_extra_modules` — the JavaScript integrations inject into every page.**
+
+Some integrations add frontend JavaScript through Home Assistant's `frontend.add_extra_js_url`
+instead of registering a Lovelace resource. Those modules never appear in `lovelace/resources`, so
+`trim_resources` cannot see them: they load on **every** dashboard, whatever it renders.
+
+Measured on the instance this was built against — **814 KB injected this way, of which 669 KB is
+`voice-satellite-card.js`**, a card the resource trim had *already dropped* for that dashboard. It
+was removed from the resource list and loaded anyway, through the other door. On a px30 wall panel
+that is 493 ms of parsing per load for a card that was never on the page.
+
+**The rule adds no new guesswork.** A module is removed only when it is *also* a registered
+Lovelace resource **and** the resource trim dropped it for this dashboard — the decision already
+made, applied to the channel it was leaking through. Icon packs, frontend patchers and anything
+else injected but never registered as a resource are left completely alone, because nothing here
+knows what they do. `resources_never_forward` reaches them for manual removal, and
+`resources_always_forward` overrules it, the same precedence the resource rules use.
+
+Requires `trim_resources`, since that is where the decision comes from. **Off by default.**
+
+**This is the one request the add-on does not stream through.** Editing the page means reading it
+whole, so the dashboard page is served directly instead of proxied, with `Accept-Encoding` dropped
+on the way up so Home Assistant answers in plain text — re-compressing 10 KB would buy a few KB of
+LAN traffic in exchange for a Brotli round trip on every load and a second way to corrupt the one
+response that must not be corrupted. **Every failure path falls back to serving Home Assistant's
+own page untouched**: a fetch failure, a non-HTML answer, a page the pattern does not match, or
+anything thrown. A broken card is a blank square; a broken page is a panel that never boots.
+
+**Reporting, because a removed module fails silently.** `stats.json` gains
+`resources.extraModulesByDashboard`, recording both halves per dashboard — and the panel shows
+them. **Still loaded** is the half worth reading: those are the modules this add-on deliberately
+refuses to judge, so a panel that has quietly lost a behaviour is either explained by *Removed* or
+is not this add-on's doing at all.
+
+---
+
+291 tests. Five written here, each verified by reintroducing the bug it catches. Two were wrong
+first time: the byte-identity check stripped indentation the rewrite deliberately leaves, and the
+`resources_always_forward` test passed against a build with the override deleted, because the
+module it used was already protected by the resource decision — it now tests the only case where
+that line does any work, an always rule overruling a never rule.
+
 ## 2026.09.14.24 — 2026-09-14
 
 **A bundle that merely mentions a card is no longer treated as providing it.**

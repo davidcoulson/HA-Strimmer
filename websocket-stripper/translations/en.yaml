@@ -191,6 +191,22 @@ configuration:
       level of a dashboard: `kiosk_mode:`, `swipe_nav:` and their kind are detected from
       that block, and the resource is kept for every dashboard carrying one. Listing it
       anyway is harmless.
+  trim_extra_modules:
+    name: Trim modules integrations inject into the page
+    description: >-
+      Some integrations add JavaScript to EVERY page through Home Assistant's
+      `frontend.add_extra_js_url`, rather than registering it as a Lovelace resource. Those
+      modules never appear in the resource list, so "Trim Lovelace resources" cannot see them and
+      every dashboard loads them whatever it shows. Measured on one instance: 814KB injected this
+      way, of which 669KB was a card the resource trim had ALREADY decided that dashboard did not
+      need — dropped from the resource list and loaded anyway, through the other door. This closes
+      it. A module is removed only when it is ALSO a registered Lovelace resource AND the resource
+      trim dropped it for that dashboard, so this adds no new guesswork: it applies the decision
+      already made. Icon packs, frontend patchers and anything else injected but never registered
+      as a resource are left completely alone. Needs `trim_resources` on, since that is where the
+      decision comes from. Off by default. To serve an edited page the app must read it rather
+      than stream it, so this is the one request it handles itself — every failure path falls back
+      to serving Home Assistant's own page untouched.
   resources_never_forward:
     name: Never send these resources
     description: >-
