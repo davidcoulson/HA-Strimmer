@@ -838,3 +838,40 @@ describe('config endpoints', () => {
     } finally { proxy.kill(); await mock.close(); }
   });
 });
+
+// The panel is served on its own port as well as through Ingress, and writes are Ingress-only.
+// Without this flag every control renders as editable on the direct port and then fails with a
+// 403 on click — a console that offers an edit it cannot accept.
+describe('config editability is reported per request', () => {
+  it('says a direct request cannot edit, even though the add-on can write', async () => {
+    const mock = await startMockHa();
+    const port = await getFreePort(); const sp = await getFreePort();
+    const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1' } });
+    try {
+      let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+      const deadline = Date.now() + 10000;
+      while (!/for live allowlist updates/.test(out)) {
+        if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const plain = await new Promise((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port: sp, path: '/config.json' }, (res) => {
+          let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve(JSON.parse(b)));
+        }).on('error', reject);
+      });
+      assert.equal(plain.editableHere, false, 'a request without the Ingress header cannot edit');
+
+      // And the same request through Ingress can — otherwise the flag would just be "false"
+      // always, which would disable the editor everywhere and still pass the assertion above.
+      const viaIngress = await new Promise((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port: sp, path: '/config.json',
+          headers: { 'x-ingress-path': '/api/hassio_ingress/abc' } }, (res) => {
+          let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve(JSON.parse(b)));
+        }).on('error', reject);
+      });
+      assert.equal(viaIngress.editableHere, true, 'an Ingress request must be able to edit');
+    } finally { proxy.kill(); await mock.close(); }
+  });
+});

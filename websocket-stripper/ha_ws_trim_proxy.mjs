@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.8';
+const VERSION = '2026.09.15.9';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3196,6 +3196,11 @@ const statsServer = http.createServer((req, res) => {
       // lost on restart, and a console that silently forgets is worse than one that says it is
       // read-only.
       writable: Boolean(CONFIG_DIR),
+      // Whether THIS request could write, as opposed to whether the add-on can write at all.
+      // Writes are Ingress-only, and the panel is also served on its own port — where every
+      // control would otherwise render as editable and then fail with a 403 on click. The page
+      // is told, so it can say "open this through Home Assistant" instead of setting a trap.
+      editableHere: viaIngress(req),
       storePath: CONFIG_DIR ? `${CONFIG_DIR}/config.json` : null,
       // Setup options are listed so the console can show them, greyed, with the reason — rather
       // than leaving someone hunting for a toggle that is deliberately not there.

@@ -995,35 +995,33 @@ async function tick() {
     pill.title = `${k} is ${v ? 'on' : 'off'}`;
     return pill;
   };
-  // Name the exceptions, count the rest.
+  // The trim_* family collapses; everything else keeps its own pill.
   //
-  // A dozen pills wrapped onto a second line and most of them said the same thing. Which half is
-  // worth naming depends on the instance: on a tuned one nearly everything is on, so the single
-  // OFF option is the news; on a fresh install it is the other way round. So whichever set is
-  // smaller gets named and the majority collapses to a count — the line stays short either way,
-  // and it stays short as options are added.
-  const on = bools.filter(([, v]) => v);
-  const off = bools.filter(([, v]) => !v);
-  const [few, many, fewOn] = on.length <= off.length ? [on, off, true] : [off, on, false];
+  // A dozen pills wrapped onto a second line, and most of them were the same answer to the same
+  // question — seven ways of saying "yes, trimming that". Those belong behind one count, where
+  // "6 of 7" says more at a glance than seven pills did. The rest are each a different question
+  // — is it compressing, is it publishing MQTT, is mDNS on — so they stay individually readable.
+  const trims = bools.filter(([k]) => k.startsWith('trim_'));
+  const others = bools.filter(([k]) => !k.startsWith('trim_'));
 
-  if (many.length) {
+  if (trims.length) {
+    const onTrims = trims.filter(([, v]) => v);
+    const offTrims = trims.filter(([, v]) => !v);
+    const all = offTrims.length === 0;
     const count = document.createElement('span');
-    count.className = fewOn ? 'pill' : 'pill on';
+    count.className = all ? 'pill on' : 'pill';
     count.style.cursor = 'pointer';
-    count.textContent = many.length + (fewOn ? ' off' : ' on');
-    count.title = many.map(([k]) => k).join(', ') + '\n(click to list)';
+    // "6 of 7" rather than "6": the missing one is the interesting part, and a bare count gives
+    // no way to tell a fully-trimming instance from one with something switched off.
+    count.textContent = all ? `trimming ${trims.length}` : `trimming ${onTrims.length} of ${trims.length}`;
+    count.title = (all ? 'all on: ' + trims.map(([k]) => k).join(', ')
+      : 'off: ' + offTrims.map(([k]) => k).join(', ')) + '\n(click to list)';
     count.onclick = () => {
-      count.replaceWith(...many.flatMap(([k, v]) => [pillFor(k, v), document.createTextNode(' ')]));
+      count.replaceWith(...trims.flatMap(([k, v]) => [pillFor(k, v), document.createTextNode(' ')]));
     };
     sub.append(count, ' ');
   }
-  // The named ones are the minority, so when they are the OFF set the label says so outright —
-  // a muted pill sitting next to a green count is too easy to misread at a glance.
-  for (const [k, v] of few) {
-    const pill = pillFor(k, v);
-    if (!v) pill.textContent = 'no ' + pill.textContent;
-    sub.append(pill, ' ');
-  }
+  for (const [k, v] of others) sub.append(pillFor(k, v), ' ');
 
   $('savedPct').textContent = (s.savings.savedPct || 0) + '%';
   $('savedAbs').textContent = kb(s.savings.saved) + ' of ' + kb(s.savings.before) + ' not sent';
@@ -1140,6 +1138,12 @@ async function renderConfig() {
     renderConfig();
   };
 
+  // Said once, at the top, rather than repeated down a column of twenty rows.
+  if (d.writable && !d.editableHere) {
+    say('Viewing on the app\'s own port. Changes are only accepted through Home Assistant — '
+      + 'open the panel from the Home Assistant sidebar to edit.');
+  }
+
   rows('cfgtbl', d.options, (o) => [
     o.key,
     o.type === 'bool' ? String(o.value ?? '') : JSON.stringify(o.value ?? null),
@@ -1164,6 +1168,7 @@ async function renderConfig() {
       return;
     }
     if (!d.writable) { actionCell.textContent = 'read-only'; return; }
+    if (!d.editableHere) { actionCell.textContent = 'open in Home Assistant'; return; }
 
     // Changing the value IS taking ownership — there is no separate "manage here" step, because
     // adopting without changing anything does nothing observable (the key is seeded from the
