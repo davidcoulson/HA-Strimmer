@@ -60,11 +60,23 @@
     border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
   .cfgbtn:hover { border-color: var(--accent); }
   .cfgbtn:disabled { opacity: .5; cursor: default; }
-  /* Values are typed as JSON, so the box is monospace and wide enough for a short list without
-     scrolling — an allowlist is the common edit here. */
+  /* Fixed layout, because one value here is arbitrarily long: the structured options serialise to
+     a line of JSON that is wider than the screen, and with the table sizing to its content that
+     one row pushed the source and action columns — and the checkboxes — off the right edge
+     entirely. Columns are declared instead, and an over-long value is clipped with the whole
+     thing on hover. */
+  #cfgtbl { table-layout: fixed; }
+  #cfgtbl th, #cfgtbl td { text-align: left; }
+  #cfgtbl th:nth-child(1), #cfgtbl td:nth-child(1) { width: 30%; }
+  #cfgtbl th:nth-child(2), #cfgtbl td:nth-child(2) {
+    width: 40%; overflow: hidden; text-overflow: ellipsis; }
+  #cfgtbl th:nth-child(3), #cfgtbl td:nth-child(3) { width: 14%; color: var(--muted); font-size: 12px; }
+  #cfgtbl th:nth-child(4), #cfgtbl td:nth-child(4) { width: 16%; }
+  /* Values are typed as JSON, so the box is monospace. It fills its column rather than setting a
+     width of its own — under a fixed layout a min-width would reopen the overflow above. */
   .cfgval { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
-    border-radius: 4px; padding: 2px 6px; min-width: 240px; width: 100%; max-width: 420px; }
+    border-radius: 4px; padding: 2px 6px; width: 100%; min-width: 0; }
   .cfgval:focus { outline: none; border-color: var(--accent); }
   .cfgval:disabled { opacity: .5; }
   /* Route colours. The route is the question the diagram exists to answer — "which entry point
@@ -1141,6 +1153,8 @@ async function renderConfig() {
     if (!o) return;
     const valueCell = tr.cells[1];
     const actionCell = tr.cells[3];
+    // The column clips, so the full value has to stay reachable somehow.
+    if (valueCell.textContent) valueCell.title = valueCell.textContent;
 
     if (!o.editable) {
       actionCell.textContent = o.type === 'objects' ? 'edit in add-on config' : 'setup';

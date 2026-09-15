@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.6';
+const VERSION = '2026.09.15.8';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3183,7 +3183,14 @@ const statsServer = http.createServer((req, res) => {
     // the console can show the whole picture rather than a filtered half of it.
     const keys = [...new Set([
       ...Object.keys(EDITABLE_KEYS), ...BOOTSTRAP_KEYS, ...Object.keys(eff), ...own.managed,
-    ])].sort();
+    ])]
+      // Each port has two spellings and only one of them is in any given config, so listing both
+      // showed two rows per port with the value on whichever row happened to match — and `null`
+      // on the other. The canonical name is listed, carrying the port actually bound; the legacy
+      // alias is still accepted on the way in and still refused for writes, it just isn't a row.
+      .filter((k) => k !== 'port' && k !== 'stats_port')
+      .sort();
+    const resolved = { proxy_port: PORT, mgmt_port: STATS_PORT };
     const body = JSON.stringify({
       // Writable only when the store has somewhere to live. Without /data every save would be
       // lost on restart, and a console that silently forgets is worse than one that says it is
@@ -3195,7 +3202,7 @@ const statsServer = http.createServer((req, res) => {
       bootstrap: [...BOOTSTRAP_KEYS],
       options: keys.map((k) => ({
         key: k,
-        value: eff[k],
+        value: k in resolved ? resolved[k] : eff[k],
         type: EDITABLE_KEYS[k] || null,
         source: own.managed.includes(k) ? 'console' : 'addon',
         // `objects` needs a structured editor the console does not have yet, so it is shown but

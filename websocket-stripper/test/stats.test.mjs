@@ -800,9 +800,20 @@ describe('config endpoints', () => {
         'setup options are named, so the console can explain why they are not editable');
       for (const k of d.bootstrap) {
         const row = d.options.find((o) => o.key === k);
+        // Each port has two spellings; only the canonical one gets a row, because listing both
+        // produced two rows per port with `null` on whichever one the config did not use.
+        if (k === 'port' || k === 'stats_port') {
+          assert.equal(row, undefined, `${k} is an alias and must not get its own row`);
+          continue;
+        }
         assert.ok(row, `${k} must be listed, greyed, rather than silently absent`);
         assert.equal(row.editable, false, `${k} must not be editable`);
       }
+      // And the canonical port rows carry the port actually bound, not whichever option name
+      // happened to be written — that is the whole point of collapsing the two spellings.
+      const mgmt = d.options.find((o) => o.key === 'mgmt_port');
+      assert.equal(mgmt.value, sp, 'mgmt_port must report the port the server is really on');
+      assert.equal(d.options.find((o) => o.key === 'proxy_port').value, port);
       // Structured options are shown but not offered until there is an editor for them.
       assert.equal(d.options.find((o) => o.key === 'user_overrides').editable, false);
     } finally { proxy.kill(); await mock.close(); }
