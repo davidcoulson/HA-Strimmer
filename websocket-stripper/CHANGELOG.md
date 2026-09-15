@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026.09.15.34 — 2026-09-15
+
+**Runtime hardening, now that this runs on Node 26. Nothing here changes what gets trimmed.**
+
+**A restart is no longer an abrupt kill.** The Supervisor stops an add-on with SIGTERM, and this
+app had no handler for it, so Node died where it stood — no exit hooks, no pending writes. Two
+things were being lost that way, neither of which announced itself:
+
+- **Up to five seconds of dashboard hints.** The file that lets a panel keep its dashboard across a
+  restart is written on a debounce, and the pending write was dropped by exactly the restart those
+  hints exist to survive. It is now flushed on the way out.
+- **The compile cache** — see below.
+
+Open websockets are not waited on: panels hold theirs for days, so draining them would just mean
+waiting for the SIGKILL. The listeners close, a second signal exits immediately, and a bounded
+timer ends it either way.
+
+**Compiled bytecode is now cached between runs, and this time it is actually written.** The
+previous build enabled it from inside `ha_ws_trim_proxy.mjs` — which does nothing at all: this is
+an ES module, so every static import is compiled *before* the first statement of the body runs. It
+is now set as `NODE_COMPILE_CACHE` in the Dockerfile, which is read before any of it is compiled,
+and pointed at `/data` rather than Node's default under `/tmp` — a container discards `/tmp` on
+precisely the restart the cache exists to speed up. Measured: in-body call 0 files cached, env var
+2. Both halves are needed, and the test boots the real proxy, stops it with SIGTERM, and looks for
+the files.
+
+**A code error in post-auth setup is now fatal instead of retried forever.** A `ReferenceError`
+there can never succeed on a retry, and retrying it hid it completely: the add-on stayed *up*,
+logged "reconnecting" once a second, and served no allowlist. That reads like a slow Home
+Assistant rather than a crash, which is how it went unnoticed twice in one afternoon. Operational
+failures — Home Assistant restarting mid-build — still retry exactly as before.
+
+**Keep-alive timeouts suit sitting behind a reverse proxy.** Node closes an idle keep-alive
+connection after 5 seconds; nginx holds upstream keep-alives for 60. In that gap nginx can reuse a
+socket Node has just closed and hand back a sporadic 502 that gets blamed on anything but the
+timeout. Both servers now hold for 65s, with `headersTimeout` above that.
+
+**Not done, because it was measured rather than assumed:** raising the V8 young generation
+(`--max-semi-space-size`). On a 10MB registry payload it is a real win — 33 GC pauses and 62ms
+down to 15 and 25ms. But the live payload mix is not that: over 1.7 hours this instance sent a
+~10MB registry **twice**, against 132 translation payloads of ~200KB and 139 repairs payloads of
+~25KB, where the flag does nothing. It would buy ~35ms twice an hour, at the cost of more resident
+memory. Not shipped.
+
+---
+
 ## 2026.09.15.32 — 2026-09-15
 
 **Documentation caught up with the day's changes, and one gap it exposed was closed.**

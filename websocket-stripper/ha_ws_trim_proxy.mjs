@@ -25,6 +25,7 @@
 //   STRIP_ENTITIES (default 1; 0 = passthrough for A/B compare),
 //   ALLOW_WS_URL / ALLOW_TOKEN (override the allowlist-precompute connection).
 
+import module from 'node:module';
 import http from 'node:http';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -39,6 +40,21 @@ import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
 import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
+
+// Compiled bytecode is cached between runs, which is worth having because this add-on restarts
+// far more often than a typical service — every config change, every rebuild — and each restart
+// is a window in which a panel that reconnects before it re-fetches its page falls back to the
+// union allowlist.
+//
+// It is turned on by NODE_COMPILE_CACHE in the Dockerfile rather than by module.enableCompileCache()
+// here, and that is not a style preference. This is an ES module: every static import below is
+// evaluated BEFORE this file's body runs, so a call placed here — anywhere here — happens after
+// the last thing it could have cached, and silently caches nothing. The environment variable is
+// read before any of it is compiled. Measured, not assumed: in-body call 0 files cached, env var
+// 2 (see test/runtime.test.mjs).
+//
+// The other half is in the shutdown handler at the end of this file: Node writes the cache at a
+// normal exit, and the SIGTERM the Supervisor sends is not one.
 
 // ---- config (add-on options.json, overlaid by anything the panel owns) ----
 function loadOptions() {
@@ -59,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.32';
+const VERSION = '2026.09.15.34';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1059,6 +1075,22 @@ function startController() {
               }
             }
           } catch (e) {
+            // A BUG here can never succeed on retry, and retrying it hides it completely.
+            //
+            // This catch exists for the operational case: Home Assistant answered the handshake
+            // and then died mid-build, which a reconnect genuinely fixes. A ReferenceError or
+            // TypeError is a different animal — the code is wrong, every retry fails the same
+            // way, and the add-on sits up with NO allowlist logging "reconnecting" once a second.
+            // That is a silent outage that reads like a slow Home Assistant.
+            //
+            // Measured twice in one afternoon: `id is not defined` and, nearly, `path is not
+            // defined`. Both left a running process serving nothing. The process-level handler
+            // above already draws this line — only network errnos are survivable — so this local
+            // catch just has to stop being more forgiving than the global one.
+            if (e instanceof ReferenceError || e instanceof TypeError || e instanceof SyntaxError) {
+              console.error('fatal: post-auth setup hit a code error, which retrying cannot fix:', e);
+              process.exit(1);
+            }
             // HA answered the handshake but died mid-build (a restart in progress). Drop the
             // socket so onGone() schedules a retry — never leave a half-set-up control ws.
             log('post-auth setup failed:', e.message);
@@ -2486,27 +2518,35 @@ function loadClientDash() {
   }
 }
 
+// Write the hints now, whatever the debounce was waiting for. Returns whether anything was
+// written, which is only of interest to the tests.
+function flushClientDash() {
+  if (!CLIENT_DASH_FILE || !clientDashDirty) return false;
+  clientDashDirty = false;
+  try {
+    const hints = {};
+    for (const [ip, v] of clientDash) hints[ip] = v;
+    const tmp = `${CLIENT_DASH_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, hints }));
+    fs.renameSync(tmp, CLIENT_DASH_FILE);
+    return true;
+  } catch (e) {
+    logThrottled('clientdash-write', `could not write the client hints (${e.message})`);
+    return false;
+  }
+}
+
 // Debounced: a page request writes a hint, and a wall panel reloading its dashboard would
-// otherwise rewrite this file several times a second for no benefit. Losing the last few seconds
-// of hints to a hard kill costs one reload, which is the thing this file exists to avoid needing
-// — but only once, not repeatedly.
+// otherwise rewrite this file several times a second for no benefit. The five seconds that the
+// debounce is holding are flushed on the way out (see the shutdown handler), because the restart
+// that would lose them is the exact event these hints exist to survive.
 function saveClientDashSoon() {
   if (!CLIENT_DASH_FILE) return;
   clientDashDirty = true;
   if (clientDashTimer) return;
   clientDashTimer = setTimeout(() => {
     clientDashTimer = null;
-    if (!clientDashDirty) return;
-    clientDashDirty = false;
-    try {
-      const hints = {};
-      for (const [ip, v] of clientDash) hints[ip] = v;
-      const tmp = `${CLIENT_DASH_FILE}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ version: 1, hints }));
-      fs.renameSync(tmp, CLIENT_DASH_FILE);
-    } catch (e) {
-      logThrottled('clientdash-write', `could not write the client hints (${e.message})`);
-    }
+    flushClientDash();
   }, 5000);
   if (typeof clientDashTimer.unref === 'function') clientDashTimer.unref();
 }
@@ -4159,6 +4199,20 @@ log(`options: by_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compre
 // (host boot, a core update), and core can take minutes to answer — the proxy's job is to
 // wait for it, not to exit. HTTP proxies through immediately (502 while HA is down, like any
 // reverse proxy); /api/websocket is refused until the first allowlist lands, above.
+// Keep-alive timeouts, because this normally sits behind a reverse proxy.
+//
+// Node closes an idle keep-alive connection after 5 seconds. nginx (and Nginx Proxy Manager,
+// which is what fronts this on the instance it was built against) holds upstream keep-alives for
+// 60. In that 55-second gap nginx can pick a socket Node has just closed and hand back a 502 —
+// sporadic, unreproducible, and blamed on everything except the timeout that caused it.
+//
+// The rule is that the upstream's idle timeout must EXCEED the proxy's, and headersTimeout must
+// exceed keepAliveTimeout or Node cuts the request off while still reading its headers.
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+statsServer.keepAliveTimeout = 65000;
+statsServer.headersTimeout = 66000;
+
 server.listen(PORT, () => {
   warn(`HA trim-proxy listening on :${PORT}  ->  ${HA_BASE}`);
   DASH_PATHS.forEach((p) => log(`  open: http://<host>:${PORT}/${p}`));
@@ -4200,3 +4254,44 @@ server.on('error', (e) => {
 startController()
   .then(() => warn(`union allowlist for [${DASH_PATHS.join(', ')}]: ${ALLOW.size} entities (strip_entities=${STRIP})`))
   .catch((e) => { console.error('fatal: cannot start the control connection:', e.message); process.exit(2); });
+
+// ---- shutdown ----
+//
+// The Supervisor stops an add-on with SIGTERM, and Node's default response is to die on the spot:
+// no exit handlers, no pending writes. Everything below exists because a restart is the one event
+// this app has to be good at — it is restarted by every config change and every rebuild, and each
+// restart is a window in which a panel that reconnects before it re-fetches its page falls back to
+// the union allowlist.
+//
+// Two things were being lost to that abrupt exit, and neither announced itself:
+//
+//   * the debounced client hints — up to five seconds of "this panel is on that dashboard",
+//     dropped precisely when the restart that needs them is under way;
+//   * the compile cache — Node writes it from an exit hook, and an unhandled signal runs no exit
+//     hooks, so the cache was never written at all and every boot recompiled from source.
+//
+// Note what fixes the second one: handling the signal and calling process.exit(0), which runs the
+// exit hooks. An explicit module.flushCompileCache() here would be redundant — measured, both
+// ways write the same two files — and worse, it would suggest the flush is what matters rather
+// than the clean exit.
+let shuttingDown = false;
+function shutdown(sig) {
+  // A second signal means the operator is not waiting any longer.
+  if (shuttingDown) process.exit(0);
+  shuttingDown = true;
+  warn(`${sig}: shutting down`);
+
+  if (flushClientDash()) log('  client hints written');
+
+  // Stop taking new work. Open websockets are long-lived by design, so waiting for connections to
+  // drain would just mean waiting for the Supervisor's SIGKILL — the listeners close, the sockets
+  // go with the process.
+  try { server.close(); statsServer.close(); } catch { /* already down */ }
+  if (MDNS_ENABLED) { try { discovery.stop(); } catch { /* already down */ } }
+  if (MQTT_SENSORS) { try { mqttSensors.stop(); } catch { /* already down */ } }
+
+  // Unref'd: if the event loop empties first, exit then instead of sitting out the delay.
+  setTimeout(() => process.exit(0), 250).unref?.();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

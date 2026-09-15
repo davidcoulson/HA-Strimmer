@@ -57,8 +57,14 @@ describe('the persistent client hints', () => {
     const save = src.match(/function saveClientDashSoon\(\) \{[\s\S]*?\n\}/)?.[0];
     assert.ok(save, 'writes must be debounced');
     assert.match(save, /setTimeout/, 'a reloading wall panel must not rewrite this per request');
-    assert.match(save, /\.tmp`/);
-    assert.match(save, /renameSync/,
+
+    // The write itself lives in flushClientDash, so that shutdown can force it without waiting
+    // out the debounce — the restart is the event these hints exist to survive.
+    const flush = src.match(/function flushClientDash\(\) \{[\s\S]*?\n\}/)?.[0];
+    assert.ok(flush, 'the debounced write must be callable on demand');
+    assert.match(save, /flushClientDash\(\)/, 'the timer and the shutdown must share one writer');
+    assert.match(flush, /\.tmp`/);
+    assert.match(flush, /renameSync/,
       'a crash mid-write must not leave a file that fails to parse on the next boot');
   });
 

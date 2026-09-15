@@ -69,6 +69,17 @@ COPY ha_ws_trim_proxy.mjs lovelace_extract.mjs stats.mjs history.mjs route.mjs m
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD p="$(cat /tmp/stats-port 2>/dev/null)"; [ -n "$p" ] && wget -qO- "http://127.0.0.1:$p/stats.json" >/dev/null 2>&1 || exit 1
 
+# Cache compiled bytecode on the persistent volume, so a restart does not recompile the whole
+# app from source. It has to be set here rather than called in the entrypoint: ha_ws_trim_proxy.mjs
+# is an ES module, so its static imports are all evaluated before its first statement — a
+# module.enableCompileCache() call in the source would run after everything it could cache and
+# write nothing at all. This variable is read before any of it is compiled.
+#
+# /data is the add-on's persistent volume; Node's own default sits under /tmp, which the container
+# throws away on the restart this exists to speed up. If the path is unwritable (a standalone run
+# with no volume mounted) Node ignores it and the app starts normally, just without the cache.
+ENV NODE_COMPILE_CACHE=/data/compile-cache
+
 # Deliberately runs as root, like every other HA add-on: Supervisor mounts /data as root, and
 # dropping privileges here would break history persistence for add-on users to buy very little
 # for standalone ones. Standalone users who want it can pass `--user` and mount /data
