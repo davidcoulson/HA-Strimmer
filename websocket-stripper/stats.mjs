@@ -347,6 +347,10 @@ export function snapshot(extra = {}) {
     startedAt: new Date(startedAt).toISOString(),
     generatedAt: new Date(now).toISOString(),
     options: extra.options ?? {},
+    // Which section each option belongs to. Passed through rather than derived here, so this
+    // module stays a pure counter — but it has to be named explicitly, because this object is
+    // built field by field and anything not listed is silently dropped on the way out.
+    optionSections: extra.optionSections ?? {},
     allowlist: extra.allowlist ?? {},
     resources: extra.resources ?? {},
     mdns: extra.mdns ?? null,

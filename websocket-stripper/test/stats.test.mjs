@@ -167,6 +167,14 @@ describe('stats API over HTTP', () => {
     const s = JSON.parse(res.body);
     assert.ok(s.version, 'version is reported');
     assert.equal(s.options.trim_entities, true);
+    // The section map has to SURVIVE to the payload, not merely be built. snapshot() copies named
+    // fields out of the extras object rather than spreading it, so a new field is dropped in
+    // silence — which is exactly what happened to this one: the proxy built it, the panel read
+    // it, and the wire carried nothing. Asserting on the proxy source alone did not catch it.
+    assert.ok(s.optionSections && Object.keys(s.optionSections).length >= 20,
+      'stats.json must carry the option-to-section map');
+    assert.equal(s.optionSections.by_dashboard, 'trim');
+    assert.equal(s.optionSections.mdns_discovery, 'discovery');
     assert.ok(s.allowlist.union > 0, 'the allowlist size is reported');
     assert.ok(Object.keys(s.allowlist.byDashboard).includes('test-dash'));
   });
