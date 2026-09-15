@@ -110,7 +110,60 @@ export function buildRegistryCtx(registries = {}) {
     // not the device's primary function". Home Assistant sets it; we never infer it.
     byDevice.get(e.device_id).push({ id: e.entity_id, cat: e.entity_category || null });
   }
-  return { ent, byDevice };
+
+  // Sub-devices: a device that IS part of another one, folded into its parent's entity list.
+  //
+  // A card handed a device id renders the whole thing. The Bambu print-status card is the
+  // measured case: it is configured with the printer's device id, and then goes looking for the
+  // AMS units and spool — which Home Assistant models as SEPARATE devices linked back to the
+  // printer by `via_device_id`. The card does this itself, in as many words:
+  //
+  //     Object.values(hass.devices).filter((d) => d.via_device_id === printerId)
+  //
+  // Nothing in the dashboard config names those devices, so their entities were never in the
+  // allowlist and their rows were trimmed out of the device registry — and the card rendered
+  // nothing, with no error anywhere.
+  //
+  // `via_device_id` ALONE cannot be the rule. Home Assistant uses it for "routes through", which
+  // covers both sub-units and hubs: measured on the instance this was written against, it makes a
+  // Z-Wave controller the parent of 75 devices carrying 2,870 entities, and a Zigbee2MQTT bridge
+  // the parent of 62 more. Following it blindly would quietly hand a panel the entire Z-Wave
+  // network — the exact opposite of this add-on's job.
+  //
+  // So the rule is via_device_id AND a naming test: the child's name must begin with the
+  // parent's, followed by a separator. That is the convention integrations use when a device is
+  // a PART of another (`H2S_0938AC572400463_AMS_1`), and hubs never match it — their children are
+  // independent things with their own names. Measured across 1,233 devices: every hub scored
+  // zero, and the largest addition to any device was the printer's own 22 entities.
+  //
+  // The entity cap is a backstop for naming schemes this was not measured against, so that no
+  // install can have a device silently explode into a network's worth of entities.
+  const SUB_DEVICE_ENTITY_CAP = 100;
+  const MIN_PARENT_NAME = 3;
+  const devById = new Map(devices.map((d) => [d.id, d]));
+  const nameOf = (d) => String((d && (d.name_by_user || d.name)) || '');
+  const subDevices = new Map();      // parent id -> [child id]
+  for (const d of devices) {
+    const parent = d.via_device_id ? devById.get(d.via_device_id) : null;
+    if (!parent || parent.id === d.id) continue;
+    const pn = nameOf(parent), cn = nameOf(d);
+    if (pn.length < MIN_PARENT_NAME || !cn.startsWith(pn)) continue;
+    // The character after the prefix must be a separator, so a parent called "Office" does not
+    // adopt "Office Building" — only "Office_AMS_1" and its kind.
+    const next = cn.charAt(pn.length);
+    if (next && !/[\s_\-.:#]/.test(next)) continue;
+    if (!subDevices.has(parent.id)) subDevices.set(parent.id, []);
+    subDevices.get(parent.id).push(d.id);
+  }
+  // One level, resolved against the ORIGINAL lists so a fold can never feed another fold.
+  const ownRows = new Map([...byDevice].map(([k, v]) => [k, v]));
+  for (const [parentId, childIds] of subDevices) {
+    const rows = childIds.flatMap((cid) => ownRows.get(cid) || []);
+    if (!rows.length || rows.length > SUB_DEVICE_ENTITY_CAP) continue;
+    byDevice.set(parentId, [...(ownRows.get(parentId) || []), ...rows]);
+  }
+
+  return { ent, byDevice, subDevices };
 }
 
 // Split a device's entities by entity_category. `config` and `diagnostic` are Home Assistant's

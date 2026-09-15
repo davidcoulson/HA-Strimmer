@@ -164,3 +164,105 @@ test('extraction reports which devices a card named', () => {
   const res = extractEntities(view([{ type: 'custom:whisker-card', device_id: DEV }]), [], { registries: CAT_REGS });
   assert.deepEqual(res.devices, [DEV]);
 });
+
+// Sub-devices: a device that is PART of another, folded into its parent's entity list.
+//
+// The measured case is the Bambu print-status card. It is configured with the printer's device
+// id, then looks for the AMS units and spool itself — devices Home Assistant links back to the
+// printer with `via_device_id`. Nothing in the dashboard names them, so their entities never
+// reached the allowlist and their rows were trimmed out of the device registry; the card rendered
+// nothing, with no error on either side.
+const ctxOf = (devices, entities) => buildRegistryCtx({ devices, entities });
+const idsFor = (ctx, id) => (ctx.byDevice.get(id) || []).map((r) => r.id).sort();
+
+test('a device expands to include its named sub-devices', () => {
+  const ctx = ctxOf(
+    [
+      { id: 'p', name: 'H2S_0938AC572400463' },
+      { id: 'a1', name: 'H2S_0938AC572400463_AMS_1', via_device_id: 'p' },
+      { id: 'sp', name: 'H2S_0938AC572400463_ExternalSpool', via_device_id: 'p' },
+    ],
+    [
+      { entity_id: 'sensor.stage', device_id: 'p' },
+      { entity_id: 'sensor.ams_humidity', device_id: 'a1' },
+      { entity_id: 'sensor.spool', device_id: 'sp' },
+    ],
+  );
+  assert.deepEqual(idsFor(ctx, 'p'), ['sensor.ams_humidity', 'sensor.spool', 'sensor.stage']);
+});
+
+// The rule that makes the above safe. `via_device_id` means "routes through", which Home
+// Assistant uses for hubs as well as sub-units: measured on a real instance it makes a Z-Wave
+// controller the parent of 75 devices and 2,870 entities. Following it on its own would hand a
+// wall panel an entire Z-Wave network.
+test('a hub does not adopt the devices that merely route through it', () => {
+  const ctx = ctxOf(
+    [
+      { id: 'hub', name: 'Zigbee2MQTT Bridge' },
+      { id: 'z1', name: 'Kitchen Motion', via_device_id: 'hub' },
+      { id: 'z2', name: 'Hall Motion', via_device_id: 'hub' },
+    ],
+    [
+      { entity_id: 'sensor.bridge_state', device_id: 'hub' },
+      { entity_id: 'binary_sensor.kitchen_motion', device_id: 'z1' },
+      { entity_id: 'binary_sensor.hall_motion', device_id: 'z2' },
+    ],
+  );
+  assert.deepEqual(idsFor(ctx, 'hub'), ['sensor.bridge_state'],
+    'a hub must expand to its own entities only');
+});
+
+// The prefix has to end at a separator, or a device called "Office" adopts everything in the
+// house whose name happens to start with those letters.
+test('the name prefix must end at a separator, not mid-word', () => {
+  const ctx = ctxOf(
+    [
+      { id: 'o', name: 'Office' },
+      { id: 'sub', name: 'Office_Fan', via_device_id: 'o' },
+      { id: 'other', name: 'Officeblock Heater', via_device_id: 'o' },
+    ],
+    [
+      { entity_id: 'sensor.office', device_id: 'o' },
+      { entity_id: 'fan.office_fan', device_id: 'sub' },
+      { entity_id: 'climate.officeblock', device_id: 'other' },
+    ],
+  );
+  assert.deepEqual(idsFor(ctx, 'o'), ['fan.office_fan', 'sensor.office'],
+    'only the separator-delimited sub-device is folded in');
+});
+
+// A backstop for naming schemes this was never measured against: no device may silently become
+// a network's worth of entities, however it is named.
+test('an implausibly large sub-device set is refused rather than folded in', () => {
+  const devices = [{ id: 'p', name: 'Mega' }];
+  const entities = [{ entity_id: 'sensor.mega', device_id: 'p' }];
+  for (let i = 0; i < 40; i++) {
+    devices.push({ id: `c${i}`, name: `Mega_Child_${i}`, via_device_id: 'p' });
+    for (let j = 0; j < 5; j++) entities.push({ entity_id: `sensor.c${i}_${j}`, device_id: `c${i}` });
+  }
+  const ctx = ctxOf(devices, entities);   // 200 child entities, over the cap
+  assert.deepEqual(idsFor(ctx, 'p'), ['sensor.mega'],
+    '200 entities behind one device is a hub by any other name');
+});
+
+// Folding must not cascade: a grandchild is reached through its own parent, not piled onto the
+// top of the tree, or one badly-named level would drag the whole subtree up.
+test('folding is one level deep', () => {
+  const ctx = ctxOf(
+    // Deepest link declared FIRST on purpose. The fold walks parents in the order their first
+    // child is seen, so this arrangement folds the shelf before the rack — which is the only
+    // order in which a cascading implementation actually shows itself.
+    [
+      { id: 'c', name: 'Rack_Shelf_Drive', via_device_id: 'b' },
+      { id: 'b', name: 'Rack_Shelf', via_device_id: 'a' },
+      { id: 'a', name: 'Rack' },
+    ],
+    [
+      { entity_id: 'sensor.rack', device_id: 'a' },
+      { entity_id: 'sensor.shelf', device_id: 'b' },
+      { entity_id: 'sensor.drive', device_id: 'c' },
+    ],
+  );
+  assert.deepEqual(idsFor(ctx, 'a'), ['sensor.rack', 'sensor.shelf']);
+  assert.deepEqual(idsFor(ctx, 'b'), ['sensor.drive', 'sensor.shelf']);
+});
