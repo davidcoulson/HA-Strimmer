@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.17';
+const VERSION = '2026.09.15.18';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -225,18 +225,7 @@ const UA_DASHBOARDS = (() => {
 // auth token, resolved once per session against HA's `auth/current_user`.
 // A list, not a map: a user may have several rules, and each may be scoped to one dashboard.
 // `dashboard` omitted means "any dashboard this user opens".
-const USER_RULES = (() => {
-  const raw = OPT.user_overrides
-    ?? (process.env.USER_OVERRIDES ? JSON.parse(process.env.USER_OVERRIDES) : []);
-  return (Array.isArray(raw) ? raw : [])
-    .filter((o) => o && typeof o.user === 'string')
-    .map((o) => ({
-      user: o.user.toLowerCase(),
-      dashboard: typeof o.dashboard === 'string' && o.dashboard ? o.dashboard : null,
-      always: parseRules(o.always_forward),
-      never: parseRules(o.never_forward),
-    }));
-})();
+// Per-user rules are compiled into CONN_RULES below, alongside every other kind.
 
 // dash -> { always: rules, never: rules }
 const PER_DASH_RULES = new Map(
@@ -268,20 +257,74 @@ const PER_DASH_RULES = new Map(
 // owns. That is deliberately coarser than listing entity ids: a voice satellite integration adds
 // entities between releases, and a rule that has to be re-edited to keep working is a rule that
 // silently stops working.
-const CLIENT_RULES = (() => {
-  const raw = OPT.client_overrides
-    ?? (process.env.CLIENT_OVERRIDES ? JSON.parse(process.env.CLIENT_OVERRIDES) : []);
-  return (Array.isArray(raw) ? raw : [])
-    .filter((o) => o && typeof o.client === 'string' && o.client.trim())
-    .map((o) => ({
-      client: o.client.trim(),
-      devices: toList(o.devices),
-      always: parseRules(o.always_forward),
-      never: parseRules(o.never_forward),
-      // Filled in by resolveClientRules once DNS and the device registry are available.
-      ips: new Set(), cidr: null, deviceEntities: [],
-    }));
+// ---- one rule type, any combination of matchers ----
+//
+// `overrides` is a flat list where every matcher is optional and the ones present must ALL hold.
+// The three older lists are compiled into the same shape at startup, so there is one matcher and
+// one place rules are merged — which is why the existing per-client and per-user tests are
+// exercising this engine rather than a parallel one.
+//
+// A rule is evaluated at the latest moment its matchers are all knowable. Address, User-Agent and
+// the attributed dashboard are known when the socket opens; the USER is not, because identity
+// comes from the auth token in the first frame. So rules are split by that one question — a rule
+// naming a user waits for the auth gate, everything else applies at connect. That split is the
+// only thing the old four-list arrangement was really encoding, and it is the only thing kept.
+function compileOverride(o) {
+  const client = typeof o.client === 'string' && o.client.trim() ? o.client.trim() : null;
+  return {
+    dashboard: typeof o.dashboard === 'string' && o.dashboard ? o.dashboard : null,
+    user: typeof o.user === 'string' && o.user ? o.user.toLowerCase() : null,
+    client,
+    // A UA is matched the same way an entity pattern is: literal substring or /regex/.
+    userAgent: typeof o.user_agent === 'string' && o.user_agent ? parseRules([o.user_agent])[0] : null,
+    devices: toList(o.devices),
+    always: parseRules(o.always_forward),
+    never: parseRules(o.never_forward),
+    // Filled in by resolveConnRules once DNS and the device registry are available.
+    ips: new Set(), cidr: null, deviceEntities: [],
+  };
+}
+
+const CONN_RULES = (() => {
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  const unified = arr(OPT.overrides
+    ?? (process.env.OVERRIDES ? JSON.parse(process.env.OVERRIDES) : []));
+  const legacyClient = arr(OPT.client_overrides
+    ?? (process.env.CLIENT_OVERRIDES ? JSON.parse(process.env.CLIENT_OVERRIDES) : []))
+    .filter((o) => o && typeof o.client === 'string' && o.client.trim());
+  // Per-user rules join the same list. They were separate only because they are evaluated later,
+  // and that timing is now derived from the rule itself rather than from which key it sat under.
+  const legacyUser = arr(OPT.user_overrides
+    ?? (process.env.USER_OVERRIDES ? JSON.parse(process.env.USER_OVERRIDES) : []))
+    .filter((o) => o && typeof o.user === 'string');
+
+  return [...unified, ...legacyClient, ...legacyUser]
+    .filter((o) => o && typeof o === 'object')
+    .map(compileOverride)
+    // A rule with no matcher at all matches every connection, which is what the global
+    // always/never lists already are. Silently applying one everywhere is not a reasonable
+    // reading of a rule someone thought they were scoping, so it is dropped and logged.
+    .filter((r) => {
+      const scoped = r.dashboard || r.user || r.client || r.userAgent;
+      if (!scoped) CONFIG_WARNINGS.push('ignoring an override with no matcher — it would apply to every connection; use always_forward/never_forward for that');
+      return scoped;
+    });
 })();
+
+// Does this rule's non-user half match? Split out because the user half resolves later.
+function matchesConnection(r, ctx) {
+  if (r.dashboard && r.dashboard !== ctx.dash) return false;
+  if (r.client) {
+    if (!ctx.ip) return false;
+    if (!(r.cidr ? r.cidr(ctx.ip) : r.ips.has(ctx.ip))) return false;
+  }
+  if (r.userAgent) {
+    if (!ctx.ua) return false;
+    const hit = r.userAgent.re ? r.userAgent.re.test(ctx.ua) : ctx.ua.includes(r.userAgent.literal);
+    if (!hit) return false;
+  }
+  return true;
+}
 
 // Which entity_category buckets to drop when a DEVICE is expanded — by a card that names one,
 // or by a client rule. Home Assistant labels entities `config` (controls that configure the
@@ -610,7 +653,7 @@ async function buildAllow(rpc, renderTemplate) {
   const registries = await fetchRegistries(rpc);
   // Resolve client-pinned rules here: the device registry has just been fetched, and doing it
   // on every rebuild means a renamed device or a moved DHCP lease is picked up without a restart.
-  await resolveClientRules(registries);
+  await resolveConnRules(registries);
   // And the entity -> its device's entities map that self-identifying clients resolve through.
   REG_CACHE_BY_ENTITY = (() => {
     const byDev = buildRegistryCtx(registries).byDevice;
@@ -1850,8 +1893,8 @@ function parseCidr(s) {
 // Run at allowlist-build time rather than at connect time: a DNS lookup on the hot path would
 // put a network round trip in front of every websocket upgrade, and a failure there would be a
 // failure to serve rather than a logged warning.
-async function resolveClientRules(registries) {
-  if (!CLIENT_RULES.length) return;
+async function resolveConnRules(registries) {
+  if (!CONN_RULES.length) return;
   const devices = registries?.devices || [];
   const entities = registries?.entities || [];
   const byId = new Map(devices.map((d) => [d.id, d]));
@@ -1860,10 +1903,11 @@ async function resolveClientRules(registries) {
     .filter(([n]) => n));
   const entsFor = buildRegistryCtx({ devices, entities }).byDevice;
 
-  for (const r of CLIENT_RULES) {
-    r.cidr = parseCidr(r.client);
+  for (const r of CONN_RULES) {
+    // A rule may match on something other than an address; there is nothing to resolve then.
+    r.cidr = r.client ? parseCidr(r.client) : null;
     r.ips = new Set();
-    if (!r.cidr) {
+    if (r.client && !r.cidr) {
       if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(r.client) || r.client.includes(':')) {
         r.ips.add(normalizeIp(r.client));
       } else {
@@ -1904,9 +1948,11 @@ async function resolveClientRules(registries) {
 
 // Every client rule matching this connection's address, merged. Cheap: a handful of set lookups
 // on a list a user hand-wrote, evaluated once per websocket upgrade.
-function rulesForClient(ip) {
-  if (!ip || !CLIENT_RULES.length) return null;
-  const hits = CLIENT_RULES.filter((r) => (r.cidr ? r.cidr(ip) : r.ips.has(ip)));
+function rulesForConnection(ctx) {
+  if (!CONN_RULES.length) return null;
+  // Rules naming a user are held back for the auth gate; everything they also match on is
+  // re-checked there, so nothing is lost by skipping them here.
+  const hits = CONN_RULES.filter((r) => !r.user && matchesConnection(r, ctx));
   if (!hits.length) return null;
   return {
     always: hits.flatMap((r) => r.always),
@@ -1944,24 +1990,30 @@ function applyClientRules(set, extra) {
 // showing, so we cannot rule anything out. Same asymmetry as everywhere else — a needless gate
 // costs milliseconds, a skipped one serves the wrong allowlist.
 function userRulesCouldApply(dash) {
-  if (!USER_RULES.length) return false;
+  const withUser = CONN_RULES.filter((r) => r.user);
+  if (!withUser.length) return false;
   if (dash === null || dash === undefined) return true;
-  return USER_RULES.some((r) => r.dashboard === null || r.dashboard === dash);
+  return withUser.some((r) => r.dashboard === null || r.dashboard === dash);
 }
 
 // The rules for a resolved user, matched on name (case-insensitive) or id.
 // Every rule matching this user AND this dashboard, merged. Scoping to a dashboard is the
 // point: "David sees update.* on lovelace" should not put 252 entities on a wall panel just
 // because David happens to walk past it.
-function rulesForUser(user, dash) {
-  if (!user || !USER_RULES.length) return null;
+function rulesForUser(user, ctx) {
+  if (!user || !CONN_RULES.length) return null;
   const names = [String(user.name ?? '').toLowerCase(), String(user.id ?? '').toLowerCase()];
-  const hits = USER_RULES.filter((r) => names.includes(r.user)
-    && (r.dashboard === null || r.dashboard === dash));
+  // Every OTHER matcher on the rule is checked here too, which is what lets a rule combine a user
+  // with a dashboard, a device or a client app: the user is simply the last thing to resolve, so
+  // this is the first moment the whole rule can be decided.
+  const hits = CONN_RULES.filter((r) => r.user
+    && names.includes(r.user)
+    && matchesConnection(r, ctx));
   if (!hits.length) return null;
   return {
     always: hits.flatMap((r) => r.always),
     never: hits.flatMap((r) => r.never),
+    entities: hits.flatMap((r) => r.deviceEntities),
   };
 }
 
@@ -1969,6 +2021,9 @@ function rulesForUser(user, dash) {
 // set the dashboard build produced — that is reused by every other connection.
 function applyUserRules(set, extra) {
   const out = new Set(set);
+  // A user rule can now also name whole devices, because it is the same rule type as every other
+  // — so it has to expand them the way the connect-time path does.
+  (extra.entities || []).forEach((eid) => out.add(eid));
   extra.always.forEach((r) => {
     if (r.literal) out.add(r.literal);
     else REAL_IDS.forEach((eid) => { if (r.re.test(eid)) out.add(eid); });
@@ -2246,7 +2301,8 @@ server.on('upgrade', (req, socket, head) => {
     // Client-pinned rules apply on top of whichever dashboard set was chosen, and regardless of
     // whether the dashboard could be attributed at all — the point of pinning to a device is
     // that it holds even when the page changes.
-    let set = applyClientRules(dashSet, rulesForClient(rt.ip));
+    const ruleCtx = { ip: rt.ip, ua: req.headers?.['user-agent'] || null, dash };
+    let set = applyClientRules(dashSet, rulesForConnection(ruleCtx));
     const pinned = set !== dashSet;
     const afterRules = set.size;
     // Entities this client previously told us it needs, by naming itself (see learnClientEntity).
@@ -2382,7 +2438,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       toHA(s);
       gateQueue = [];
       resolveUser(m.access_token).then((user) => {
-        const extra = rulesForUser(user, dash);
+        // Rebuilt from what bridge() was handed rather than captured in the upgrade handler:
+        // the two are different functions, and reaching across cost a silent ReferenceError
+        // inside this promise chain — the widening simply never happened and nothing said so.
+        const extra = rulesForUser(user, { ip: meta.ip, ua: meta.ua ?? null, dash });
         // Log the miss too. A rule that matches nothing is indistinguishable from no rule at
         // all otherwise — and the usual cause is that HA's user NAME ("David Coulson") is not
         // the first name people write in config.
@@ -3240,6 +3299,10 @@ const statsServer = http.createServer((req, res) => {
         value: eff[k] !== undefined ? eff[k] : eff[legacyNameFor(k)],
         type: EDITABLE_KEYS[k] || null,
         section: OPTIONS[k]?.section || null,
+        // What an empty value means, when that is not simply "empty".
+        emptyMeans: OPTIONS[k]?.emptyMeans
+          ? (k === 'mdns_services' ? `the built-in set (${DEFAULT_SERVICES.join(', ')})` : OPTIONS[k].emptyMeans)
+          : null,
         label: OPTIONS[k]?.label || k,
         source: own.managed.includes(k) ? 'console' : 'addon',
         editable: Boolean(EDITABLE_KEYS[k]) && !BOOTSTRAP_KEYS.has(k),
@@ -3418,6 +3481,13 @@ for (const m of CONFIG_WARNINGS) warn(`  config: ${m}`);
   }
 }
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
+// One line for the whole rule set, because 'my override does nothing' is the commonest
+// complaint and the first thing worth knowing is whether it was parsed at all.
+log(`overrides: ${CONN_RULES.length} rule(s)`
+  + (CONN_RULES.length ? ` — ${CONN_RULES.filter((r) => r.user).length} keyed to a user, `
+      + `${CONN_RULES.filter((r) => r.client).length} to a device, `
+      + `${CONN_RULES.filter((r) => r.dashboard).length} to a dashboard, `
+      + `${CONN_RULES.filter((r) => r.userAgent).length} to a client app` : ''));
 log(`options: by_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together
 // (host boot, a core update), and core can take minutes to answer — the proxy's job is to

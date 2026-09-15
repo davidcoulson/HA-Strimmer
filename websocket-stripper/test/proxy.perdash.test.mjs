@@ -1611,3 +1611,60 @@ describe('trim_extra_modules', () => {
     } finally { px.kill(); await mock.close(); }
   });
 });
+
+// Combining matchers on one rule — the thing the four separate lists could not express.
+//
+// "David, but only on the office panel" needs a user AND an address on the same rule. Under the
+// old arrangement those lived in different config keys evaluated at different moments, so the
+// combination simply did not exist; the wizard had to refuse it. Now one rule carries both, and
+// the rule is decided at the later of the two moments — once the auth token resolves.
+//
+// The failure this guards against is silence: a rule that matches too broadly hands entities to
+// someone who should not have them, and a rule that never fires looks identical to a rule that is
+// working. So both halves are asserted, positive and negative.
+describe('one rule, several matchers', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash,auto-dash', port,
+      extraEnv: {
+        OVERRIDES: JSON.stringify([
+          // Both must hold: David, AND connecting from loopback (which every test client is).
+          { user: 'David', client: '127.0.0.1', always_forward: ['/^sensor\\.decoy_/'] },
+          // Same user, but pinned to an address nothing in this test comes from.
+          { user: 'David', client: '10.99.99.99', always_forward: ['light.unreachable_rule'] },
+        ]),
+      },
+    });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  const injectedForToken = async (token) => {
+    await httpGet(`http://127.0.0.1:${port}/test-dash/main`);
+    const seq = mock.subscribeEntitiesSeq();
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, token);
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    const got = await mock.waitForSubscribeEntities(seq);
+    c.close();
+    return new Set(got ?? []);
+  };
+
+  it('applies a rule only when every matcher on it holds', async () => {
+    const david = await injectedForToken('david-token');
+    assert.ok(david.has('sensor.decoy_power'),
+      'user + address both match, so the rule applies');
+    assert.ok(!david.has('light.unreachable_rule'),
+      'the same user from a different address must NOT pick up the other rule');
+  });
+
+  it('does not apply it to a different user from the same address', async () => {
+    const michelle = await injectedForToken('michelle-token');
+    assert.ok(!michelle.has('sensor.decoy_power'),
+      'the address matches but the user does not, so the rule must not apply');
+    assert.ok(michelle.has('light.living_room'), 'and she still gets the dashboard itself');
+  });
+});

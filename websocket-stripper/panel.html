@@ -74,6 +74,23 @@
   .cfgbool input[disabled] { cursor: default; }
   .cfgname { flex: 0 0 210px; color: var(--muted); font-size: 13px; }
   .cfgsummary { flex: 1; color: var(--muted); font-size: 13px; }
+  /* Lists are shown as their items. A JSON array in a text box made "Dashboards to serve" look
+     like a config file fragment rather than the five dashboards it is, and editing it meant
+     getting quoting and commas right by hand for what is really "add one, remove one". */
+  .chips { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px 1px 7px; }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip button { font: inherit; font-size: 13px; line-height: 1; color: var(--muted);
+    background: none; border: 0; padding: 0 2px; cursor: pointer; }
+  .chip button:hover { color: var(--warn); }
+  .chip button:disabled { opacity: .35; cursor: default; }
+  .chip-empty { color: var(--muted); font-size: 13px; font-style: italic; }
+  .chip-add { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; color: var(--fg); background: var(--card); border: 1px dashed var(--line);
+    border-radius: 4px; padding: 2px 6px; min-width: 130px; }
+  .chip-add:focus { outline: none; border-color: var(--accent); border-style: solid; }
   .cfgtag { font-size: 11px; color: var(--accent); border: 1px solid var(--accent);
     border-radius: 999px; padding: 0 7px; white-space: nowrap; }
   /* Overrides. One row per rule, whichever list it lives in, because "which of my rules touches
@@ -1164,6 +1181,11 @@ function drawChart(id, vals, times, colour, fmt, stepped) {
 // configuration — "which rules affect the basement panel" is a question about rules. So the
 // console shows one list and remembers which key each row came from.
 const OVERRIDE_KINDS = {
+  overrides: {
+    label: 'rule',
+    match: (r) => [['dashboard', r.dashboard], ['user', r.user], ['device', r.client],
+      ['client app', r.user_agent]],
+  },
   dashboard_overrides: {
     label: 'dashboard',
     match: (r) => [['dashboard', r.dashboard]],
@@ -1187,13 +1209,31 @@ const OVERRIDE_KINDS = {
 function overrideEffect(kind, r) {
   const bits = [];
   if (kind === 'user_agent_dashboards') {
-    if (r.dashboard) bits.push('serve ' + r.dashboard);
+    if (r.dashboard) bits.push(['serve', [r.dashboard]]);
   } else {
-    if (r.always_forward?.length) bits.push('always ' + r.always_forward.join(', '));
-    if (r.never_forward?.length) bits.push('never ' + r.never_forward.join(', '));
-    if (r.devices?.length) bits.push('devices ' + r.devices.join(', '));
+    if (r.always_forward?.length) bits.push(['forward', r.always_forward]);
+    if (r.never_forward?.length) bits.push(['never forward', r.never_forward]);
+    if (r.devices?.length) bits.push(['devices', r.devices]);
   }
-  return bits.length ? bits.join(' · ') : 'no effect set';
+  return bits;
+}
+
+// Render an effect so the CONFIGURED VALUES are visibly data and the words around them are not.
+// "devices Basement Stairs Panel" read as one English phrase; the panel name is a config element
+// and has to look like one, the same way the match line already marks its values.
+function renderEffect(el, bits) {
+  el.textContent = '';
+  if (!bits.length) { el.textContent = 'no effect set'; return; }
+  bits.forEach(([verb, values], i) => {
+    if (i) el.append(' · ');
+    el.append(verb + ' ');
+    values.forEach((v, j) => {
+      if (j) el.append(', ');
+      const c = document.createElement('code');
+      c.textContent = v;
+      el.append(c);
+    });
+  });
 }
 
 // Flatten the four lists into rows, keeping the key and index so a delete can write the right
@@ -1243,7 +1283,7 @@ function renderOverrides(box, d, save, say) {
 
     const effect = document.createElement('div');
     effect.className = 'ovr-effect';
-    effect.textContent = overrideEffect(row.key, row.rule);
+    renderEffect(effect, overrideEffect(row.key, row.rule));
 
     body.append(match, effect);
 
@@ -1311,41 +1351,34 @@ const MATCHERS = [
   { id: 'user_agent', label: 'Client app', hint: 'part of the User-Agent, e.g. io.robbie.HomeAssistant' },
 ];
 
-// Which config key a set of matchers compiles to, or why it cannot.
+// Every combination is legal now: one `overrides` list holds them all, and the engine decides
+// when a rule can be evaluated from what it matches on rather than from which key it sat under.
+// The only thing still refused is a rule that matches nothing, which is what the global
+// always/never lists already are — and which would quietly apply to every connection.
 function kindFor(picked) {
-  const has = (id) => picked.includes(id);
-  if (has('user_agent')) {
-    if (picked.length > 1) return { error: 'A client-app rule cannot also match on anything else — it is used only when nothing else identifies the connection.' };
-    return { key: 'user_agent_dashboards' };
+  if (!picked.length) {
+    return { error: 'Pick at least one thing to match on. A rule that matches everything is what the global lists above already are.' };
   }
-  if (has('user') && has('client')) {
-    return { error: 'A rule cannot match both a user and a device: the device is known when the socket opens, the user only after the token resolves, and no rule list holds both.' };
-  }
-  if (has('client')) {
-    if (has('dashboard')) return { error: 'A device rule cannot also match a dashboard — device rules apply wherever that device connects.' };
-    return { key: 'client_overrides' };
-  }
-  if (has('user')) return { key: 'user_overrides' };
-  if (has('dashboard')) return { key: 'dashboard_overrides' };
-  return { error: 'Pick at least one thing to match on. A rule that matches everything is what the global lists above already are.' };
+  return { key: 'overrides' };
 }
 
-// Turn the wizard's answers into the shape the chosen list expects.
+// Turn the wizard's answers into a rule for the unified `overrides` list.
+//
+// Only the matchers that were actually filled in are written. An empty string is not the same as
+// an absent matcher: the engine treats a present dashboard as a scope, so `dashboard: ''` would
+// scope the rule to a dashboard that does not exist and it would never fire.
 function buildRule(key, values, effects) {
   const list = (s) => s.split(',').map((x) => x.trim()).filter(Boolean);
-  if (key === 'user_agent_dashboards') {
-    return { match: values.user_agent, dashboard: effects.assume_dashboard };
-  }
   const rule = {};
-  if (key === 'dashboard_overrides') rule.dashboard = values.dashboard;
-  if (key === 'user_overrides') {
-    rule.user = values.user;
-    if (values.dashboard) rule.dashboard = values.dashboard;
+  for (const id of ['dashboard', 'user', 'client', 'user_agent']) {
+    if (values[id]) rule[id] = values[id];
   }
-  if (key === 'client_overrides') rule.client = values.client;
-  rule.always_forward = list(effects.always_forward || '');
-  rule.never_forward = list(effects.never_forward || '');
-  if (key === 'client_overrides') rule.devices = list(effects.devices || '');
+  const always = list(effects.always_forward || '');
+  const never = list(effects.never_forward || '');
+  const devices = list(effects.devices || '');
+  if (always.length) rule.always_forward = always;
+  if (never.length) rule.never_forward = never;
+  if (devices.length) rule.devices = devices;
   return rule;
 }
 
@@ -1441,20 +1474,14 @@ function overrideWizard(d, save, say, addBtn) {
     const sep = document.createElement('div');
     sep.className = 'step';
     sep.style.marginTop = '10px';
-    sep.textContent = key === 'user_agent_dashboards'
-      ? 'Which dashboard should this app be served?'
-      : 'What should it change? Comma-separated; a /regex/ works anywhere a literal does.';
+    sep.textContent = 'What should it change? Comma-separated; a /regex/ works anywhere a literal does.';
     bodyEl.appendChild(sep);
 
-    if (key === 'user_agent_dashboards') {
-      field('Serve dashboard', 'url_path', (v) => { effects.assume_dashboard = v; });
-    } else {
-      field('Always forward', 'sensor.doorbell, /^update\\./', (v) => { effects.always_forward = v; });
-      field('Never forward', 'sensor.noisy_thing', (v) => { effects.never_forward = v; });
-      if (key === 'client_overrides') {
-        field('Whole devices', 'Basement Stairs Panel', (v) => { effects.devices = v; });
-      }
-    }
+    field('Forward', 'sensor.doorbell, /^update\\./', (v) => { effects.always_forward = v; });
+    field('Never forward', 'sensor.noisy_thing', (v) => { effects.never_forward = v; });
+    // Whole devices are offered on every rule, not just device-matched ones: naming a device is
+    // about what to SEND, which is independent of how the connection was identified.
+    field('Whole devices', 'Basement Stairs Panel', (v) => { effects.devices = v; });
 
     actions.append(button('Add override', () => {
       for (const id of picked) {
@@ -1463,9 +1490,7 @@ function overrideWizard(d, save, say, addBtn) {
       const rule = buildRule(key, values, effects);
       // A rule that matches something and changes nothing is a half-finished edit, and it is
       // invisible once saved — it just sits in the list doing nothing.
-      const doesSomething = key === 'user_agent_dashboards'
-        ? Boolean(rule.dashboard)
-        : Boolean(rule.always_forward.length || rule.never_forward.length || rule.devices?.length);
+      const doesSomething = Boolean(rule.always_forward || rule.never_forward || rule.devices);
       if (!doesSomething) return fail('This rule would not change anything — fill in at least one effect.');
 
       const option = d.options.find((o) => o.key === key);
@@ -1476,6 +1501,62 @@ function overrideWizard(d, save, say, addBtn) {
 
   stepMatch();
   return wiz;
+}
+
+// A list option, as its items.
+//
+// Each value is a chip with a remove button, and one empty box adds another. The value is still
+// exactly what it was — a literal or a /regex/ — so the chip is monospace: these are config
+// elements, not prose, and they should not be mistaken for labels the UI chose.
+function chipList(o, d, save, say) {
+  const wrap = document.createElement('div');
+  wrap.className = 'chips';
+  const values = Array.isArray(o.value) ? o.value : [];
+  const canEdit = o.editable && d.writable && d.editableHere;
+
+  // An empty list is not nothing-to-see: for some options it means "the built-in default applies",
+  // which the server tells us. Saying so beats an empty row that reads as broken.
+  if (!values.length) {
+    const empty = document.createElement('span');
+    empty.className = 'chip-empty';
+    empty.textContent = o.emptyMeans || 'empty';
+    wrap.appendChild(empty);
+  }
+
+  values.forEach((v, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    const text = document.createElement('span');
+    text.textContent = String(v);
+    text.title = String(v);
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.title = 'Remove';
+    x.disabled = !canEdit;
+    x.onclick = () => { x.disabled = true; save(o, 'adopt', values.filter((_, j) => j !== i)); };
+    chip.append(text, x);
+    wrap.appendChild(chip);
+  });
+
+  if (canEdit) {
+    const add = document.createElement('input');
+    add.type = 'text';
+    add.className = 'chip-add';
+    add.placeholder = '+ add';
+    const commit = () => {
+      const v = add.value.trim();
+      if (!v) return;
+      if (values.includes(v)) { add.value = ''; return say(o.label + ': already in the list'); }
+      add.disabled = true;
+      save(o, 'adopt', [...values, v]);
+    };
+    // Enter commits; blur does too, so a value typed and clicked away from is not lost silently.
+    add.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+    add.onblur = commit;
+    wrap.appendChild(add);
+  }
+  return wrap;
 }
 
 // One option, drawn according to its type.
@@ -1510,7 +1591,9 @@ function configRow(o, d, save, say) {
     label.title = o.key;
     row.appendChild(label);
 
-    if (o.type === 'objects') {
+    if (o.type === 'list') {
+      row.appendChild(chipList(o, d, save, say));
+    } else if (o.type === 'objects') {
       // The structured lists get their own editor; until then say how many rules are set rather
       // than printing a line of JSON nobody can act on.
       const n = Array.isArray(o.value) ? o.value.length : 0;

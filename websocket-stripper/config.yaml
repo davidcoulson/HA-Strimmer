@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.15.17"
+version: "2026.09.15.18"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -95,6 +95,11 @@ options:
   # suit something every dashboard needs; they are wrong for something ONE dashboard needs,
   # because the cost lands on every panel. Example: the admin dashboard wants update.* for a
   # pending-updates counter, and a 4-card wall panel should not pay 252 entities for it.
+  # One list for every override rule. Every matcher is optional and the ones you set must ALL
+  # hold, so a rule can pin entities to one user on one dashboard, or to one device running a
+  # particular app. The older per-dashboard/per-user/per-device lists still work and are read
+  # into this same list at startup.
+  overrides: []
   dashboard_overrides: []
   client_overrides: []
   exclude_device_categories: []
@@ -146,6 +151,17 @@ schema:
   trim_repairs: "bool?"
   trim_themes: "bool?"
   trim_translations: "bool?"
+  overrides:
+    - dashboard: str?
+      user: str?
+      client: str?
+      user_agent: str?
+      devices:
+        - str?
+      always_forward:
+        - str?
+      never_forward:
+        - str?
   user_agent_dashboards:
     - match: str
       dashboard: str

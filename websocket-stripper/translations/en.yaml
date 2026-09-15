@@ -105,6 +105,18 @@ configuration:
       repair notifications there. The list is emptied rather than withheld — the frontend asks for
       it and waits for an answer, so it gets a valid "nothing to report" instead of a request that
       never completes.
+  overrides:
+    name: Override rules
+    description: >-
+      One list for every override rule. Each rule may match on a dashboard, a Home Assistant
+      user, a device (IP, CIDR or hostname) and a client app (part of its User-Agent); the
+      matchers you set must ALL hold, so "David, on lovelace, from the office panel" is one
+      rule. It then applies always_forward, never_forward and devices the same way the older
+      lists do. A rule naming a user is applied once the auth token resolves, which is the
+      first moment the whole rule can be decided; everything else applies when the socket
+      opens. A rule with no matcher at all is ignored and logged — that is what the global
+      always/never lists already are. Easiest to build from the Config tab in the app's own
+      panel, which knows which combinations can be evaluated.
   user_agent_dashboards:
     name: Dashboard by client app (fallback)
     description: >-

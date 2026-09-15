@@ -41,61 +41,48 @@ function load() {
 describe('the override wizard', () => {
   const { MATCHERS, kindFor, buildRule } = load();
 
-  it('sends each matcher combination to the list that can actually evaluate it', () => {
-    assert.equal(kindFor(['dashboard']).key, 'dashboard_overrides');
-    assert.equal(kindFor(['user']).key, 'user_overrides');
-    assert.equal(kindFor(['user', 'dashboard']).key, 'user_overrides',
-      'a user rule may be scoped to one dashboard');
-    assert.equal(kindFor(['client']).key, 'client_overrides');
-    assert.equal(kindFor(['user_agent']).key, 'user_agent_dashboards');
+  it('sends every combination to the one overrides list', () => {
+    // There is one list now, and the engine works out when a rule can be evaluated from what it
+    // matches on. The combinations that used to be refused are the whole point of the change.
+    for (const picked of [['dashboard'], ['user'], ['client'], ['user_agent'],
+      ['user', 'dashboard'], ['user', 'client'], ['client', 'dashboard'],
+      ['user', 'client', 'dashboard', 'user_agent']]) {
+      const k = kindFor(picked);
+      assert.equal(k.error, undefined, `${picked.join('+')} must be allowed`);
+      assert.equal(k.key, 'overrides');
+    }
   });
 
-  it('refuses combinations no rule list can hold, and says why', () => {
-    // The device is known when the socket opens; the user only once the token resolves. Nothing
-    // evaluates both, so a rule asking for both would simply never fire.
-    const both = kindFor(['user', 'client']);
-    assert.ok(both.error, 'user + device must be refused');
-    assert.match(both.error, /user|device/i);
-    assert.equal(both.key, undefined, 'a refused combination must not also name a key');
-
-    const scopedDevice = kindFor(['client', 'dashboard']);
-    assert.ok(scopedDevice.error, 'device + dashboard must be refused');
-
-    const uaPlus = kindFor(['user_agent', 'dashboard']);
-    assert.ok(uaPlus.error, 'a client-app rule cannot be combined');
-
+  it('still refuses a rule that matches nothing', () => {
+    // A rule with no matcher applies to every connection, which is what the global always/never
+    // lists already are — and it would do it silently, under a name that says "override".
     const nothing = kindFor([]);
     assert.ok(nothing.error, 'matching nothing must be refused');
+    assert.equal(nothing.key, undefined, 'a refused rule must not also name a key');
   });
 
-  it('builds a rule in the shape its list expects', () => {
-    const dash = buildRule('dashboard_overrides', { dashboard: 'kitchen' },
-      { always_forward: 'sensor.a, /^update\\./', never_forward: '' });
-    assert.equal(dash.dashboard, 'kitchen');
-    assert.deepEqual(plain(dash.always_forward), ['sensor.a', '/^update\\./'],
+  it('writes only the matchers and effects that were filled in', () => {
+    const rule = buildRule('overrides',
+      { user: 'David Coulson', client: '10.2.4.109' },
+      { always_forward: 'sensor.a, /^update\\./', never_forward: '', devices: '' });
+    assert.equal(rule.user, 'David Coulson');
+    assert.equal(rule.client, '10.2.4.109');
+    assert.deepEqual(plain(rule.always_forward), ['sensor.a', '/^update\\./'],
       'a comma-separated list is split and trimmed, and a regex survives it');
-    assert.deepEqual(plain(dash.never_forward), []);
 
-    const user = buildRule('user_overrides', { user: 'David Coulson', dashboard: 'lovelace' },
-      { always_forward: '/^update\\./' });
-    assert.equal(user.user, 'David Coulson');
-    assert.equal(user.dashboard, 'lovelace');
+    // An empty string is NOT the same as an absent matcher: the engine treats a present dashboard
+    // as a scope, so `dashboard: ''` would scope the rule to a dashboard that does not exist and
+    // the rule would never fire. Same for an empty effect list, which would read as "forward
+    // nothing" rather than "no forward rule".
+    assert.ok(!('dashboard' in rule), 'an unset matcher must be omitted entirely');
+    assert.ok(!('user_agent' in rule), 'an unset matcher must be omitted entirely');
+    assert.ok(!('never_forward' in rule), 'an empty effect must be omitted entirely');
+    assert.ok(!('devices' in rule), 'an empty effect must be omitted entirely');
 
-    // A user rule with no dashboard must not carry an empty one: the engine treats a present
-    // dashboard as a scope, so `dashboard: ''` would scope the rule to a dashboard that does
-    // not exist and the rule would never apply.
-    const anywhere = buildRule('user_overrides', { user: 'David Coulson' }, { always_forward: 'x' });
-    assert.ok(!('dashboard' in anywhere), 'an unscoped user rule must omit dashboard entirely');
-
-    const client = buildRule('client_overrides', { client: '10.2.4.0/24' },
+    const devices = buildRule('overrides', { client: '10.2.4.0/24' },
       { devices: 'Basement Stairs Panel, Test Panel' });
-    assert.equal(client.client, '10.2.4.0/24');
-    assert.deepEqual(plain(client.devices), ['Basement Stairs Panel', 'Test Panel']);
-
-    const ua = buildRule('user_agent_dashboards', { user_agent: 'io.robbie.HomeAssistant' },
-      { assume_dashboard: 'lovelace' });
-    assert.deepEqual(plain(ua), { match: 'io.robbie.HomeAssistant', dashboard: 'lovelace' },
-      'the client-app list uses match/dashboard, not the always/never shape');
+    assert.deepEqual(plain(devices.devices), ['Basement Stairs Panel', 'Test Panel'],
+      'whole devices may be named on any rule, not only a device-matched one');
   });
 
   it('offers a matcher for each thing a rule list can key on', () => {

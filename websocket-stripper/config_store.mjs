@@ -116,6 +116,7 @@ export const OPTIONS = {
   resources_never_forward: { type: 'list', section: 'resources', label: 'Never send these resources' },
 
   // Overrides
+  overrides: { type: 'objects', section: 'overrides', label: 'Override rules' },
   dashboard_overrides: { type: 'objects', section: 'overrides', label: 'Per-dashboard rules' },
   user_overrides: { type: 'objects', section: 'overrides', label: 'Per-user rules' },
   client_overrides: { type: 'objects', section: 'overrides', label: 'Per-device rules' },
@@ -123,7 +124,11 @@ export const OPTIONS = {
 
   // Discovery
   mdns_discovery: { type: 'bool', section: 'discovery', label: 'Identify devices via mDNS' },
-  mdns_services: { type: 'list', section: 'discovery', label: 'mDNS service types to look for' },
+  // `emptyMeans` is what an EMPTY list actually does. For most options empty means empty, but
+  // here it means "use the built-in set" — and an empty row reads as "nothing is being looked
+  // for", which is the opposite of the truth.
+  mdns_services: { type: 'list', section: 'discovery', label: 'mDNS service types to look for',
+    emptyMeans: 'the built-in set' },
 
   // Monitoring
   mqtt_sensors: { type: 'bool', section: 'monitoring', label: 'Publish metrics over MQTT' },
