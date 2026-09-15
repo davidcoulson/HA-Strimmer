@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026.09.15.21 — 2026-09-15
+
+**A panel can ask what the trimmer is doing for it.**
+
+`GET /stripper/client.json` on the proxy port. It exists so a panel — ha-paneld, Kiosk Satellite —
+can render an admin screen saying whether the trimmer is in front of it, what it is cutting, and
+what that is worth on its own connection.
+
+**Reaching it is the detection.** The path is served by the proxy and never forwarded, so a `200`
+means the Stripper is running *and in the path* for that client, and a `404` means the client is
+talking to Home Assistant directly. Both halves of "is it running", answered by arriving.
+
+**Nothing is added to dashboard loads.** A header was considered and rejected: it would put bytes
+on the response every panel fetches on every boot, to carry a snapshot taken *before the websocket
+exists*, for a screen that is read occasionally. This is a pull, so it costs nothing until someone
+opens the screen — and it returns live numbers rather than boot-time ones.
+
+**A panel sees itself, not the estate.** The proxy port is reachable by anything on the network
+and has no authentication in front of it, so every field is something that network may read:
+booleans for what is trimmed, and the caller's own figures — dashboard, entities served, first
+payload timing, bytes not sent. It never returns override rules, allowlist contents, entity ids,
+Home Assistant user identities, or any other client's data, and there is **no way to name a
+different subject** — otherwise any device could enumerate every panel from an unauthenticated
+port. Both leaks are covered by tests that fail if reintroduced.
+
+Advisory only: render it, do not gate behaviour on it, and do not relay it off the local network.
+
+`docs/CLIENT-API.md` documents the shape; a field-by-field integration guide is available for
+client developers.
+
+---
+
 ## 2026.09.15.20 — 2026-09-15
 
 **Configuration moved into the app's own panel, and override rules became one thing.**
