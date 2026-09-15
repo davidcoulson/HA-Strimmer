@@ -85,6 +85,16 @@
   th.sortable.up::after { content: '↑'; opacity: 1; color: var(--accent); }
   th.sortable.down::after { content: '↓'; opacity: 1; color: var(--accent); }
   th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Tab bar. Sticky, because the panel is long and losing the tabs on scroll is the one thing
+     that makes tabs worse than a single page. */
+  .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; flex-wrap: wrap;
+    background: var(--bg); padding: 8px 0 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .tabs button { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0;
+    border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer; }
+  .tabs button:hover { color: var(--fg); }
+  .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .card[hidden] { display: none; }
   .err { color: var(--warn); }
   a { color: var(--accent); }
   .chart { margin-bottom: 14px; }
@@ -96,7 +106,14 @@
   <h1><span class="dot"></span>WebSocket Stripper</h1>
   <div class="sub" id="sub">loading…</div>
 
-  <div class="card">
+  <nav class="tabs" id="tabs" role="tablist">
+    <button type="button" data-tab="overview" class="on">Overview</button><button
+      type="button" data-tab="clients">Clients</button><button
+      type="button" data-tab="traffic">Traffic</button><button
+      type="button" data-tab="entities">Entities</button>
+  </nav>
+
+  <div class="card" data-tab="overview">
     <div class="grid">
       <div><div class="label">Saved on page loads</div><div class="big good" id="savedPct">—</div><div class="label" id="savedAbs">&nbsp;</div></div>
       <div><div class="label">Clients connected</div><div class="big" id="clients">—</div><div class="label" id="clientsTotal">&nbsp;</div></div>
@@ -105,7 +122,7 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="overview">
     <h2>What got trimmed</h2>
     <div class="scroll"><table id="cats"><thead>
       <tr><th>Payload</th><th>Times</th><th>Home Assistant sent</th><th>Browser got</th><th>Saved</th><th>%</th></tr>
@@ -115,7 +132,7 @@
       this actually cross the wire.</div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="overview">
     <h2>Last 24 hours <span id="histSpan" class="label" style="text-transform:none;letter-spacing:0"></span></h2>
     <div id="histEmpty" class="note">Collecting. One sample is taken at startup and every five
       minutes after; the charts draw once there are two, so about five minutes from a restart.</div>
@@ -134,7 +151,7 @@
       running.</div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="traffic">
     <h2>What's actually flowing</h2>
     <div class="scroll"><table id="msgs"><thead>
       <tr><th>Message kind</th><th>Count</th><th>Bytes</th><th>Share</th></tr>
@@ -145,14 +162,14 @@
       here rather than hiding in a total.</div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="clients">
     <h2>Dashboards</h2>
     <div class="scroll"><table id="dash"><thead>
       <tr><th>Dashboard</th><th>Entities</th><th>of instance</th><th>Resources kept</th><th>Resource KB kept</th><th>KB dropped</th></tr>
     </thead><tbody></tbody></table></div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="entities">
     <h2>Find a missing entity</h2>
     <div class="note">If a card is blank or a value never updates, the entity it needs is probably
       not in this dashboard's allowlist — the app only sends what it can see a dashboard
@@ -174,7 +191,7 @@
     <div id="ent-msg" class="note" style="display:none"></div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="traffic">
     <h2>Modules injected into the page</h2>
     <div class="scroll"><table id="extramod"><thead>
       <tr><th>Dashboard</th><th>Removed</th><th>Still loaded</th></tr>
@@ -190,7 +207,7 @@
       is not this app's doing.</div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="clients">
     <h2>Clients
       <span class="seg" id="cl-range" role="group" aria-label="Time range">
         <button type="button" data-range="live" class="on">Connected now</button><button
@@ -217,6 +234,9 @@
       the kernel socket buffer, not received by the device: a 215&nbsp;KB payload "drained" in
       6&nbsp;ms over cellular, which is far faster than any real transfer. Neither number is a
       round trip, and neither should be quoted as a speed.</div>
+  </div>
+
+  <div class="card" data-tab="traffic">
     <h2 id="http-h">HTTP requests</h2>
     <div class="note">Kept apart from the app log on purpose. A busy panel makes hundreds of
       requests a minute, and mixing those into the service log buries the one line that explains
@@ -253,7 +273,7 @@
       <code>strip_entities</code> off if you want the A/B.</div>
   </div>
 
-  <div class="card">
+  <div class="card" data-tab="clients">
     <h2>How clients reach this
       <span class="seg" id="paths-range" role="group" aria-label="Time range">
         <button type="button" data-range="live" class="on">Since restart</button><button
@@ -286,6 +306,27 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+
+// Tabs. The panel outgrew a single scroll: ten cards, and the ones people open it for — is it
+// working, what is it saving — were being pushed below the diagnostics. Selection is remembered,
+// because a panel on a wall gets reloaded constantly and landing back on Overview every time
+// would make the other tabs effectively unreachable.
+function showTab(name) {
+  for (const c of document.querySelectorAll('.card[data-tab]')) c.hidden = c.dataset.tab !== name;
+  for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.tab === name);
+  try { localStorage.setItem('stripper-tab', name); } catch { /* private mode */ }
+}
+$('tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]');
+  if (b) showTab(b.dataset.tab);
+});
+// An unknown or missing stored value must land somewhere real, not on a blank page.
+{
+  let want = 'overview';
+  try { want = localStorage.getItem('stripper-tab') || 'overview'; } catch { /* ignore */ }
+  if (!document.querySelector(`.card[data-tab="${want}"]`)) want = 'overview';
+  showTab(want);
+}
 const kb = (b) => (b == null ? '—' : b < 1024 ? b + ' B'
   : b < 1024 * 1024 ? (b / 1024).toFixed(0) + ' KB'
   : (b / 1024 / 1024).toFixed(1) + ' MB');
