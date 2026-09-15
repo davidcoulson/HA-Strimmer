@@ -983,21 +983,34 @@ async function tick() {
     pill.title = `${k} is ${v ? 'on' : 'off'}`;
     return pill;
   };
+  // Name the exceptions, count the rest.
+  //
+  // A dozen pills wrapped onto a second line and most of them said the same thing. Which half is
+  // worth naming depends on the instance: on a tuned one nearly everything is on, so the single
+  // OFF option is the news; on a fresh install it is the other way round. So whichever set is
+  // smaller gets named and the majority collapses to a count — the line stays short either way,
+  // and it stays short as options are added.
   const on = bools.filter(([, v]) => v);
   const off = bools.filter(([, v]) => !v);
-  for (const [k, v] of on) sub.append(pillFor(k, v), ' ');
-  // The off ones are the untouched defaults — a dozen pills of "not doing this" crowded out the
-  // line that says what IS on. Collapsed to a count, one click away, with the names on hover.
-  if (off.length) {
-    const more = document.createElement('span');
-    more.className = 'pill';
-    more.style.cursor = 'pointer';
-    more.textContent = '+' + off.length + ' off';
-    more.title = off.map(([k]) => k).join(', ');
-    more.onclick = () => {
-      more.replaceWith(...off.flatMap(([k, v]) => [pillFor(k, v), document.createTextNode(' ')]));
+  const [few, many, fewOn] = on.length <= off.length ? [on, off, true] : [off, on, false];
+
+  if (many.length) {
+    const count = document.createElement('span');
+    count.className = fewOn ? 'pill' : 'pill on';
+    count.style.cursor = 'pointer';
+    count.textContent = many.length + (fewOn ? ' off' : ' on');
+    count.title = many.map(([k]) => k).join(', ') + '\n(click to list)';
+    count.onclick = () => {
+      count.replaceWith(...many.flatMap(([k, v]) => [pillFor(k, v), document.createTextNode(' ')]));
     };
-    sub.append(more);
+    sub.append(count, ' ');
+  }
+  // The named ones are the minority, so when they are the OFF set the label says so outright —
+  // a muted pill sitting next to a green count is too easy to misread at a glance.
+  for (const [k, v] of few) {
+    const pill = pillFor(k, v);
+    if (!v) pill.textContent = 'no ' + pill.textContent;
+    sub.append(pill, ' ');
   }
 
   $('savedPct').textContent = (s.savings.savedPct || 0) + '%';
