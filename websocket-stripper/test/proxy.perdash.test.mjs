@@ -1299,3 +1299,94 @@ describe('a connection is not delayed by work that cannot change its answer', ()
       + `— took only ${ms}ms`);
   });
 });
+
+// Modules that render nothing, found by the config block they read.
+//
+// This is the failure `resources_always_forward` existed to paper over. A dashboard carrying
+// `kiosk_mode:` at its top level is unambiguously asking for kiosk-mode.js — but `kiosk_mode` is
+// a KEY, its values are booleans, and the card walk only ever inspects VALUES shaped like
+// `custom:x`. The evidence was in the config all along, in a place nothing looked.
+describe('resources for modules that register no card', () => {
+  // Compared on PATH, not full URL: the mock appends a HACS-style `?hacstag=` cache-buster, and
+  // a resource's identity is its path — the same rule the proxy itself applies.
+  const resourcesFor = async (p, pageUrl) => {
+    if (pageUrl) await httpGet(`http://127.0.0.1:${p}${pageUrl}`);
+    const c = haClient(`ws://127.0.0.1:${p}/api/websocket`);
+    await c.authed;
+    const rows = (await c.rpc({ type: 'lovelace/resources' })).result;
+    c.close();
+    return rows.map((r) => String(r.url).split('?')[0]);
+  };
+
+  // Shaped exactly like a real one: a module block beside `title` and `views`, whose values are
+  // booleans and nested keys — nothing a value-walk can see.
+  const CFG = {
+    title: 'Home',
+    global_patcher: { mobile_settings: { hide_header: true, hide_sidebar: false } },
+    views: [{ cards: [{ type: 'custom:my-fancy-card', entity: 'light.living_room' }] }],
+  };
+
+  it('keeps the module its top-level config block names, with nothing pinned', async () => {
+    const m2 = await startMockHa({ configs: { 'mod-dash': CFG } });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'mod-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const urls = await resourcesFor(p2, '/mod-dash');
+      assert.ok(urls.includes('/res/global-patcher.js'),
+        'a module named by its own config block must survive without resources_always_forward');
+      // The point is a NARROWER miss, not a wider net: everything else must still go.
+      assert.ok(!urls.includes('/res/unrelated-widget.js'),
+        'detecting module blocks must not turn into keeping everything');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // A config block is not a card, and must never be counted as one. The proxy reports the card
+  // types each dashboard needs, warns about those whose file was dropped, and lists those it
+  // cannot verify — a module name leaking into that set would produce warnings about something
+  // that was never going to render, which is the class of never-true warning already shipped and
+  // withdrawn once here.
+  it('never counts the config block as a card type', async () => {
+    const m2 = await startMockHa({ configs: { 'mod-dash': CFG } });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'mod-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const needs = /resources mod-dash needs: (.*)/.exec(px.out);
+      assert.ok(needs, `expected a "needs" line:\n${px.out}`);
+      assert.match(needs[1], /my-fancy-card/, 'the real card type is still listed');
+      assert.doesNotMatch(needs[1], /global[_-]patcher/,
+        'a module config block is not a card type and must not be reported as one');
+      assert.doesNotMatch(px.out, /will NOT render[^\n]*global[_-]patcher/,
+        'and must never produce an unrenderable-card warning');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // The guard that keeps this from becoming the "everything matches everything" bug: only keys
+  // Home Assistant does not define itself are treated as module names. `title` and `views` occur
+  // on every dashboard, and as substrings in most bundles.
+  // The guard that stops this becoming the "everything matches everything" bug. `title` and
+  // `views` sit on every dashboard and occur as substrings in plenty of bundles, so treating
+  // every top-level key as a module name would keep those bundles on every install — the same
+  // silent disabling of the trim that the MIN_KEY and fragment-frequency rules exist to prevent.
+  // The bundle here contains both words, so a missing skip-list keeps it.
+  it('ignores the dashboard keys Home Assistant defines itself', async () => {
+    const m2 = await startMockHa({
+      configs: { 'plain-dash': { title: 'x', views: [{ cards: [{ type: 'custom:my-fancy-card', entity: 'light.living_room' }] }] } },
+      resources: [
+        { id: 'r1', type: 'module', url: '/res/my-fancy-card.js' },
+        { id: 'r2', type: 'module', url: '/res/decoy.js' },
+      ],
+      resourceBodies: { '/res/decoy.js': 'const a="title";const b="views";const c="config";' },
+    });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'plain-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const urls = await resourcesFor(p2, '/plain-dash');
+      assert.ok(urls.includes('/res/my-fancy-card.js'), 'the real card still survives');
+      assert.ok(!urls.includes('/res/decoy.js'),
+        'a bundle containing only Home Assistant\'s own dashboard keys must not be kept');
+    } finally { px.kill(); await m2.close(); }
+  });
+});

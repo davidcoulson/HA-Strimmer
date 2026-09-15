@@ -50,7 +50,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.14.20';
+const VERSION = '2026.09.14.21';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1261,9 +1261,19 @@ let ALL_ENTITIES = [];
 // in every minified bundle ever written, so every resource "matches" and nothing is dropped.
 // Observed exactly that: 45 resources, 39 kept, 97KB saved instead of 18MB.
 const MIN_KEY = 3;
+
+// The top-level keys Home Assistant itself defines on a dashboard config. Anything else at that
+// level was put there by a frontend MODULE to configure itself — that is the established
+// convention, and it is how kiosk-mode, swipe-navigation and their kind are set up.
+const KNOWN_DASH_KEYS = new Set([
+  'title', 'views', 'background', 'strategy', 'template', 'config', 'theme', 'max_columns',
+]);
+
 function resourceKeys(cfg, allowed = null, byId = null) {
   const cards = new Set();      // custom card/row/badge/feature types
   const icons = new Set();      // non-builtin icon namespaces
+  // Resident modules named by their own config block — see collectModules below.
+  const modules = new Set();
   const addIcon = (ns) => { if (ns.length >= MIN_KEY && !BUILTIN_ICON_NS.has(ns)) icons.add(ns); };
   // Icons of the entities this dashboard actually shows, which are typically registry
   // values rather than anything written in the config.
@@ -1283,7 +1293,37 @@ function resourceKeys(cfg, allowed = null, byId = null) {
     const ic = n.match(/^([a-z][a-z0-9_]{2,15}):([a-z][a-z0-9-]*)$/);
     if (ic) addIcon(ic[1]);
   })(cfg);
-  return { cards, icons };
+
+  // Modules that render no card, found by the config block they read.
+  //
+  // The walk above only ever looks at VALUES, and only at ones shaped like `custom:x` — which is
+  // right for cards, and blind to everything that runs on page load instead of rendering. A
+  // dashboard with `kiosk_mode:` at its top level is unambiguously asking for kiosk-mode.js, but
+  // `kiosk_mode` is a KEY, and its values are booleans, so nothing in the walk ever sees it. That
+  // is why such modules had to be listed in `resources_always_forward` by hand: not because the
+  // evidence was missing from the config, but because it was in a place nothing looked.
+  //
+  // TOP LEVEL ONLY, and only keys Home Assistant does not define itself. Walking every key at
+  // every depth would be the obvious generalisation and it is the one that breaks this: `type`,
+  // `entity`, `title` and `cards` occur in every config and as substrings in every bundle, so
+  // everything would match everything and the trim would quietly stop trimming — the same failure
+  // the MIN_KEY and fragment-frequency rules above exist to prevent.
+  //
+  // Both spellings are recorded. A module reads its own config key with an underscore
+  // (`kiosk_mode`) and names its files and elements with a hyphen (`kiosk-mode`); measured
+  // against the real bundles, both literals are present in each, but which one a given module
+  // writes is not something to assume.
+  if (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) {
+    for (const key of Object.keys(cfg)) {
+      if (KNOWN_DASH_KEYS.has(key)) continue;
+      const raw = key.toLowerCase();
+      if (raw.length < MIN_KEY || !/^[a-z][a-z0-9_-]*$/.test(raw)) continue;
+      modules.add(raw);
+      const hyphen = raw.replace(/_/g, '-');
+      if (hyphen !== raw) modules.add(hyphen);
+    }
+  }
+  return { cards, icons, modules };
 }
 
 // A card type split into candidate identifying parts. Split on `-` only: an underscore
@@ -1376,6 +1416,10 @@ function keepResource(url, keys) {
   if (!c || c.unreadable) return true;            // cannot check, so keep
   for (const k of keys.icons) if (c.icons.has(k)) return true;
   for (const k of keys.cards) if (cardMatchesBody(k, c)) return true;
+  // Same body test as a card, but kept in its own set so these never reach the "card will not
+  // render" report — a config block is not a card, and warning that `kiosk_mode` failed to
+  // render would be a warning about something that was never going to.
+  for (const k of (keys.modules ?? [])) if (cardMatchesBody(k, c)) return true;
   return false;
 }
 
@@ -1388,14 +1432,19 @@ async function buildResources(rpc, keysByDash) {
 
   // Every token any dashboard could match on, tagged by kind so a card type and an icon
   // namespace that happen to share a name can never be confused for one another.
-  const unionCards = new Set(), unionIcons = new Set();
+  const unionCards = new Set(), unionIcons = new Set(), unionModules = new Set();
   for (const ks of keysByDash.values()) {
     ks.cards.forEach((k) => unionCards.add(k));
     ks.icons.forEach((k) => unionIcons.add(k));
+    (ks.modules ?? []).forEach((k) => unionModules.add(k));
   }
+  // Module names are matched by exactly the same machinery as card types — literal first,
+  // fragments as the fallback — so they go into the same two body-scan sets.
+  const literalNames = new Set([...unionCards, ...unionModules]);
   const unionFrags = new Set();
-  for (const c of unionCards) for (const f of cardFragments(c)) unionFrags.add(f);
+  for (const c of literalNames) for (const f of cardFragments(c)) unionFrags.add(f);
   const unionKeys = new Set([...[...unionCards].map((k) => 'card:' + k),
+                             ...[...unionModules].map((k) => 'mod:' + k),
                              ...[...unionIcons].map((k) => 'icon:' + k),
                              ...[...unionFrags].map((k) => 'frag:' + k)]);
   // One fetch per resource, tested against every dashboard's keys at once. Bodies are read
@@ -1410,7 +1459,7 @@ async function buildResources(rpc, keysByDash) {
       const body = await (await fetch(abs, { signal: AbortSignal.timeout(20000) })).text();
       RESOURCE_CACHE.set(r.url, {
         tested: new Set(unionKeys),
-        literal: new Set([...unionCards].filter((k) => body.includes(k))),
+        literal: new Set([...literalNames].filter((k) => body.includes(k))),
         icons: new Set([...unionIcons].filter((k) => bodyHasIcon(body, k))),
         frags: new Set([...unionFrags].filter((f) => body.includes(f))),
         unreadable: false,

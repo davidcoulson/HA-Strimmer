@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026.09.14.21 — 2026-09-14
+
+**A module that renders nothing is now found by the config block it reads.**
+
+`resources_always_forward` existed largely to paper over one blind spot. A dashboard carrying
+`kiosk_mode:` at its top level is unambiguously asking for `kiosk-mode.js` — but the resource
+matcher only ever inspected config **values**, and only ones shaped like `custom:x`. `kiosk_mode`
+is a **key**, and its values are booleans. The evidence was in the config the whole time, in a
+place nothing looked.
+
+Unknown top-level keys on a dashboard config are now treated as module names and matched against
+resource bodies exactly like card types are — literal first, fragments as fallback. Both spellings
+are tried, because a module reads its own config key with an underscore (`kiosk_mode`) and names
+its files with a hyphen (`kiosk-mode`); measured against the real bundles, both literals are
+present in each, but which one a given module writes is not something to assume.
+
+Verified on a live instance by **removing the pin**: with `resources_always_forward` emptied,
+`kiosk-mode.js` is still kept for all five dashboards, each of which carries a `kiosk_mode:`
+block. `swipe-navigation.js` is kept for the one dashboard with `swipe_nav:` and dropped for a
+panel without it — which is correct, not a regression.
+
+**Two guards, because the obvious generalisation is the one that breaks this.** Walking every key
+at every depth would match `type`, `entity`, `title` and `cards` — which occur in every config and
+as substrings in most bundles — so everything would match everything and the trim would quietly
+stop trimming, the same failure the `MIN_KEY` and fragment-frequency rules already exist to
+prevent. So: **top level only**, and **only keys Home Assistant does not define itself**.
+
+Module names are also kept out of the card sets entirely, so a config block can never be reported
+as a card type or warned about as one that will not render — that class of never-true warning has
+already been shipped and withdrawn here once.
+
+Both guards were added because the tests for them did not work first time. "Ignores Home
+Assistant's own keys" passed against a build with the skip-list deleted, because no fixture
+bundle happened to contain the word `title`; "not counted as a card" passed against a build that
+folded modules into cards, because the unmet report only covers card types that some resource
+literally defines. Both now use fixtures that make the difference observable.
+
+---
+
+277 tests.
+
 ## 2026.09.14.20 — 2026-09-14
 
 **A route is named after the machine that served it, instead of being called "proxy".**

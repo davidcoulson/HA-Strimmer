@@ -184,11 +184,13 @@ configuration:
   resources_always_forward:
     name: Always send these resources
     description: >-
-      URL fragments of resources to send regardless, e.g. kiosk-mode. Needed for anything
-      that runs on load instead of rendering a card, because nothing references it by
-      name — frontend patchers (without kiosk-mode the HA header and sidebar reappear),
-      icon packs, and resident modules such as idle timers or pop-ups. Literal substring
-      or /regex/.
+      URL fragments of resources to send regardless. Needed for anything that runs on load
+      instead of rendering a card, because nothing references it by name — icon packs, and
+      resident modules such as idle timers, pop-ups or heartbeats. Literal substring or
+      /regex/. You do NOT need to list a module that has its own config block at the top
+      level of a dashboard: `kiosk_mode:`, `swipe_nav:` and their kind are detected from
+      that block, and the resource is kept for every dashboard carrying one. Listing it
+      anyway is harmless.
   resources_never_forward:
     name: Never send these resources
     description: >-
