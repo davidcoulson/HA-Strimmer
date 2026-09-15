@@ -264,3 +264,26 @@ test('a config with only the old name still turns trimming off', async () => {
       'the old name must still be able to turn trimming off');
   } finally { proxy.kill(); await mock.close(); }
 });
+
+// A config written before a rename has nothing under the new name. The console still has to show
+// the value that is actually in effect, or the row for the central trim option renders blank on
+// every install that predates the rename — which reads as "unset", the one thing it is not.
+test('a renamed option shows the value its old spelling carries', async () => {
+  const { LEGACY_ALIASES, legacyNameFor } = await import('../config_store.mjs');
+  assert.equal(LEGACY_ALIASES.strip_entities, 'trim_entities');
+  assert.equal(legacyNameFor('trim_entities'), 'strip_entities');
+  assert.equal(legacyNameFor('mgmt_port'), 'stats_port');
+  assert.equal(legacyNameFor('dashboards'), undefined, 'a name that was never renamed has no alias');
+
+  // Every legacy key must point at a name the console actually offers, or the fallback reads a
+  // key nothing will ever render and the row stays blank anyway.
+  const { EDITABLE_KEYS, BOOTSTRAP_KEYS } = await import('../config_store.mjs');
+  for (const [old, canonical] of Object.entries(LEGACY_ALIASES)) {
+    assert.ok(EDITABLE_KEYS[canonical] || BOOTSTRAP_KEYS.has(canonical),
+      `${old} points at ${canonical}, which is neither offered nor a setup option`);
+  }
+
+  const src = read('ha_ws_trim_proxy.mjs');
+  assert.match(src, /value: eff\[k\] !== undefined \? eff\[k\] : eff\[legacyNameFor\(k\)\]/,
+    'the config endpoint must fall back to the old spelling for a value');
+});

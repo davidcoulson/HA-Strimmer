@@ -44,7 +44,22 @@ export const BOOTSTRAP_KEYS = new Set([
 //
 // They stay in the schema deliberately. Removing a key from the schema makes Supervisor discard
 // it on upgrade, silently, which would cost someone a setting they had deliberately changed.
-export const LEGACY_KEYS = new Set(['port', 'stats_port', 'strip_entities']);
+// Old name -> the name that replaced it. The mapping matters as well as the membership: a config
+// still using the old spelling has nothing under the new one, so the canonical row would render
+// empty while the setting was plainly in effect. The console reads through this to show the value
+// that is actually being used.
+export const LEGACY_ALIASES = {
+  port: 'proxy_port',
+  stats_port: 'mgmt_port',
+  strip_entities: 'trim_entities',
+};
+
+export const LEGACY_KEYS = new Set(Object.keys(LEGACY_ALIASES));
+
+// The old spelling for a canonical key, if it has one.
+export function legacyNameFor(key) {
+  return Object.keys(LEGACY_ALIASES).find((old) => LEGACY_ALIASES[old] === key);
+}
 
 // Every option the console may take over, and what shape it is.
 //

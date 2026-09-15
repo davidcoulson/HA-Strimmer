@@ -38,7 +38,7 @@ import { classify, normalizeIp } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
-import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS } from './config_store.mjs';
+import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor } from './config_store.mjs';
 
 // ---- config (add-on options.json, overlaid by anything the panel owns) ----
 function loadOptions() {
@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.11';
+const VERSION = '2026.09.15.12';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3213,7 +3213,9 @@ const statsServer = http.createServer((req, res) => {
       bootstrap: [...BOOTSTRAP_KEYS],
       options: keys.map((k) => ({
         key: k,
-        value: eff[k],
+        // Read through the old spelling too, or a config that predates a rename leaves the
+        // canonical row blank while the setting is plainly in effect.
+        value: eff[k] !== undefined ? eff[k] : eff[legacyNameFor(k)],
         type: EDITABLE_KEYS[k] || null,
         source: own.managed.includes(k) ? 'console' : 'addon',
         // `objects` needs a structured editor the console does not have yet, so it is shown but
