@@ -80,14 +80,19 @@ test('translations/en.yaml describes no option that does not exist', () => {
 // log_level, trim_repairs and trim_translations were each added to config.yaml without it. The
 // panel then reported them as absent, which reads identically to "Supervisor never passed this"
 // — the precise question that block exists to answer. So the list is pinned to the schema.
-test('the stats options block reports every simple option the schema declares', () => {
+test('the stats options block reports every simple option the schema declares', async () => {
+  const { LEGACY_KEYS: LEGACY } = await import('../config_store.mjs');
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const cfg = fs.readFileSync(path.join(dir, '..', 'config.yaml'), 'utf8');
   const src = fs.readFileSync(path.join(dir, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
 
   // Toggles and choices — the options a person reads off the panel to answer "is it on?".
   // List and free-string options are reported elsewhere and are deliberately out of scope.
-  const simple = [...cfg.matchAll(/^  ([a-z_]+): "?(bool\??|list\([a-z|]+\)\?)"?$/gm)].map((m) => m[1]);
+  const simple = [...cfg.matchAll(/^  ([a-z_]+): "?(bool\??|list\([a-z|]+\)\?)"?$/gm)]
+    .map((m) => m[1])
+    // A renamed option is reported under its new name only; the stats block has one field per
+    // setting, not one per spelling.
+    .filter((k) => !LEGACY.has(k));
   assert.ok(simple.length >= 6, `expected several simple options, found ${simple.length}`);
 
   const block = src.slice(src.indexOf('    options: {'), src.indexOf('    allowlist: {'));
@@ -177,12 +182,14 @@ test('the proxy still reads the pre-rename port option names', () => {
 // someone opens the console to set — deriving the list would hide it. A declared list drifts,
 // though: the stats options block silently fell behind the schema three times. So it is pinned.
 test('EDITABLE_KEYS covers every schema option that is not a setup option', async () => {
-  const { EDITABLE_KEYS, BOOTSTRAP_KEYS } = await import('../config_store.mjs');
+  const { EDITABLE_KEYS, BOOTSTRAP_KEYS, LEGACY_KEYS } = await import('../config_store.mjs');
   const schema = cfg.slice(cfg.indexOf('\nschema:'));
   const declared = [...schema.matchAll(/^ {2}([a-z_]+):/gm)].map((m) => m[1]);
   assert.ok(declared.length >= 20, `expected the full schema, parsed ${declared.length}`);
 
-  const missing = declared.filter((k) => !BOOTSTRAP_KEYS.has(k) && !EDITABLE_KEYS[k]);
+  // Renamed options stay in the schema so Supervisor does not discard them, but the console
+  // deliberately does not offer them — the canonical name is the row.
+  const missing = declared.filter((k) => !BOOTSTRAP_KEYS.has(k) && !LEGACY_KEYS.has(k) && !EDITABLE_KEYS[k]);
   assert.deepEqual(missing, [], `schema options the console cannot see: ${missing.join(', ')}`);
 
   // And nothing invented: a key here that is not in the schema is a setting that would be
@@ -202,4 +209,58 @@ test('both spellings of both ports are setup options', async () => {
     assert.throws(() => adopt({ version: 1, managed: {}, history: [] }, k, 1, {}),
       /setup option/, `adopt("${k}") must be refused`);
   }
+});
+
+// A rename is only safe if the old name keeps working.
+//
+// `strip_entities: false` is a deliberate choice — it turns the app into a pass-through proxy for
+// an A/B comparison. If the rename made that key inert, trimming would switch back ON for anyone
+// who had turned it off, silently, and the app would start filtering a firehose they had asked it
+// to leave alone. So the old name must still be honoured, and the new one must win when both are
+// present.
+test('the pre-rename entity-trim option is still honoured', () => {
+  const src = read('ha_ws_trim_proxy.mjs');
+  const decl = src.match(/const STRIP = [\s\S]*?;\n/)?.[0];
+  assert.ok(decl, 'the proxy must resolve STRIP');
+  assert.match(decl, /OPT\.trim_entities/, 'the new name must be read');
+  assert.match(decl, /OPT\.strip_entities/, 'the old name must still be read');
+  // Order matters: the canonical name has to be consulted first, or a config carrying both (which
+  // is what a half-migrated config looks like) would obey the one being retired.
+  assert.ok(decl.indexOf('OPT.trim_entities') < decl.indexOf('OPT.strip_entities'),
+    'trim_entities must take precedence over strip_entities');
+});
+
+// The same guarantee, executed rather than read off the source: boot the proxy with ONLY the old
+// name set to false and check it really does pass the websocket through untrimmed.
+test('a config with only the old name still turns trimming off', async () => {
+  const { spawn } = await import('node:child_process');
+  const { startMockHa, getFreePort } = await import('./mock-ha.mjs');
+  const http = await import('node:http');
+
+  const mock = await startMockHa();
+  const port = await getFreePort();
+  const sp = await getFreePort();
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const proxy = spawn(process.execPath, [path.join(dir, '..', 'ha_ws_trim_proxy.mjs')], {
+    cwd: path.join(dir, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+    // STRIP_ENTITIES is the old ENV name and is set to 0; nothing sets the new one.
+    env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+      PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '0' },
+  });
+  try {
+    let out = '';
+    proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+    const deadline = Date.now() + 10000;
+    while (!/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const s = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: sp, path: '/stats.json' }, (res) => {
+        let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve(JSON.parse(b)));
+      }).on('error', reject);
+    });
+    assert.equal(s.options.trim_entities, false,
+      'the old name must still be able to turn trimming off');
+  } finally { proxy.kill(); await mock.close(); }
 });

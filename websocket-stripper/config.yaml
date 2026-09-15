@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.15.10"
+version: "2026.09.15.11"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -54,7 +54,7 @@ options:
   dashboards: []
   always_forward: []
   never_forward: []
-  strip_entities: true
+  trim_entities: true
   # Serve each connection only the dashboard it is actually viewing, instead of the union of
   # every dashboard listed above. A panel showing one dashboard stops paying for the others.
   # The dashboard is inferred from the page request that precedes the websocket; when that
@@ -132,7 +132,9 @@ schema:
     - str
   never_forward:
     - str
-  strip_entities: bool
+  trim_entities: bool
+  # The original name for trim_entities. Still accepted so an existing config keeps working.
+  strip_entities: "bool?"
   per_dashboard: bool
   trim_registries: bool
   compress_websocket: bool

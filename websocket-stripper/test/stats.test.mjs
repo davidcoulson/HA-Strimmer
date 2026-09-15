@@ -166,7 +166,7 @@ describe('stats API over HTTP', () => {
     assert.match(res.type, /application\/json/);
     const s = JSON.parse(res.body);
     assert.ok(s.version, 'version is reported');
-    assert.equal(s.options.strip_entities, true);
+    assert.equal(s.options.trim_entities, true);
     assert.ok(s.allowlist.union > 0, 'the allowlist size is reported');
     assert.ok(Object.keys(s.allowlist.byDashboard).includes('test-dash'));
   });
@@ -796,24 +796,19 @@ describe('config endpoints', () => {
       assert.equal(themes.editable, true);
       assert.equal(themes.type, 'bool', 'the console needs the type to pick a control');
 
+      // Setup options are NAMED so the console can explain where they live, but they get no
+      // rows: they belong in the add-on configuration and listing them here put one setting in
+      // two places, with the console showing the copy that is not authoritative.
       assert.ok(d.bootstrap.includes('proxy_port') && d.bootstrap.includes('ha_base'),
-        'setup options are named, so the console can explain why they are not editable');
+        'setup options are still named, so the console can point at where they live');
       for (const k of d.bootstrap) {
-        const row = d.options.find((o) => o.key === k);
-        // Each port has two spellings; only the canonical one gets a row, because listing both
-        // produced two rows per port with `null` on whichever one the config did not use.
-        if (k === 'port' || k === 'stats_port') {
-          assert.equal(row, undefined, `${k} is an alias and must not get its own row`);
-          continue;
-        }
-        assert.ok(row, `${k} must be listed, greyed, rather than silently absent`);
-        assert.equal(row.editable, false, `${k} must not be editable`);
+        assert.equal(d.options.find((o) => o.key === k), undefined,
+          `${k} is a setup option and must not be a row`);
       }
-      // And the canonical port rows carry the port actually bound, not whichever option name
-      // happened to be written — that is the whole point of collapsing the two spellings.
-      const mgmt = d.options.find((o) => o.key === 'mgmt_port');
-      assert.equal(mgmt.value, sp, 'mgmt_port must report the port the server is really on');
-      assert.equal(d.options.find((o) => o.key === 'proxy_port').value, port);
+      // And the same for a renamed option: the canonical name is the row, the old spelling is not.
+      assert.equal(d.options.find((o) => o.key === 'strip_entities'), undefined,
+        'a legacy spelling must not get its own row');
+      assert.ok(d.options.find((o) => o.key === 'trim_entities'), 'the canonical name is the row');
       // Structured options are shown but not offered until there is an editor for them.
       assert.equal(d.options.find((o) => o.key === 'user_overrides').editable, false);
     } finally { proxy.kill(); await mock.close(); }

@@ -18,11 +18,17 @@ configuration:
     description: >-
       Entities to withhold even when a dashboard does reference them. Literal or /regex/.
       Applied last, so it overrides both dashboard detection and the always list.
-  strip_entities:
-    name: Strip the entity websocket
+  trim_entities:
+    name: Trim the entity websocket
     description: >-
       The core feature. Off turns the app into a plain pass-through proxy, which is
       useful for an A/B comparison when you want to measure what the trimming is worth.
+  strip_entities:
+    name: Trim the entity websocket (old name)
+    description: >-
+      The previous name for "Trim the entity websocket". Still honoured so an existing
+      configuration keeps working, and used only when the new name is not set. Set
+      trim_entities instead; leave this one alone unless it is already in your config.
   per_dashboard:
     name: Serve each connection only its own dashboard
     description: >-

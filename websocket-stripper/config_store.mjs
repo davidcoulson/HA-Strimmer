@@ -38,6 +38,14 @@ export const BOOTSTRAP_KEYS = new Set([
   'log_level', 'proxy_port', 'port', 'mgmt_port', 'stats_port', 'ha_base', 'allow_ws_url',
 ]);
 
+// Option names that were renamed. Each is still READ, so an existing config keeps working, but
+// none of them gets a row in the console: listing both spellings showed two rows for one setting,
+// with the value on whichever row the config happened to use and `null` on the other.
+//
+// They stay in the schema deliberately. Removing a key from the schema makes Supervisor discard
+// it on upgrade, silently, which would cost someone a setting they had deliberately changed.
+export const LEGACY_KEYS = new Set(['port', 'stats_port', 'strip_entities']);
+
 // Every option the console may take over, and what shape it is.
 //
 // This is declared rather than derived from whatever happens to be in /data/options.json, because
@@ -47,6 +55,7 @@ export const BOOTSTRAP_KEYS = new Set([
 //
 // Kept honest by a test that compares it against config.yaml's schema, the same way the stats
 // options block is pinned: a new option added to the schema and not listed here fails the suite.
+//
 // `objects` are the list-of-dicts options. They are listed so the console can show what is set
 // and say where it comes from, but editing them needs a real editor rather than a text box —
 // that arrives with the unified overrides work.
@@ -54,7 +63,7 @@ export const EDITABLE_KEYS = {
   dashboards: 'list',
   always_forward: 'list',
   never_forward: 'list',
-  strip_entities: 'bool',
+  trim_entities: 'bool',
   per_dashboard: 'bool',
   trim_registries: 'bool',
   compress_websocket: 'bool',
