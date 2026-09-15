@@ -1212,8 +1212,8 @@ function drawChart(id, vals, times, colour, fmt, stepped) {
 const OVERRIDE_KINDS = {
   overrides: {
     label: 'rule',
-    match: (r) => [['dashboard', r.dashboard], ['user', r.user], ['device', r.client],
-      ['client app', r.user_agent]],
+    match: (r) => [['dashboard', r.dashboard], ['user', r.user], ['role', r.role],
+      ['device', r.client], ['client app', r.user_agent]],
   },
   dashboard_overrides: {
     label: 'dashboard',
@@ -1385,6 +1385,7 @@ function renderOverrides(box, d, save, say) {
 const MATCHERS = [
   { id: 'dashboard', label: 'Dashboard', hint: 'url_path, e.g. basement-stairs-panel' },
   { id: 'user', label: 'Home Assistant user', hint: 'name from Settings -> People, or a user id' },
+  { id: 'role', label: 'Role', hint: 'admin or user', choices: ['admin', 'user'] },
   { id: 'client', label: 'Device', hint: 'IP, CIDR (10.2.4.0/24) or hostname' },
   { id: 'user_agent', label: 'Client app', hint: 'part of the User-Agent, e.g. io.robbie.HomeAssistant' },
 ];
@@ -1411,7 +1412,7 @@ function buildRule(key, values, effects) {
   const list = (v) => (Array.isArray(v) ? v : String(v || '').split(','))
     .map((x) => String(x).trim()).filter(Boolean);
   const rule = {};
-  for (const id of ['dashboard', 'user', 'client', 'user_agent']) {
+  for (const id of ['dashboard', 'user', 'role', 'client', 'user_agent']) {
     if (values[id]) rule[id] = values[id];
   }
   const always = list(effects.always_forward || '');
@@ -1644,6 +1645,31 @@ function overrideWizard(d, save, say, addBtn) {
       const m = MATCHERS.find((x) => x.id === id);
       // Only dashboards this app serves can be chosen anyway, so offering the list is both a
       // convenience and a way to not name one that will never match.
+      if (m.choices) {
+        // A matcher with a fixed set of answers is a dropdown. Home Assistant has exactly two
+        // roles, so typing one is all downside.
+        const row = document.createElement('div');
+        row.className = 'wiz-row';
+        const l = document.createElement('span');
+        l.textContent = m.label;
+        const sel = document.createElement('select');
+        sel.className = 'cfgval';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '(choose)';
+        sel.appendChild(blank);
+        for (const c of m.choices) {
+          const opt = document.createElement('option');
+          opt.value = c;
+          opt.textContent = c === 'admin' ? 'admin' : 'not an admin';
+          sel.appendChild(opt);
+        }
+        sel.value = values[id] || '';
+        sel.onchange = () => { values[id] = sel.value; clearErr(); };
+        row.append(l, sel);
+        bodyEl.appendChild(row);
+        continue;
+      }
       if (id === 'dashboard' && served.length) {
         const row = document.createElement('div');
         row.className = 'wiz-row';

@@ -87,7 +87,7 @@ describe('the override wizard', () => {
 
   it('offers a matcher for each thing a rule list can key on', () => {
     assert.deepEqual(plain(MATCHERS.map((m) => m.id).sort()),
-      ['client', 'dashboard', 'user', 'user_agent']);
+      ['client', 'dashboard', 'role', 'user', 'user_agent']);
     for (const m of MATCHERS) {
       assert.ok(m.label && m.hint, `${m.id} needs a label and an example`);
     }
@@ -107,7 +107,7 @@ describe('the override list vocabulary', () => {
   })();
 
   it('uses the wizard\'s words for every matcher', () => {
-    const wizardWords = new Set(['dashboard', 'user', 'device', 'client app']);
+    const wizardWords = new Set(['dashboard', 'user', 'role', 'device', 'client app']);
     // Every matcher name printed in a row must be one the wizard also uses.
     const names = [...kinds.matchAll(/\['([a-z ]+)',/g)].map((m) => m[1]);
     assert.ok(names.length >= 6, `expected several matcher names, found ${names.length}`);

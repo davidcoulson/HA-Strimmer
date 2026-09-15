@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.28';
+const VERSION = '2026.09.15.29';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -319,6 +319,10 @@ function compileOverride(o) {
   return {
     dashboard: typeof o.dashboard === 'string' && o.dashboard ? o.dashboard : null,
     user: typeof o.user === 'string' && o.user ? o.user.toLowerCase() : null,
+    // Home Assistant has exactly two roles — administrator or not — so this is a two-value
+    // matcher rather than a name. `role` rather than `admin: true` because it reads the way the
+    // question is asked, and because it does not need rewriting if HA ever grows a third.
+    role: o.role === 'admin' || o.role === 'user' ? o.role : null,
     client,
     // A UA is matched the same way an entity pattern is: literal substring or /regex/.
     userAgent: typeof o.user_agent === 'string' && o.user_agent ? parseRules([o.user_agent])[0] : null,
@@ -350,7 +354,7 @@ const CONN_RULES = (() => {
     // always/never lists already are. Silently applying one everywhere is not a reasonable
     // reading of a rule someone thought they were scoping, so it is dropped and logged.
     .filter((r) => {
-      const scoped = r.dashboard || r.user || r.client || r.userAgent;
+      const scoped = r.dashboard || r.user || r.role || r.client || r.userAgent;
       if (!scoped) CONFIG_WARNINGS.push('ignoring an override with no matcher — it would apply to every connection; use always_forward/never_forward for that');
       return scoped;
     });
@@ -2016,7 +2020,11 @@ function loadUserCache() {
     const now = Date.now();
     let kept = 0, expired = 0;
     for (const [key, v] of Object.entries(raw?.users || {})) {
+      // is_admin must be present: an entry written before the role matcher existed would make a
+      // `role: admin` rule silently fail to match for the rest of its TTL. Dropping it costs one
+      // lookup and gets the right answer immediately.
       if (!v?.user?.id || typeof v.at !== 'number') continue;
+      if (typeof v.user.is_admin !== 'boolean') { expired++; continue; }
       if (now - v.at >= USER_TTL_MS) { expired++; continue; }
       USER_CACHE.set(key, { user: v.user, at: v.at });
       kept++;
@@ -2068,7 +2076,12 @@ function resolveUser(token) {
       if (user) {
         // Only what the rules match on, so the file on disk carries no more identity than it
         // must — see the note on USER_CACHE_FILE.
-        USER_CACHE.set(key, { user: { id: user.id, name: user.name }, at: Date.now() });
+        // is_admin joins id and name because a rule can now match on it. Still only what the
+        // rules read — the rest of Home Assistant's user object stays out of the file.
+        USER_CACHE.set(key, {
+          user: { id: user.id, name: user.name, is_admin: Boolean(user.is_admin) },
+          at: Date.now(),
+        });
       }
       if (USER_CACHE.size > 200) USER_CACHE.delete(USER_CACHE.keys().next().value);
       if (user) saveUserCache();
@@ -2199,9 +2212,13 @@ async function resolveConnRules(registries) {
 // on a list a user hand-wrote, evaluated once per websocket upgrade.
 function rulesForConnection(ctx) {
   if (!CONN_RULES.length) return null;
-  // Rules naming a user are held back for the auth gate; everything they also match on is
-  // re-checked there, so nothing is lost by skipping them here.
-  const hits = CONN_RULES.filter((r) => !r.user && matchesConnection(r, ctx));
+  // Rules that need an IDENTITY are held back for the auth gate; everything they also match on
+  // is re-checked there, so nothing is lost by skipping them here.
+  //
+  // A role counts as identity just as much as a name does. Testing only for `user` let a
+  // role-only rule through here, where no user is known yet — so `role: admin` was applied to
+  // every connection, including non-admins, which is the exact opposite of what it says.
+  const hits = CONN_RULES.filter((r) => !r.user && !r.role && matchesConnection(r, ctx));
   if (!hits.length) return null;
   return {
     always: hits.flatMap((r) => r.always),
@@ -2239,7 +2256,9 @@ function applyClientRules(set, extra) {
 // showing, so we cannot rule anything out. Same asymmetry as everywhere else — a needless gate
 // costs milliseconds, a skipped one serves the wrong allowlist.
 function userRulesCouldApply(dash) {
-  const withUser = CONN_RULES.filter((r) => r.user);
+  // A role rule needs the user resolved just as much as a named-user rule does, so it has to open
+  // the same gate. Missing this would leave role rules never applying, silently.
+  const withUser = CONN_RULES.filter((r) => r.user || r.role);
   if (!withUser.length) return false;
   if (dash === null || dash === undefined) return true;
   return withUser.some((r) => r.dashboard === null || r.dashboard === dash);
@@ -2255,8 +2274,11 @@ function rulesForUser(user, ctx) {
   // Every OTHER matcher on the rule is checked here too, which is what lets a rule combine a user
   // with a dashboard, a device or a client app: the user is simply the last thing to resolve, so
   // this is the first moment the whole rule can be decided.
-  const hits = CONN_RULES.filter((r) => r.user
-    && names.includes(r.user)
+  const isAdmin = Boolean(user.is_admin);
+  const hits = CONN_RULES.filter((r) => (r.user || r.role)
+    // A named user must match by name or id; a rule with only a role matches any user in it.
+    && (!r.user || names.includes(r.user))
+    && (!r.role || (r.role === 'admin' ? isAdmin : !isAdmin))
     && matchesConnection(r, ctx));
   if (!hits.length) return null;
   return {
@@ -4064,6 +4086,7 @@ loadUserCache();
 loadClientDash();
 log(`overrides: ${CONN_RULES.length} rule(s)`
   + (CONN_RULES.length ? ` — ${CONN_RULES.filter((r) => r.user).length} keyed to a user, `
+      + `${CONN_RULES.filter((r) => r.role).length} to a role, `
       + `${CONN_RULES.filter((r) => r.client).length} to a device, `
       + `${CONN_RULES.filter((r) => r.dashboard).length} to a dashboard, `
       + `${CONN_RULES.filter((r) => r.userAgent).length} to a client app` : ''));

@@ -45,8 +45,12 @@ describe('the persistent user cache', () => {
   it('writes the token HASH and only the fields the rules match on', () => {
     const finish = src.match(/const finish = \(user\) => \{[\s\S]*?\n    \};/)?.[0];
     assert.ok(finish, 'the lookup must have a completion path');
-    assert.match(finish, /user: \{ id: user\.id, name: user\.name \}/,
-      'only id and name are stored — the rest of the user object is identity nobody here needs');
+    // id, name and is_admin — and nothing else. is_admin earns its place because a rule can
+    // match `role: admin`; the rest of Home Assistant's user object still stays out of the file.
+    assert.match(finish, /id: user\.id, name: user\.name, is_admin: Boolean\(user\.is_admin\)/,
+      'only what the rules read is stored');
+    assert.ok(!/credentials|mfa_modules|is_owner/.test(finish),
+      'no user field beyond what a matcher reads may be written to disk');
     // The key must never be the token itself.
     assert.match(src, /const key = tokenKey\(token\)/);
     assert.match(src, /createHash\('sha256'\)/);

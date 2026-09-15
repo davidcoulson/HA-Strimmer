@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026.09.15.29 — 2026-09-15
+
+**Override rules can match a ROLE instead of a person.**
+
+`role: admin` (or `role: user`) attaches entities to whoever is an administrator rather than to a
+named individual. Home Assistant has exactly two roles, so this is a two-value matcher; it is
+called `role` rather than `admin: true` because that is how the question is asked, and because it
+will not need rewriting if HA ever grows a third.
+
+This is usually what a per-user rule is approximating. "Admins see `update.*`" written as
+`user: David Coulson` silently stops covering anyone else who becomes an admin, and silently keeps
+covering David if he stops being one.
+
+It combines with every other matcher, so "an admin, on lovelace" is one rule. The wizard offers it
+as a dropdown.
+
+**Two bugs found by the tests while wiring it, both the silent kind:**
+
+* A role-only rule has no `user`, and the check for "does this rule have any matcher at all"
+  did not know `role` was one — so the rule was **discarded at startup** with a warning about
+  matching everything.
+* `rulesForConnection` holds back rules naming a user until the auth gate, because identity is
+  not known when the socket opens. It tested only for `user`, so a role-only rule went through
+  **at connect time, applied to everyone** — including non-admins. The precise opposite of what
+  it says.
+
+`is_admin` now joins `id` and `name` in the user cache, because a rule reads it. Nothing else from
+Home Assistant's user object is written, and a cache entry from before this release is dropped on
+load rather than left to make a `role` rule silently fail to match for the rest of its TTL.
+
+---
+
 ## 2026.09.15.28 — 2026-09-15
 
 **A restart no longer costs every panel its dashboard.**

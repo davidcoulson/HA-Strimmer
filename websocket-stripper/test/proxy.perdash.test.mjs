@@ -1698,3 +1698,51 @@ describe('a device name shared by two devices', () => {
     assert.ok(!/idByName\.get/.test(src), 'the single-winner lookup must be gone');
   });
 });
+
+// Matching a ROLE rather than a person.
+//
+// Home Assistant has exactly two roles, administrator or not, and "admins see update.*" is what
+// a per-user rule naming one person is usually approximating. Naming the person means the rule
+// silently stops covering anyone else who becomes an admin, and silently keeps covering them if
+// they stop being one.
+describe('an override that matches a role', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash,auto-dash', port,
+      extraEnv: {
+        OVERRIDES: JSON.stringify([
+          { role: 'admin', always_forward: ['/^sensor\\.decoy_/'] },
+        ]),
+      },
+    });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  const injectedForToken = async (token) => {
+    await httpGet(`http://127.0.0.1:${port}/test-dash/main`);
+    const seq = mock.subscribeEntitiesSeq();
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, token);
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    const got = await mock.waitForSubscribeEntities(seq);
+    c.close();
+    return new Set(got ?? []);
+  };
+
+  it('applies to an admin without naming them', async () => {
+    const david = await injectedForToken('david-token');
+    assert.ok(david.has('sensor.decoy_power'),
+      'an admin gets the rule even though no user is named in it');
+  });
+
+  it('does not apply to a user who is not an admin', async () => {
+    const michelle = await injectedForToken('michelle-token');
+    assert.ok(!michelle.has('sensor.decoy_power'),
+      'a non-admin must not pick up an admin-scoped rule');
+    assert.ok(michelle.has('light.living_room'), 'and still gets the dashboard itself');
+  });
+});

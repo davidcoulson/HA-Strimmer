@@ -109,9 +109,12 @@ configuration:
     name: Override rules
     description: >-
       One list for every override rule. Each rule may match on a dashboard, a Home Assistant
-      user, a device (IP, CIDR or hostname) and a client app (part of its User-Agent); the
+      user, a ROLE (admin or user), a device (IP, CIDR or hostname) and a client app (part of
+      its User-Agent); the
       matchers you set must ALL hold, so "David, on lovelace, from the office panel" is one
-      rule. It then applies always_forward, never_forward and devices the same way the older
+      rule — and `role: admin` attaches entities to whoever is an administrator rather than to a
+      named person, which is usually what "admins see update.*" actually means.
+      It then applies always_forward, never_forward and devices the same way the older
       lists do. A rule naming a user is applied once the auth token resolves, which is the
       first moment the whole rule can be decided; everything else applies when the socket
       opens. A rule with no matcher at all is ignored and logged — that is what the global
