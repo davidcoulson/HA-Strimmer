@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stripper Client Status API</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --fg: #151a21;
+    --muted: #5d6874;
+    --line: #e2e6ec;
+    --line-soft: #eef1f5;
+    --accent: #0b6b68;
+    --accent-soft: #e2f1f0;
+    --warn: #8a5300;
+    --warn-soft: #fbf0dd;
+    --good: #1f6b38;
+    --code-bg: #f1f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1218;
+      --card: #161b23;
+      --fg: #e6eaf1;
+      --muted: #97a2b0;
+      --line: #252d38;
+      --line-soft: #1d242e;
+      --accent: #4fcfc4;
+      --accent-soft: #14312f;
+      --warn: #e0a83c;
+      --warn-soft: #2e2413;
+      --good: #6fc487;
+      --code-bg: #10151c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1218;
+    --card: #161b23;
+    --fg: #e6eaf1;
+    --muted: #97a2b0;
+    --line: #252d38;
+    --line-soft: #1d242e;
+    --accent: #4fcfc4;
+    --accent-soft: #14312f;
+    --warn: #e0a83c;
+    --warn-soft: #2e2413;
+    --good: #6fc487;
+    --code-bg: #10151c;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  h1, h2, h3 { font-family: Archivo, -apple-system, BlinkMacSystemFont, sans-serif; text-wrap: balance; }
+  h1 { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 10px; line-height: 1.12; }
+  h2 {
+    font-size: 24px; font-weight: 600; letter-spacing: -0.01em;
+    margin: 52px 0 6px; padding-top: 22px; border-top: 1px solid var(--line);
+  }
+  h3 { font-size: 18px; font-weight: 600; margin: 30px 0 4px; }
+  p { margin: 0 0 16px; }
+  a { color: var(--accent); }
+
+  .lede { font-size: 20px; color: var(--muted); margin: 0 0 8px; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center;
+    margin: 22px 0 8px; font-size: 13px; color: var(--muted);
+  }
+  .pill {
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 12px; border: 1px solid var(--line); border-radius: 999px;
+    padding: 2px 10px; white-space: nowrap;
+  }
+  .pill.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+  code {
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.88em; background: var(--code-bg);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 16px 18px; overflow-x: auto; margin: 0 0 18px;
+  }
+  pre code { background: none; padding: 0; font-size: 13.5px; line-height: 1.6; }
+
+  .endpoint {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin: 26px 0 8px;
+  }
+  .endpoint .verb {
+    font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 13px;
+    color: var(--accent); font-weight: 500; letter-spacing: .04em;
+  }
+  .endpoint .url {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 17px; word-break: break-all; display: block; margin-top: 3px;
+  }
+
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 0 0 20px;
+  }
+  .warn { border-left-color: var(--warn); background: var(--warn-soft); }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
+  .note strong { font-weight: 600; }
+
+  .scroll { overflow-x: auto; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 520px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th {
+    font-family: Archivo, sans-serif; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    border-bottom: 1px solid var(--line);
+  }
+  td:first-child { white-space: nowrap; }
+  td code { font-size: 13px; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  ul { margin: 0 0 16px; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+
+  .never li::marker { color: var(--warn); }
+  .yes { color: var(--good); font-weight: 600; }
+  .no { color: var(--warn); font-weight: 600; }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <h1>Stripper Client Status API</h1>
+  <p class="lede">How a panel asks the HA WebSocket Stripper what it is doing, and what that is
+  worth on this connection.</p>
+
+  <div class="meta">
+    <span class="pill on">available from 2026.09.15.21</span>
+    <span class="pill">no auth</span>
+    <span class="pill">LAN-readable</span>
+    <span class="pill">additive schema</span>
+  </div>
+
+  <p>The Stripper is a reverse proxy in front of Home Assistant that trims the entity websocket and
+  several HTTP payloads down to what each dashboard actually uses. This endpoint exists so a panel
+  can render an admin/diagnostics screen: <em>is the trimmer in front of me, what is it cutting,
+  and what is it saving me.</em></p>
+
+  <div class="endpoint">
+    <span class="verb">GET</span>
+    <code class="url">http://&lt;your-ha-host&gt;:9123/stripper/client.json</code>
+  </div>
+  <p style="color:var(--muted);font-size:15px;margin-top:8px">Port 9123 is the Stripper's default
+  proxy port — the same host and port a panel already loads dashboards from. Use whatever base URL
+  the panel is configured with; do not hardcode 9123.</p>
+
+  <h2>Detection: reaching it is the proof</h2>
+
+  <p>A panel cannot tell from a dashboard page alone whether the Stripper served it or whether it
+  is talking straight to Home Assistant. It does not need a header to find out.</p>
+
+  <p>This path is served <strong>by the proxy itself and never forwarded</strong>. So:</p>
+
+  <ul>
+    <li><span class="yes">200</span> — the Stripper is running <em>and is in the path</em> for this
+      panel. Both halves of the question, answered by arriving.</li>
+    <li><span class="no">404</span> — you are talking to Home Assistant directly. HA has no such
+      route.</li>
+    <li><strong>Connection error</strong> — neither is reachable; a network problem, not a
+      Stripper problem. Say so differently.</li>
+  </ul>
+
+  <div class="note">
+    <p><strong>Why not a header on the dashboard load?</strong> It was considered and rejected.
+    Adding bytes to the response every panel fetches on every boot, to carry a snapshot taken
+    <em>before the websocket even exists</em>, is a poor trade for a screen that is read
+    occasionally. The pull costs nothing until someone opens the admin screen — and it returns
+    live numbers rather than boot-time ones.</p>
+  </div>
+
+  <h2>The response</h2>
+
+  <p>A real reply, from a panel with two open connections:</p>
+
+<pre><code>{
+  "stripper": {
+    "running": true,
+    "version": "2026.09.15.21",
+    "uptime_sec": 26
+  },
+  "trimming": {
+    "entities": true,
+    "by_dashboard": true,
+    "registries": true,
+    "resources": true,
+    "extra_modules": true,
+    "services": true,
+    "repairs": true,
+    "themes": false,
+    "translations": true,
+    "compress_websocket": true
+  },
+  "client": {
+    "ip": "10.2.3.42",
+    "connections": 2,
+    "dashboard": "office-tablet",
+    "attributed_via": "cookie",
+    "entities_served": 88,
+    "first_payload": {
+      "entities": 88,
+      "bytes": 27726,
+      "ms_to_data": 391,
+      "drain_ms": 1
+    },
+    "traffic": {
+      "from_ha_bytes": 637568,
+      "to_browser_bytes": 183599,
+      "not_sent_bytes": 453969,
+      "not_sent_pct": 71,
+      "update_bytes_per_min": null
+    },
+    "connected_sec": 21
+  }
+}</code></pre>
+
+  <h3>stripper</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>running</code></td><td>bool</td><td>Always <code>true</code> when you get a
+        reply. Present so the payload reads correctly when cached or logged.</td></tr>
+      <tr><td><code>version</code></td><td>string</td><td>Build in front of this panel, e.g.
+        <code>2026.09.15.21</code>. Date-based, sorts lexically.</td></tr>
+      <tr><td><code>uptime_sec</code></td><td>int</td><td>Seconds since the Stripper started. A
+        small number here explains a panel that just reconnected.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>trimming</h3>
+  <p>What is being cut, as booleans. Every key is a boolean — no lists, no rules, no names.
+  Suitable for a row of indicator chips.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Key</th><th>What it cuts</th></tr></thead>
+    <tbody>
+      <tr><td><code>entities</code></td><td>The entity websocket itself — the core feature. If this
+        is <code>false</code> the Stripper is a plain pass-through.</td></tr>
+      <tr><td><code>by_dashboard</code></td><td>Serves each connection only the dashboard it is
+        viewing, rather than the union of every configured dashboard.</td></tr>
+      <tr><td><code>registries</code></td><td>Entity, device and area registries.</td></tr>
+      <tr><td><code>resources</code></td><td>Lovelace resources (custom cards).</td></tr>
+      <tr><td><code>extra_modules</code></td><td>JavaScript integrations inject into every page via
+        <code>add_extra_js_url</code>.</td></tr>
+      <tr><td><code>services</code></td><td>The <code>get_services</code> list.</td></tr>
+      <tr><td><code>repairs</code></td><td>The admin Repairs backlog.</td></tr>
+      <tr><td><code>themes</code></td><td>Themes other than the ones a dashboard names.</td></tr>
+      <tr><td><code>translations</code></td><td>Frontend translations for integrations this
+        connection cannot see.</td></tr>
+      <tr><td><code>compress_websocket</code></td><td>Not a trim — whether permessage-deflate is
+        negotiated with the browser.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>client</h3>
+  <p>The caller's own numbers. <strong>The subject is always whoever asked.</strong></p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>ip</code></td><td>string</td><td>The address the Stripper sees you as. Useful
+        for diagnosing a panel behind an unexpected NAT or proxy hop.</td></tr>
+      <tr><td><code>connections</code></td><td>int</td><td>Open websockets from this address.
+        <code>0</code> is a real answer — see below. <code>2</code> briefly during a reload.</td></tr>
+      <tr><td><code>dashboard</code></td><td>string | null</td><td>The dashboard
+        <code>url_path</code> this connection was attributed to. <code>null</code> means it could
+        not be attributed and is being served the union.</td></tr>
+      <tr><td><code>attributed_via</code></td><td>string | null</td><td>How that was decided —
+        <code>cookie</code>, <code>ip</code>, <code>user-agent</code>. Diagnostic: a panel landing
+        on the union usually shows <code>null</code> here.</td></tr>
+      <tr><td><code>entities_served</code></td><td>int | null</td><td>Size of the allowlist this
+        connection is being served. The headline number for a panel admin screen.</td></tr>
+      <tr><td><code>first_payload</code></td><td>object | null</td><td>The initial entity
+        delivery: <code>entities</code>, <code>bytes</code>, <code>ms_to_data</code> (time from
+        connect to first entity data) and <code>drain_ms</code>. Good for a boot-performance
+        readout.</td></tr>
+      <tr><td><code>traffic</code></td><td>object | null</td><td>Byte totals across this address's
+        open connections — see below. <code>null</code> when there are none.</td></tr>
+      <tr><td><code>connected_sec</code></td><td>int | null</td><td>Age of the newest
+        connection.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>client.traffic</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>from_ha_bytes</code></td><td>Received from Home Assistant for this
+        client.</td></tr>
+      <tr><td><code>to_browser_bytes</code></td><td>Actually forwarded to it.</td></tr>
+      <tr><td><code>not_sent_bytes</code></td><td>The difference: what this connection was spared.
+        Never negative.</td></tr>
+      <tr><td><code>not_sent_pct</code></td><td>Same as a percentage, or <code>null</code> before
+        any bytes have moved. Do not compute your own from a zero denominator.</td></tr>
+      <tr><td><code>update_bytes_per_min</code></td><td>Live update throughput.
+        <code>null</code> until a connection is a full minute old — a rate extrapolated from four
+        seconds is that connection's opening burst multiplied by fifteen, not a measurement.
+        Render <code>null</code> as “—”, not as zero.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <p><strong><code>not_sent</code> is not the same as the Stripper's headline “saved” figure.</strong>
+    It is the difference between two measured totals on <em>your</em> connections. The panel's own
+    savings statistic is computed differently, over trimmed request/response payloads where a real
+    before-and-after exists. Do not present the two as the same number.</p>
+  </div>
+
+  <h2>connections: 0 is meaningful</h2>
+
+  <p>You reached the proxy over HTTP, so it <em>is</em> in your path — but it has no open websocket
+  from your address. That is a different state from “not behind the trimmer”, and worth showing
+  differently. It usually means the panel has not opened its websocket yet, or is connecting from a
+  different address than it fetches from.</p>
+
+  <p>In that state <code>dashboard</code>, <code>entities_served</code>, <code>traffic</code> and
+  <code>first_payload</code> are all <code>null</code>. <code>stripper</code> and
+  <code>trimming</code> are still fully populated.</p>
+
+  <h2>What this endpoint will never tell you</h2>
+
+  <p>The proxy port is reachable by anything on the network and has <strong>no authentication in
+  front of it</strong>. Every field is therefore something that network may read. Deliberately
+  absent, and covered by tests that fail if any of it appears:</p>
+
+  <ul class="never">
+    <li>Override rules of any kind, and the config keys that hold them.</li>
+    <li>Allowlist contents — no entity ids, ever.</li>
+    <li>Home Assistant user identities. A panel is not told which user it is logged in as.</li>
+    <li>Any other client's address, hostname, dashboard or statistics.</li>
+    <li>Dashboard lists, always/never lists, mDNS names, certificate hosts.</li>
+  </ul>
+
+  <p>There is also <strong>no way to name a different subject</strong> — no <code>?ip=</code>, no
+  header override. If there were, any device on the network could enumerate every panel from an
+  unauthenticated port.</p>
+
+  <div class="note warn">
+    <p><strong>Do not build anything security-sensitive on this.</strong> It is unauthenticated
+    diagnostics. Treat it as advisory: render it, do not gate behaviour on it. And do not relay it
+    off the local network.</p>
+  </div>
+
+  <h2>Using it</h2>
+
+  <p>Fetch on demand, when the admin screen opens. It is cheap but not free — it takes a stats
+  snapshot per call.</p>
+
+<pre><code>async function stripperStatus(haBaseUrl) {
+  try {
+    const res = await fetch(new URL('/stripper/client.json', haBaseUrl), {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(2000),
+    });
+    if (res.status === 404) return { state: 'not-in-path' };
+    if (!res.ok) return { state: 'error', status: res.status };
+    return { state: 'ok', data: await res.json() };
+  } catch {
+    return { state: 'unreachable' };
+  }
+}</code></pre>
+
+  <h3>Rules of engagement</h3>
+  <ul>
+    <li><strong>Do not poll on a timer from a dashboard.</strong> This is an admin screen. Fetch on
+      open, and on an explicit refresh.</li>
+    <li>If you must refresh automatically while the screen is visible, <strong>30 seconds is
+      plenty</strong>, and stop when the screen is hidden.</li>
+    <li><strong>Set a short timeout.</strong> A panel's diagnostics screen should not hang because
+      the proxy is busy.</li>
+    <li><strong>Ignore unknown fields.</strong> The schema is additive: new keys will appear, and
+      existing ones will not change meaning. Do not validate strictly.</li>
+    <li><strong>Handle <code>null</code> everywhere in <code>client</code>.</strong> Every field
+      there can be <code>null</code>, and <code>null</code> means “not known”, never zero.</li>
+    <li>CORS is open (<code>Access-Control-Allow-Origin: *</code>) so a panel admin page served
+      from its own origin can read it.</li>
+  </ul>
+
+  <h3>A reasonable admin panel</h3>
+  <ul>
+    <li><strong>Status line.</strong> “Trimmed by WebSocket Stripper 2026.09.15.21” — or “Not
+      behind the trimmer” on a 404. That one line is most of the value.</li>
+    <li><strong>What it is cutting.</strong> The <code>trimming</code> booleans as chips. Showing
+      only the <code>true</code> ones and a count of the rest keeps the row short.</li>
+    <li><strong>This panel.</strong> <code>entities_served</code> and <code>dashboard</code> — “88
+      entities, office-tablet”. This is the number people actually want.</li>
+    <li><strong>What it saved.</strong> <code>not_sent_pct</code> with the byte totals underneath.</li>
+    <li><strong>Boot.</strong> <code>first_payload.ms_to_data</code> and <code>bytes</code>, if the
+      panel already reports boot timings.</li>
+  </ul>
+
+  <footer>
+    <p>HA WebSocket Stripper —
+      <a href="https://github.com/davidcoulson/HA-Websocket-Stripper">davidcoulson/HA-Websocket-Stripper</a>.
+      Endpoint added in 2026.09.15.21. Questions and schema additions welcome via an issue.</p>
+  </footer>
+
+</div>
+
+</body>
+</html>

@@ -1,48 +1,222 @@
 # Client status API
 
-`GET /stripper/client.json` on the proxy port (default 9123).
+How a panel asks the WebSocket Stripper what it is doing, and what that is worth on this
+connection.
 
-Lets a panel — ha-paneld, Kiosk Satellite — render an admin screen saying whether the trimmer is
-in front of it, what it is cutting, and what that is worth on its own connection.
+> Available from **2026.09.15.21**. Unauthenticated, LAN-readable, additive schema.
+>
+> A standalone, styled version of this page is at [`client-api.html`](client-api.html) — open it
+> in a browser if you would rather read it that way, or send it to someone who is not working in
+> this repo.
 
-## Detection
-
-The path is served by the proxy and never forwarded, so reaching it is the signal:
-
-- `200` — the Stripper is running **and in the path** for this client.
-- `404` — the client is talking to Home Assistant directly.
-- connection error — neither is reachable; a network fault, not a Stripper one.
-
-No header is added to dashboard loads. A header would put bytes on every page fetch to carry a
-snapshot taken before the websocket exists, for a screen that is read occasionally.
-
-## Boundary
-
-The proxy port is reachable by anything on the network and is unauthenticated, so the reply
-carries only what that network may read: booleans for what is trimmed, and the **caller's own**
-numbers. It never returns override rules, allowlist contents, entity ids, Home Assistant user
-identities, or any other client's data — and there is no way to name a different subject, which
-would let any device enumerate every panel. `test/client_info.test.mjs` fails if that changes.
-
-Advisory only. Render it; do not gate behaviour on it, and do not relay it off the local network.
-
-## Shape
-
-See `test/client_info.test.mjs` for the guarantees, and the integration guide for field-by-field
-documentation. Summary:
+The Stripper is a reverse proxy in front of Home Assistant that trims the entity websocket and
+several HTTP payloads down to what each dashboard actually uses. This endpoint exists so a panel —
+ha-paneld, Kiosk Satellite, anything else sitting in front of HA — can render an admin or
+diagnostics screen: *is the trimmer in front of me, what is it cutting, and what is it saving me.*
 
 ```
-stripper  { running, version, uptime_sec }
-trimming  { entities, by_dashboard, registries, resources, extra_modules,
-            services, repairs, themes, translations, compress_websocket }   // booleans only
-client    { ip, connections, dashboard, attributed_via, entities_served,
-            first_payload { entities, bytes, ms_to_data, drain_ms },
-            traffic { from_ha_bytes, to_browser_bytes, not_sent_bytes,
-                      not_sent_pct, update_bytes_per_min },
-            connected_sec }
+GET http://<your-ha-host>:9123/stripper/client.json
 ```
 
-Every field under `client` may be `null`, and `null` means "not known", never zero.
-`connections: 0` is meaningful: the proxy IS in the path, but has no websocket from this address.
+Port 9123 is the Stripper's default proxy port — the same host and port the panel already loads
+dashboards from. **Use whatever base URL the panel is configured with; do not hardcode 9123.**
 
-The schema is additive — consumers must ignore unknown fields rather than validate strictly.
+## Detection: reaching it is the proof
+
+A panel cannot tell from a dashboard page alone whether the Stripper served it or whether it is
+talking straight to Home Assistant. It does not need a header to find out.
+
+This path is served **by the proxy itself and never forwarded**. So:
+
+| Result | Meaning |
+| --- | --- |
+| `200` | The Stripper is running **and is in the path** for this panel. Both halves of the question, answered by arriving. |
+| `404` | You are talking to Home Assistant directly. HA has no such route. |
+| connection error | Neither is reachable — a network problem, not a Stripper problem. Say so differently. |
+
+**Why not a header on the dashboard load?** It was considered and rejected. Adding bytes to the
+response every panel fetches on every boot, to carry a snapshot taken *before the websocket even
+exists*, is a poor trade for a screen that is read occasionally. The pull costs nothing until
+someone opens the admin screen — and it returns live numbers rather than boot-time ones.
+
+## The response
+
+A real reply, from a panel with two open connections:
+
+```json
+{
+  "stripper": {
+    "running": true,
+    "version": "2026.09.15.21",
+    "uptime_sec": 26
+  },
+  "trimming": {
+    "entities": true,
+    "by_dashboard": true,
+    "registries": true,
+    "resources": true,
+    "extra_modules": true,
+    "services": true,
+    "repairs": true,
+    "themes": false,
+    "translations": true,
+    "compress_websocket": true
+  },
+  "client": {
+    "ip": "10.2.3.42",
+    "connections": 2,
+    "dashboard": "office-tablet",
+    "attributed_via": "cookie",
+    "entities_served": 88,
+    "first_payload": {
+      "entities": 88,
+      "bytes": 27726,
+      "ms_to_data": 391,
+      "drain_ms": 1
+    },
+    "traffic": {
+      "from_ha_bytes": 637568,
+      "to_browser_bytes": 183599,
+      "not_sent_bytes": 453969,
+      "not_sent_pct": 71,
+      "update_bytes_per_min": null
+    },
+    "connected_sec": 21
+  }
+}
+```
+
+### `stripper`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `running` | bool | Always `true` when you get a reply. Present so the payload reads correctly when cached or logged. |
+| `version` | string | Build in front of this panel, e.g. `2026.09.15.21`. Date-based, sorts lexically. |
+| `uptime_sec` | int | Seconds since the Stripper started. A small number here explains a panel that just reconnected. |
+
+### `trimming`
+
+What is being cut, as booleans. Every key is a boolean — no lists, no rules, no names. Suitable
+for a row of indicator chips.
+
+| Key | What it cuts |
+| --- | --- |
+| `entities` | The entity websocket itself — the core feature. If this is `false` the Stripper is a plain pass-through. |
+| `by_dashboard` | Serves each connection only the dashboard it is viewing, rather than the union of every configured dashboard. |
+| `registries` | Entity, device and area registries. |
+| `resources` | Lovelace resources (custom cards). |
+| `extra_modules` | JavaScript integrations inject into every page via `add_extra_js_url`. |
+| `services` | The `get_services` list. |
+| `repairs` | The admin Repairs backlog. |
+| `themes` | Themes other than the ones a dashboard names. |
+| `translations` | Frontend translations for integrations this connection cannot see. |
+| `compress_websocket` | Not a trim — whether permessage-deflate is negotiated with the browser. |
+
+### `client`
+
+The caller's own numbers. **The subject is always whoever asked.**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `ip` | string | The address the Stripper sees you as. Useful for diagnosing a panel behind an unexpected NAT or proxy hop. |
+| `connections` | int | Open websockets from this address. `0` is a real answer — see below. `2` briefly during a reload. |
+| `dashboard` | string \| null | The dashboard `url_path` this connection was attributed to. `null` means it could not be attributed and is being served the union. |
+| `attributed_via` | string \| null | How that was decided — `cookie`, `ip`, `user-agent`. Diagnostic: a panel landing on the union usually shows `null` here. |
+| `entities_served` | int \| null | Size of the allowlist this connection is being served. The headline number for a panel admin screen. |
+| `first_payload` | object \| null | The initial entity delivery: `entities`, `bytes`, `ms_to_data` (time from connect to first entity data) and `drain_ms`. Good for a boot-performance readout. |
+| `traffic` | object \| null | Byte totals across this address's open connections — see below. `null` when there are none. |
+| `connected_sec` | int \| null | Age of the newest connection. |
+
+### `client.traffic`
+
+| Field | Meaning |
+| --- | --- |
+| `from_ha_bytes` | Received from Home Assistant for this client. |
+| `to_browser_bytes` | Actually forwarded to it. |
+| `not_sent_bytes` | The difference: what this connection was spared. Never negative. |
+| `not_sent_pct` | Same as a percentage, or `null` before any bytes have moved. Do not compute your own from a zero denominator. |
+| `update_bytes_per_min` | Live update throughput. `null` until a connection is a full minute old — a rate extrapolated from four seconds is that connection's opening burst multiplied by fifteen, not a measurement. Render `null` as "—", not as zero. |
+
+> **`not_sent` is not the same as the Stripper's headline "saved" figure.** It is the difference
+> between two measured totals on *your* connections. The panel's own savings statistic is computed
+> differently, over trimmed request/response payloads where a real before-and-after exists. Do not
+> present the two as the same number.
+
+## `connections: 0` is meaningful
+
+You reached the proxy over HTTP, so it *is* in your path — but it has no open websocket from your
+address. That is a different state from "not behind the trimmer", and worth showing differently.
+It usually means the panel has not opened its websocket yet, or is connecting from a different
+address than it fetches from.
+
+In that state `dashboard`, `entities_served`, `traffic` and `first_payload` are all `null`.
+`stripper` and `trimming` are still fully populated.
+
+## What this endpoint will never tell you
+
+The proxy port is reachable by anything on the network and has **no authentication in front of
+it**. Every field is therefore something that network may read. Deliberately absent, and covered
+by tests (`test/client_info.test.mjs`) that fail if any of it appears:
+
+- Override rules of any kind, and the config keys that hold them.
+- Allowlist contents — no entity ids, ever.
+- Home Assistant user identities. A panel is not told which user it is logged in as.
+- Any other client's address, hostname, dashboard or statistics.
+- Dashboard lists, always/never lists, mDNS names, certificate hosts.
+
+There is also **no way to name a different subject** — no `?ip=`, no header override. If there
+were, any device on the network could enumerate every panel from an unauthenticated port.
+
+> **Do not build anything security-sensitive on this.** It is unauthenticated diagnostics. Treat it
+> as advisory: render it, do not gate behaviour on it. And do not relay it off the local network.
+
+## Using it
+
+Fetch on demand, when the admin screen opens. It is cheap but not free — it takes a stats snapshot
+per call.
+
+```js
+async function stripperStatus(haBaseUrl) {
+  try {
+    const res = await fetch(new URL('/stripper/client.json', haBaseUrl), {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(2000),
+    });
+    if (res.status === 404) return { state: 'not-in-path' };
+    if (!res.ok) return { state: 'error', status: res.status };
+    return { state: 'ok', data: await res.json() };
+  } catch {
+    return { state: 'unreachable' };
+  }
+}
+```
+
+### Rules of engagement
+
+- **Do not poll on a timer from a dashboard.** This is an admin screen. Fetch on open, and on an
+  explicit refresh.
+- If you must refresh automatically while the screen is visible, **30 seconds is plenty**, and stop
+  when the screen is hidden.
+- **Set a short timeout.** A panel's diagnostics screen should not hang because the proxy is busy.
+- **Ignore unknown fields.** The schema is additive: new keys will appear, and existing ones will
+  not change meaning. Do not validate strictly.
+- **Handle `null` everywhere in `client`.** Every field there can be `null`, and `null` means "not
+  known", never zero.
+- CORS is open (`Access-Control-Allow-Origin: *`) so a panel admin page served from its own origin
+  can read it.
+
+### A reasonable admin panel
+
+- **Status line.** "Trimmed by WebSocket Stripper 2026.09.15.21" — or "Not behind the trimmer" on a
+  404. That one line is most of the value.
+- **What it is cutting.** The `trimming` booleans as chips. Showing only the `true` ones and a count
+  of the rest keeps the row short.
+- **This panel.** `entities_served` and `dashboard` — "88 entities, office-tablet". This is the
+  number people actually want.
+- **What it saved.** `not_sent_pct` with the byte totals underneath.
+- **Boot.** `first_payload.ms_to_data` and `bytes`, if the panel already reports boot timings.
+
+---
+
+Questions and schema additions welcome via an issue on
+[davidcoulson/HA-Websocket-Stripper](https://github.com/davidcoulson/HA-Websocket-Stripper).
