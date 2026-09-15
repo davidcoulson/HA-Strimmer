@@ -1,5 +1,5 @@
 name: WebSocket Stripper
-version: "2026.09.15.31"
+version: "2026.09.15.32"
 slug: websocket_stripper
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -162,6 +162,7 @@ schema:
       auth_provider: str?
       mdns_kind: str?
       entrypoint: str?
+      assume_dashboard: str?
       # The name `entrypoint` had for one release. Still accepted.
       host: str?
       client: str?

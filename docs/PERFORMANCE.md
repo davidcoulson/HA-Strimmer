@@ -44,7 +44,7 @@ them:
 ### The A/B needs no configuration change
 
 The comparison is **the app's port against Home Assistant's own port** — `:9123` versus `:8123`
-— rather than toggling `strip_entities` on a running instance. Same dashboard, same browser, same
+— rather than toggling `trim_entities` on a running instance. Same dashboard, same browser, same
 throttle, same machine, one extra hop. This matters practically: toggling the option would degrade
 every panel in the house for the duration of the run.
 

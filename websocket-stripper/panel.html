@@ -1242,6 +1242,7 @@ function overrideEffect(kind, r) {
   if (kind === 'user_agent_dashboards') {
     if (r.dashboard) bits.push(['serve', [r.dashboard]]);
   } else {
+    if (r.assume_dashboard) bits.push(['serve', [r.assume_dashboard]]);
     if (r.always_forward?.length) bits.push(['forward', r.always_forward]);
     if (r.never_forward?.length) bits.push(['never forward', r.never_forward]);
     if (r.devices?.length) bits.push(['devices', r.devices]);
@@ -1422,6 +1423,7 @@ function buildRule(key, values, effects) {
     'client', 'user_agent']) {
     if (values[id]) rule[id] = values[id];
   }
+  if (effects.assume_dashboard) rule.assume_dashboard = effects.assume_dashboard;
   const always = list(effects.always_forward || '');
   const never = list(effects.never_forward || '');
   const devices = list(effects.devices || '');
@@ -1724,6 +1726,30 @@ function overrideWizard(d, save, say, addBtn) {
       pickers.push(() => { pk.commitPending(); effects[key] = pk.values; });
       return pk;
     };
+    // Only for a rule that matches a client app: assuming a dashboard is what that matcher
+    // exists for, and offering it on every rule would invite a rule that quietly re-attributes
+    // a connection that was already correctly attributed.
+    if (picked.includes('user_agent') && served.length) {
+      const row = document.createElement('div');
+      row.className = 'wiz-row';
+      const l = document.createElement('span');
+      l.textContent = 'Serve dashboard';
+      const sel = document.createElement('select');
+      sel.className = 'cfgval';
+      const blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = '(do not change attribution)';
+      sel.appendChild(blank);
+      for (const dash of served) {
+        const opt = document.createElement('option');
+        opt.value = dash;
+        opt.textContent = dash;
+        sel.appendChild(opt);
+      }
+      sel.onchange = () => { effects.assume_dashboard = sel.value; clearErr(); };
+      row.append(l, sel);
+      bodyEl.appendChild(row);
+    }
     pick('Forward', 'entity', 'search entities, or type /^update\\./', 'always_forward');
     pick('Never forward', 'entity', 'search entities, or type a /regex/', 'never_forward');
     // Whole devices are offered on every rule, not just device-matched ones: naming a device is
@@ -1739,7 +1765,8 @@ function overrideWizard(d, save, say, addBtn) {
       const rule = buildRule(key, values, effects);
       // A rule that matches something and changes nothing is a half-finished edit, and it is
       // invisible once saved — it just sits in the list doing nothing.
-      const doesSomething = Boolean(rule.always_forward || rule.never_forward || rule.devices);
+      const doesSomething = Boolean(rule.always_forward || rule.never_forward || rule.devices
+        || rule.assume_dashboard);
       if (!doesSomething) return fail('This rule would not change anything — fill in at least one effect.');
 
       const option = d.options.find((o) => o.key === key);

@@ -22,6 +22,7 @@ and sends each dashboard **only what it actually shows**. Same HA, same dashboar
 | 📦 **Install it** | **[Installation guide →](docs/INSTALL.md)** — about five minutes on HA OS, or a plain Docker container |
 | ⚙️ **Configure it** | **[Every option, described →](websocket-stripper/DOCS.md)** — the same text appears in the app's Documentation tab |
 | 📈 **Check the numbers** | **[Full method and raw runs →](docs/PERFORMANCE.md)** |
+| 🔀 **Upgrading an existing config** | **[Migration guide →](docs/MIGRATING.md)** — nothing is required; every old option name and override list still works |
 | 🔌 **Build a client against it** | **[Client status API →](docs/CLIENT-API.md)** — how a panel reads trimmer status and its own stats, for ha-paneld, Kiosk Satellite and friends |
 
 ---

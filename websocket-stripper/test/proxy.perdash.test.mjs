@@ -1793,3 +1793,63 @@ describe('an override that matches the sign-in method', () => {
     assert.ok(david.has('light.living_room'), 'and the dashboard itself is unaffected');
   });
 });
+
+// Attribution from the unified list.
+//
+// `user_agent_dashboards` existed to answer one question: the companion app opens a native
+// websocket that never fetches a dashboard page, so it has no cookie and no IP hint and lands on
+// the union. Its User-Agent is the only thing that identifies it.
+//
+// When four lists became one, the unified list could MATCH on a User-Agent but had no way to say
+// "assume this dashboard" — so the migration would have quietly lost the capability the old key
+// existed for. This is that capability, in the new shape.
+describe('a unified rule that assumes a dashboard from the client app', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash,auto-dash', port,
+      extraEnv: {
+        OVERRIDES: JSON.stringify([
+          { user_agent: 'io.robbie.HomeAssistant', assume_dashboard: 'auto-dash' },
+        ]),
+      },
+    });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  // Compared against the SAME connection without the header, which is the only way to tell
+  // "attributed to auto-dash" from "served the union" without hard-coding a fixture's contents.
+  // An earlier version asserted the absence of an entity that does not exist in the fixture at
+  // all, so it passed with the feature removed.
+  const served = async (ua) => {
+    const seq = mock.subscribeEntitiesSeq();
+    // haClient takes a FLAT headers object; wrapping it in { headers: ... } sends nothing, and
+    // the test then proves only that a connection with no User-Agent lands on the union.
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'david-token',
+      ua ? { 'user-agent': ua } : undefined);
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    const got = new Set(await mock.waitForSubscribeEntities(seq) ?? []);
+    c.close();
+    return got;
+  };
+
+  it('attributes a connection with no cookie and no hint', async () => {
+    // Deliberately no page request first: this is the companion-app case, which has neither.
+    const union = await served(null);
+    const app = await served('Home Assistant/2026.9 (io.robbie.HomeAssistant; build:1)');
+
+    // Named entities rather than set sizes: auto-dash and the union happen to be the same size
+    // in this fixture, so a size comparison cannot tell them apart. light.bedroom belongs to
+    // auto-dash, sensor.humidity to test-dash — the same markers the legacy UA test uses.
+    assert.ok(app.has('light.bedroom'), 'got auto-dash, the dashboard this rule names');
+    assert.ok(!app.has('sensor.humidity'),
+      'and NOT the union, which would include test-dash');
+    // And the control: without the header the same connection lands on the union.
+    assert.ok(union.has('sensor.humidity') && union.has('light.bedroom'),
+      'a connection with no signal at all still gets the union');
+  });
+});

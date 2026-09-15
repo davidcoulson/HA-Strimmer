@@ -28,8 +28,8 @@ For *why* it exists and what it measures, see the [README](../README.md).
      - hallway-kiosk
    always_forward: []          # e.g. ["/^sun\\./", "person.alex"]
    never_forward: []           # e.g. ["/_battery$/"]
-   strip_entities: true        # the main switch
-   per_dashboard: true         # each connection gets only its own dashboard's entities
+   trim_entities: true        # the main switch
+   by_dashboard: true         # each connection gets only its own dashboard's entities
    trim_registries: true       # also cut the entity/device/area registries
    compress_websocket: true    # leave on: HA's own websocket compresses too
    trim_resources: false       # off by default — see below
@@ -68,10 +68,10 @@ snapshot, everything after it is a diff. (There's an older, separate call for th
 alone — `get_states` — but the current frontend doesn't use it. On the instance this was built
 against it is never called once.)
 
-*Trimmed by `strip_entities`* — by telling Home Assistant, at subscribe time, the only entities
+*Trimmed by `trim_entities`* — by telling Home Assistant, at subscribe time, the only entities
 this dashboard cares about. Which is why **this is the one saving the stats panel can't show
 you**: HA filters server-side, so the untrimmed version is never built and there's nothing to
-measure against. Sized once by running with `strip_entities: false` and comparing: **2.5 MB**
+measure against. Sized once by running with `trim_entities: false` and comparing: **2.5 MB**
 of snapshot per page load and roughly **17 MB per hour** of stream, versus 112 KB and 0.5 MB/h
 with it on.
 
@@ -130,7 +130,7 @@ Measured per page load on the instance this was built against (9,751 entities):
 
 ### Which are safe to leave on?
 
-- ✅ **`strip_entities` and `trim_registries`** — on by default. If either goes wrong you see it
+- ✅ **`trim_entities` and `trim_registries`** — on by default. If either goes wrong you see it
   instantly: a card shows "unavailable", or a name renders as `light.abc123` instead of
   "Ceiling". Loud, obvious, easy to undo.
 - ⚠️ **`trim_resources`** — opt-in. Most mistakes here are loud too: a missing card shows
@@ -238,11 +238,11 @@ are JSON.
 | `HA_TOKEN` | — | Long-lived access token. Required; the app uses `SUPERVISOR_TOKEN` instead. |
 | `DASH_PATHS` | `dashboards` | `url_path` of each dashboard to serve. **Required** — empty means the proxy refuses websockets rather than serving the untrimmed firehose. |
 | `PROXY_PORT` | `proxy_port` | Port browsers and wall panels connect to (default `9123`). The old names `PORT` / `port` still work. |
-| `MGMT_PORT` | `mgmt_port` | Management console + JSON API (default `9122`). Only the default is reachable from the HA sidebar — Ingress routes to `ingress_port`, fixed at install. The old names `STATS_PORT` / `stats_port` still work. |
+| `MGMT_PORT` | `mgmt_port` | Management console + JSON API (default `9122`). Only the default is reachable from the HA sidebar — Ingress routes to `ingress_port`, fixed at install. The old names `STATS_PORT` / `mgmt_port` still work. |
 | `ALWAYS_FORWARD` | `always_forward` | Literal ids or `/regex/`. |
 | `NEVER_FORWARD` | `never_forward` | Wins over everything. |
-| `STRIP_ENTITIES` | `strip_entities` | `0` = plain passthrough, for an A/B comparison. |
-| `PER_DASHBOARD` | `per_dashboard` | Each connection gets only its own dashboard's entities. |
+| `STRIP_ENTITIES` | `trim_entities` | `0` = plain passthrough, for an A/B comparison. |
+| `PER_DASHBOARD` | `by_dashboard` | Each connection gets only its own dashboard's entities. |
 | `TRIM_REGISTRIES` | `trim_registries` | Entity/device/area registries. |
 | `COMPRESS_WS` | `compress_websocket` | Leave on. |
 | `TRIM_RESOURCES` | `trim_resources` | **Off by default** — read the tuning notes before enabling. |

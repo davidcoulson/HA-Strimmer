@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026.09.15.32 — 2026-09-15
+
+**Documentation caught up with the day's changes, and one gap it exposed was closed.**
+
+`DOCS.md` now documents the unified `overrides` list with every matcher, the `client_api_*`
+options, `mgmt_port`, and — new — **the Config tab**: per-option ownership, why setup options stay
+in YAML, the override wizard, and exactly what the console's own port will and will not serve off
+Ingress. The renamed options are corrected throughout, with the old name noted where a reader might
+be carrying it.
+
+**[docs/MIGRATING.md](../docs/MIGRATING.md) is new.** Its first line is that nothing is required —
+every old option name and every older override list is still read. It covers the five renames and
+why two of them need a moment's thought rather than a blind rename, shows the four override lists
+becoming one line for line, and names the behaviour changes worth knowing about even if you rename
+nothing.
+
+**Writing it found a real gap.** The migration guide claimed a unified rule could do `user_agent` +
+`assume_dashboard`. It could not: attribution was still read only from the old
+`user_agent_dashboards` key, and unifying the wizard had dropped the "serve dashboard" effect
+entirely — so **the wizard could no longer create the rule that key exists for**. The unified list
+handles it now, and the wizard offers it when a client-app matcher is chosen.
+
+---
+
 ## 2026.09.15.31 — 2026-09-15
 
 **A device that announces itself several times gets a stable label.**

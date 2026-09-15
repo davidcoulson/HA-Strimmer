@@ -6,13 +6,19 @@ uses, so kiosk/wall-panel pages load fast on large instances — with no loss of
 
 ## Configuration
 
+Options can be set here or, for most of them, from the **Config** tab in the app's own
+sidebar panel — see [The Config tab](#the-config-tab).
+
+**Upgrading?** Nothing is required: every old option name and every older override list is
+still read. See [docs/MIGRATING.md](../docs/MIGRATING.md) for what was renamed and why.
+
 | Option | Type | Description |
 |--------|------|-------------|
 | `dashboards` | list of strings | Dashboard `url_path`s to serve (e.g. `fridge-status`). The forwarded entity set is the **union** of all of them, so you can navigate between them. Find a dashboard's `url_path` in Settings → Dashboards. |
 | `always_forward` | list | Entities to forward even if no listed dashboard uses them. Each item is a literal `entity_id` or a `/regex/` (matched against all entities). |
 | `never_forward` | list | Entities to never forward. Applied last — **wins** over `always_forward` and dashboard detection. Literal or `/regex/`. |
-| `strip_entities` | bool | `true` (default) strips the websocket to the allowlist. `false` = full passthrough (for A/B comparison). |
-| `per_dashboard` | bool | `true` (default) serves each connection only the dashboard it is actually viewing, instead of the union of every dashboard in `dashboards`. A panel showing one dashboard stops paying for the others. The dashboard is inferred from the page request that immediately precedes the websocket; a connection that can't be attributed falls back to the union, so nothing is ever served *less* than it was before this option existed. **Limit:** navigating to another dashboard *without* a page reload keeps the allowlist the connection opened with, so that dashboard's own entities show as unavailable until reload — see below. `false` = always serve the union (pre-2026.09 behaviour). |
+| `trim_entities` | bool | `true` (default) trims the websocket to the allowlist. `false` = full passthrough (for A/B comparison). *(Was `strip_entities`, still accepted.)* |
+| `by_dashboard` | bool | `true` (default) serves each connection only the dashboard it is actually viewing, instead of the union of every dashboard in `dashboards`. A panel showing one dashboard stops paying for the others. The dashboard is inferred from the page request that immediately precedes the websocket; a connection that can't be attributed falls back to the union, so nothing is ever served *less* than it was before this option existed. **Limit:** navigating to another dashboard *without* a page reload keeps the allowlist the connection opened with, so that dashboard's own entities show as unavailable until reload — see below. `false` = always serve the union (pre-2026.09 behaviour). *(Was `per_dashboard`, still accepted.)* |
 | `trim_registries` | bool | `true` (default) also trims the entity/device/area registries to what the connection can see, **including `config/entity_registry/list_for_display`**, which is typically the single largest payload the frontend fetches (1.44MB of a 2.46MB load on a 9,553-entity instance). Once states are trimmed this is the largest remaining payload on a big instance — it is one row per entity for the *whole* install. Devices and areas are kept wherever a surviving entity still reaches them, so names and area assignments keep resolving. Turn this **off first** if names, areas or device links render oddly. |
 | `trim_services` | bool | `false` (default). Cuts `get_services` to the domains the connection can see. It carries every service of every integration and is sent on every page load — **193KB across 115 domains** on the instance this was built against, where only **45 domains** had any entity. `homeassistant` is always kept, since its services are domain-agnostic. Off by default because the frontend uses this for service pickers and the automation editor. |
 | `trim_themes` | bool | `false` (default). Home Assistant sends **every installed theme** to every client on every page load — 10 themes and 28,138 bytes measured, of which a panel renders one. Keeps the themes your dashboards name (the whole config tree is walked, since a `theme:` can sit on a dashboard, a view or a card) plus HA's current default and dark default, read from the reply itself so a dark default nothing mentions still survives. If the trim would keep nothing, the full list is sent — an unthemed dashboard is worse than a large one. |
@@ -27,7 +33,11 @@ uses, so kiosk/wall-panel pages load fast on large instances — with no loss of
 | `exclude_device_categories` | list | Empty by default. When a **device** is expanded — by a card configured with a device rather than entities, or by a `client_overrides` rule — drop entities Home Assistant labels `config` (controls that configure the device: panel brightness, a reset button, a firmware update) or `diagnostic` (readings about its health: last seen, signal, status code). A litter robot carries 21 entities and a card rendering a fill level needs a handful. **Empty on purpose:** whether a given card renders a diagnostic sensor is not knowable from here, and a wrongly dropped entity blanks part of a card with no error anywhere. Every device expansion logs its split — `+21 entities (8 primary, 7 config, 6 diagnostic)` — so decide with the real numbers for *your* devices in front of you. Note a browser voice satellite measured 18 of 21 entities as `config`, because its pipeline and wake-word selects are configuration controls that the page's JavaScript nonetheless reads to work. |
 | `resources_always_forward` | list | URL patterns (literal substring, or `/regex/`) always sent. Needed for plugins that patch the frontend instead of registering a card — they contain none of the dashboard's card names, so the content match cannot tell they're used. In practice: icon packs, and anything that restyles core cards. A module with its own top-level config block on the dashboard (`kiosk_mode:`, `swipe_nav:`) is detected from that block and does not need listing. |
 | `resources_never_forward` | list | URL patterns never sent to any dashboard. Wins over `resources_always_forward`. |
+| `overrides` | list | **One list for every override rule.** Each rule may match on a dashboard, a Home Assistant user, a role, how they signed in, the device kind announced over mDNS, the entry point they arrived through, a device address, and a client app — and the matchers you set must **all** hold. See *Override rules* below. The four older lists (`dashboard_overrides`, `user_overrides`, `client_overrides`, `user_agent_dashboards`) still work and are read into this same list at startup, so nothing needs changing. |
+| `client_api_access` | enum | `lan` (default) / `any` / `off`. Who may reach `/stripper/client.json`, the endpoint a wall panel uses to show whether this app is in front of it. `lan` refuses internet and Cloudflare requests **before** the token is checked. A Home Assistant token is required either way — this narrows who may try, it does not replace authentication. See [Client status API](../docs/CLIENT-API.md). |
+| `client_api_allow` | list | Addresses or CIDRs allowed to reach that endpoint whatever `client_api_access` says — for a panel on a subnet this app does not consider local. |
 | `proxy_port` | int | Port browsers and wall panels connect to (default `9123`). The older name `port` is still accepted. Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another app (e.g. Zigbee2MQTT). |
+| `mgmt_port` | int | Where the console and its JSON API listen (default `9122`). The older name `stats_port` is still accepted. **Only the default is reachable from the sidebar** — Home Assistant routes the Ingress panel to `ingress_port`, fixed at install time. Move this and the console is still served directly at `http://<host>:<port>/`, and the app says so in its log when the two differ. |
 | `ha_base` | string | Optional. Override the Home Assistant base URL the app proxies to (default `http://homeassistant:8123`). Set this if `host_network` is on and the internal `homeassistant` hostname doesn't resolve — e.g. `http://192.168.4.2:8123`. |
 | `allow_ws_url` | string | Optional. Override the websocket URL used once at startup to precompute the allowlist (default `ws://supervisor/core/websocket`). Set if `supervisor` doesn't resolve under `host_network` — e.g. `ws://192.168.4.2:8123/api/websocket` (also requires a token via `ALLOW_TOKEN`). |
 
@@ -43,37 +53,75 @@ always_forward:
   - person.gabriel
 never_forward:
   - "/_battery$/"
-strip_entities: true
+trim_entities: true
 ```
 
 Regex entries are slash-wrapped with optional flags, e.g. `"/_motion$/i"`. In YAML,
 backslashes must be escaped (`"\\."`).
 
-### Scoping rules: dashboard, user, or device
+### Override rules
 
-The three override blocks answer three different questions. Pick by what the entity actually
-belongs to:
+One list, `overrides`, holds every rule. A rule is **matchers** plus **effects**: set as many
+matchers as you like and they must all hold, then the effects apply.
+
+| Matcher | Matches |
+|---------|---------|
+| `dashboard` | A dashboard's `url_path`. |
+| `user` | A Home Assistant user, by the name in Settings → People, or by user id. |
+| `role` | `admin` or `user`. Home Assistant has exactly these two. Attaches entities to *whoever* is an administrator rather than to a named person — which is usually what a per-user rule is approximating. |
+| `auth_provider` | `homeassistant` (password) or `trusted_networks`. "Anything logged in through trusted networks" is the kiosk pattern without naming a device: addresses move, the login method does not. |
+| `mdns_kind` | What the device announces itself as over mDNS — `Kiosk Satellite`, `ESPHome`, `ha-paneld`, `Cast`. Matches **any** record for that address: a panel commonly advertises more than once, with a different version on each. |
+| `entrypoint` | The hostname the client arrived on, since one instance is reachable by several names. *(Was `host`, still accepted.)* |
+| `client` | An IP, an IPv4 CIDR (`10.2.4.0/24`), or a hostname. Hostnames resolve when the allowlist is built, so a moved DHCP lease is picked up on the next rebuild; note mDNS/`.local` names generally do **not** resolve from inside a container. |
+| `user_agent` | Part of the client's User-Agent, literal or `/regex/`. |
+
+| Effect | Does |
+|--------|------|
+| `always_forward` | Entities to send, literal or `/regex/`. |
+| `never_forward` | Entities to withhold. The global `never_forward` still wins last. |
+| `devices` | Whole **devices** by registry name or id, pulling in every entity that device owns — which keeps working when an integration adds entities in a later release. |
 
 ```yaml
-# "this dashboard needs an entity none of its cards name"
-dashboard_overrides:
+overrides:
+  # "this dashboard needs an entity none of its cards name"
   - dashboard: hallway-kiosk
     always_forward: ["input_boolean.hallway_night_mode"]
 
-# "David sees update.* on the main dashboard; nobody else does"
-user_overrides:
-  - user: David Coulson
-    dashboard: lovelace
+  # "administrators see update.*, whoever they are"
+  - role: admin
     always_forward: ["/^update\\./"]
 
-# "this panel IS a voice satellite, wherever it navigates"
-client_overrides:
+  # "this panel IS a voice satellite, wherever it navigates"
   - client: 10.2.4.109
     devices: ["Basement Stairs Panel"]
+
+  # "every Kiosk Satellite panel arriving through the IoT entry point"
+  - mdns_kind: Kiosk Satellite
+    entrypoint: home-iot.example.org
+    always_forward: ["/^assist_satellite\\./"]
 ```
 
-A rule pinned to a **client** applies whether or not the dashboard could be attributed — that is
-the point of pinning to a device. A global `never_forward` still wins last over all three.
+**When each rule is decided.** A rule is evaluated at the latest moment its matchers can all be
+known. `dashboard`, `client`, `entrypoint`, `mdns_kind` and `user_agent` are known when the socket
+opens. `user`, `role` and `auth_provider` are **identity**, which only resolves once the browser's
+auth token has been checked — so a rule naming any of them holds the connection's messages until
+that lookup returns. Connections whose dashboard no such rule is scoped to skip the lookup
+entirely, so scoping your rules is also a speed optimisation.
+
+**A rule with no matcher is ignored** and logged. That is what the global `always_forward` /
+`never_forward` lists already are, and silently applying an "override" to every connection is not a
+reasonable reading of a rule someone thought they were scoping.
+
+**mDNS is not a credential.** An mDNS name is a label a device chose for itself, unverified and
+trivially spoofable by anything on your network. It is fine for "serve this panel more entities"
+and is **not** a security boundary.
+
+The startup log counts the rules by matcher, so "my override does nothing" has a first answer:
+
+```
+overrides: 4 rule(s) — 2 keyed to a user, 0 to a role, 2 to a device, 2 to a dashboard,
+           0 to a client app, 0 to a device kind, 0 to an entry point, 0 to a sign-in method
+```
 
 ## Usage
 
@@ -144,7 +192,7 @@ rely on trusted-network auto-login, that's a reasonable local change; you then t
 port via the Network tab as usual. The default stays `true` so the documented kiosk login
 keeps working out of the box.
 
-## Statistics panel
+## The console
 
 The app registers an Ingress panel, so there is a **Stripper** entry in the Home Assistant
 sidebar. (If it is missing, turn on *Show in sidebar* on the app's own page — Supervisor
@@ -179,6 +227,56 @@ sensor:
     json_attributes: [before, after, savedPct]
 ```
 
+### The Config tab
+
+Options can be changed from the console instead of the add-on's Configuration tab, grouped into
+sections — Trimming, Dashboards and entities, Custom cards, Overrides, Device discovery,
+Monitoring, Websocket, Panel status API. Booleans are checkboxes, lists are their items with a
+remove button and an add box, and the override rules get a list and a wizard rather than a YAML
+block.
+
+This exists because the add-on's options have outgrown what a Supervisor schema can express:
+nested groups do not render in the Configuration tab at all, sub-options cannot carry
+descriptions, and there is no validation beyond types.
+
+**Ownership is per option.** An option is read from the console only when someone has deliberately
+changed it there; everything else still comes from the add-on's Configuration tab and still works
+exactly as before. A row marked **set here** is owned by the console, and the Configuration tab no
+longer applies to it. Taking a setting over never changes it — it is seeded from whatever is
+already in effect — and **Use add-on config** hands it back.
+
+Options are read once at startup, so a change takes effect on the next restart.
+
+**Setup options are deliberately not editable here**: `proxy_port`, `mgmt_port`, `ha_base`,
+`allow_ws_url` and `log_level` stay in the add-on's Configuration tab. How the process binds and
+finds Home Assistant has to stay fixable from Home Assistant when the console is the thing that is
+broken.
+
+#### Adding an override
+
+**Add override** asks what to match on, then what the rule should do. Entity and device fields
+search as you type — and still accept anything typed, because an `always_forward` entry is
+routinely a `/regex/`, which no list of entity ids can suggest. Deleting a rule takes two clicks,
+since the rows look alike and the deletion cannot be undone from the console.
+
+### What the console will and will not serve
+
+The console's port is reachable by anything on your network and has no authentication in front of
+it. Home Assistant Ingress does, so that is where the boundary is drawn:
+
+| Path | Off Ingress |
+|------|-------------|
+| `/stats.json` | **Served, with identities removed.** Counts, savings and allowlist sizes stay, so a `rest:` health sensor keeps working. The per-client list, discovered devices, resolved hostnames and the routing breakdown do not. |
+| `/access.json`, `/entities.json`, `/devices.json`, `/config.json`, `/history.json` | **Refused.** |
+| Writes (pin, config) | **Refused**, as they always were. |
+
+`/access.json` is the one that matters most: Home Assistant puts credentials in request **paths**
+as well as in query strings, so a request log holds webhook ids and signed camera-stream tokens.
+Query strings were always stripped; paths were not, which is why this is now Ingress-only.
+
+Opening the console on the app's own port therefore shows statistics but not identities, and the
+Config tab says so rather than rendering blank.
+
 ### How the 24h history works
 
 Sampled every five minutes into 288 buckets and persisted to `/data`, so an app restart
@@ -205,7 +303,7 @@ than an estimate.
 **Live update traffic is throughput, not a saving.** Home Assistant filters the event stream
 server-side from the `entity_ids` this app injects, so the untrimmed volume never exists
 anywhere and cannot be measured. Reporting a saving there would mean inventing a
-counterfactual. For that comparison, run once with `strip_entities: false` and compare the two
+counterfactual. For that comparison, run once with `trim_entities: false` and compare the two
 throughput figures.
 
 A connection younger than a minute reports no rate at all rather than extrapolating its
@@ -309,7 +407,7 @@ A note on judging the result: check that Home Assistant has **finished starting*
 decide a card is broken. During startup HA serves entities as unavailable, and tile features
 like `light-color-favorites` render empty — which looks exactly like a missing resource.
 
-### Cross-dashboard navigation with `per_dashboard` on
+### Cross-dashboard navigation with `by_dashboard` on
 
 A connection is attributed to a dashboard by the page GET that precedes it, and keeps that
 allowlist for its whole life. Navigating to a **different** dashboard client-side — the HA
@@ -321,5 +419,5 @@ connection, but requesting a dashboard's config does not mean displaying it: Kio
 for one, enumerates every dashboard's views at startup. Acting on that signal caused a
 reconnect storm and served panels the wrong allowlist (see `2026.09.11.02` in the changelog).
 
-If your panels navigate between dashboards, either set `per_dashboard: false` to serve the
+If your panels navigate between dashboards, either set `by_dashboard: false` to serve the
 union, or make the navigation a full page load.

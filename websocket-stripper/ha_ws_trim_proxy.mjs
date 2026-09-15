@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.31';
+const VERSION = '2026.09.15.32';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -258,9 +258,17 @@ const NEVER = parseRules(OPT.never_forward ?? process.env.NEVER_FORWARD);
 const UA_DASHBOARDS = (() => {
   const raw = OPT.user_agent_dashboards
     ?? (process.env.UA_DASHBOARDS ? JSON.parse(process.env.UA_DASHBOARDS) : []);
-  return (Array.isArray(raw) ? raw : [])
+  const legacy = (Array.isArray(raw) ? raw : [])
     .filter((o) => o && typeof o.match === 'string' && typeof o.dashboard === 'string')
     .map((o) => ({ ...parseRules([o.match])[0], dashboard: o.dashboard }));
+  // The same thing said in the unified list: `user_agent` plus `assume_dashboard`. Without this
+  // the unified list could MATCH on a User-Agent but not do the one thing the old key existed
+  // for, so the four-lists-into-one migration would have quietly lost a capability.
+  const unified = (Array.isArray(OPT.overrides) ? OPT.overrides
+    : (process.env.OVERRIDES ? JSON.parse(process.env.OVERRIDES) : []))
+    .filter((o) => o && typeof o.user_agent === 'string' && typeof o.assume_dashboard === 'string')
+    .map((o) => ({ ...parseRules([o.user_agent])[0], dashboard: o.assume_dashboard }));
+  return [...unified, ...legacy];
 })();
 
 // user (lower-cased name, or id) -> { always: rules, never: rules }
