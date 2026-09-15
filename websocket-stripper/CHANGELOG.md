@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026.09.15.23 — 2026-09-15
+
+**A searchable picker for entities and devices, and a device-name bug worth knowing about.**
+
+**The override wizard stops asking people to type from memory.** Entity and device fields now
+search as you type — entities against the instance's own list, devices against the registry the
+proxy has already read, so a keystroke costs nothing upstream. The device picker shows what naming
+each device would pull in, because that is the decision being made.
+
+**It is search-assisted, not search-only.** Half the legitimate values here cannot be found by
+searching: an `always_forward` entry is routinely a `/regex/`, which matches nothing in a list of
+entity ids and is the whole point of the feature. Enter commits whatever is in the box whether or
+not it matched a suggestion. A picker that only accepted what it could suggest would have looked
+finished and been strictly less capable.
+
+**`GET /devices.json`** joins `/entities.json` on the management port — names and entity counts,
+nothing else.
+
+**Fixed: a rule naming a device that shares its name with another device expanded the wrong one.**
+The name lookup was a map of name to a single id, so two devices with the same name collapsed to
+whichever came last in the registry, silently, with nothing anywhere saying which had been chosen.
+Duplicate names are ordinary — an integration re-adds a device, or two panels are built the same
+way. **Every device with that name is expanded now**, which follows the asymmetry used throughout
+this codebase: a needless entity costs bytes, a missing one blanks part of a card with no error.
+The log says when a name matched more than one, so an over-broad rule can be narrowed
+deliberately. The picker shows one row per name, carrying the combined total.
+
+**Test deadlines raised from 8s to 25s.** These wait on a freshly spawned proxy reaching a log
+line, and the suite runs its files in parallel — a dozen node processes booting at once pushed two
+of them past 8s and failed a green build twice. Nothing here measures boot time, so a generous
+ceiling costs nothing while a genuine hang still fails.
+
+---
+
 ## 2026.09.15.22 — 2026-09-15
 
 **Documentation only. No behaviour changes.**

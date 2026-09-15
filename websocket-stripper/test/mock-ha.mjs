@@ -283,7 +283,8 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
     subscribeEntitiesSeq: () => state.subscribeEntitiesSeq,
     // Resolve once a subscribe_entities arrives after `seq`. Callers snapshot the sequence
     // BEFORE opening their socket, so no subscription can slip through between the two.
-    async waitForSubscribeEntities(seq, ms = 8000) {
+    // Same reasoning as waitForLog in the proxy test files: parallel spawns, not a budget.
+    async waitForSubscribeEntities(seq, ms = 25000) {
       const deadline = Date.now() + ms;
       while (state.subscribeEntitiesSeq <= seq) {
         if (Date.now() > deadline) {

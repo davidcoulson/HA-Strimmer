@@ -143,7 +143,7 @@ describe('stats API over HTTP', () => {
     });
     proxy.stdout.on('data', (b) => { out += b.toString(); });
     proxy.stderr.on('data', (b) => { out += b.toString(); });
-    const deadline = Date.now() + 8000;
+    const deadline = Date.now() + 25000;
     while (!/stats panel on/.test(out) || !/union allowlist for/.test(out)) {
       if (Date.now() > deadline) throw new Error(`proxy never started its stats server / built an allowlist\n${out}`);
       await new Promise((r) => setTimeout(r, 50));
@@ -330,7 +330,7 @@ describe('batched frame accounting', () => {
     });
     proxy.stdout.on('data', (b) => { out += b.toString(); });
     proxy.stderr.on('data', (b) => { out += b.toString(); });
-    const deadline = Date.now() + 8000;
+    const deadline = Date.now() + 25000;
     while (!/stats panel on/.test(out) || !/union allowlist for/.test(out)) {
       if (Date.now() > deadline) throw new Error(`proxy never started\n${out}`);
       await new Promise((r) => setTimeout(r, 50));
@@ -415,7 +415,7 @@ describe('resource pinning is Ingress-only', () => {
     });
     proxy.stdout.on('data', (b) => { out += b.toString(); });
     proxy.stderr.on('data', (b) => { out += b.toString(); });
-    const deadline = Date.now() + 8000;
+    const deadline = Date.now() + 25000;
     while (!/stats panel on/.test(out)) {
       if (Date.now() > deadline) throw new Error(`proxy never started\n${out}`);
       await new Promise((r) => setTimeout(r, 50));
@@ -764,6 +764,53 @@ describe('naming a route after its hop', () => {
 // These WRITE configuration, so they carry the same Ingress-only rule as the pins — and two
 // things beyond it: a setup option can never be taken over, and a save must say plainly that it
 // applies on the next restart rather than now.
+// The device search behind the console's picker.
+//
+// It exists so nobody has to type a device name from memory, which means it has to answer from
+// what the proxy already read rather than asking Home Assistant per keystroke — and it must carry
+// the entity COUNT, because naming a device in a rule is a decision about how much it pulls in.
+describe('device search', () => {
+  it('searches devices by name and says what each one costs', async () => {
+    const mock = await startMockHa();
+    const port = await getFreePort(); const sp = await getFreePort();
+    const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1' } });
+    try {
+      let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+      const deadline = Date.now() + 25000;
+      while (!/union allowlist for/.test(out)) {
+        if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const all = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/devices.json`)).body);
+      assert.ok(Array.isArray(all.matches), 'a device list is returned');
+      assert.equal(typeof all.total, 'number');
+      for (const m of all.matches) {
+        assert.equal(typeof m.name, 'string');
+        assert.ok(m.name.trim(), 'a device with no usable name is not offered — it cannot be named in a rule');
+        assert.equal(typeof m.entities, 'number', 'the picker shows what naming this device pulls in');
+      }
+      // The payload must stay small enough to answer a keystroke: names and counts, nothing else.
+      for (const m of all.matches) {
+        assert.deepEqual(Object.keys(m).sort(), ['devices', 'entities', 'name'],
+          'only what the picker renders — no ids, no areas, no entity lists');
+      }
+      // Two devices sharing a name are one row, carrying the combined total — because naming
+      // that name in a rule expands both. A row per device would offer a choice the rule cannot
+      // express, and would show two different counts for the same decision.
+      const names = all.matches.map((m) => m.name);
+      assert.equal(new Set(names).size, names.length, 'a name appears at most once');
+      for (const m of all.matches) {
+        assert.ok(m.devices >= 1, 'each row says how many devices it covers');
+      }
+
+      const limited = JSON.parse((await httpGet(`http://127.0.0.1:${sp}/devices.json?limit=1`)).body);
+      assert.ok(limited.matches.length <= 1, 'limit is honoured');
+    } finally { proxy.kill(); await mock.close(); }
+  });
+});
+
 describe('config endpoints', () => {
   const post = (port, body) => new Promise((resolve, reject) => {
     const data = JSON.stringify(body);

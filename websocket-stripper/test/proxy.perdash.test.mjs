@@ -8,6 +8,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { WebSocket as WS } from 'ws';
@@ -59,7 +60,12 @@ function spawnProxy({ mock, dashPaths, port, statsPort = 0, extraEnv = {} }) {
       if (listeners[i].re.test(out)) { listeners[i].resolve(out); listeners.splice(i, 1); }
     }
   }
-  const waitForLog = (re, ms = 8000) => new Promise((resolve, reject) => {
+  // 25s, not 8s. These wait on a freshly spawned proxy reaching a log line, and the suite runs
+  // its files in PARALLEL — a dozen node processes booting at once on a loaded machine pushed
+  // two of these past 8s and failed a green build twice. The number is not a performance
+  // budget: nothing here is measuring boot time, so a generous ceiling costs nothing while a
+  // genuine hang still fails, just later.
+  const waitForLog = (re, ms = 25000) => new Promise((resolve, reject) => {
     if (re.test(out)) return resolve(out);
     const l = { re, resolve: (v) => { clearTimeout(t); resolve(v); } };
     listeners.push(l);
@@ -1666,5 +1672,29 @@ describe('one rule, several matchers', () => {
     assert.ok(!michelle.has('sensor.decoy_power'),
       'the address matches but the user does not, so the rule must not apply');
     assert.ok(michelle.has('light.living_room'), 'and she still gets the dashboard itself');
+  });
+});
+
+
+// Two devices with the same name.
+//
+// The name -> id lookup was a Map, so a duplicated name collapsed to whichever device came last
+// in the registry and a rule naming it silently expanded the wrong one, with nothing anywhere
+// saying which had been chosen. Duplicate names are ordinary: an integration re-adds a device, or
+// two panels are built the same way. All of them expand now, which follows the asymmetry used
+// everywhere else here — a needless entity costs bytes, a missing one blanks part of a card.
+describe('a device name shared by two devices', () => {
+  it('expands every device with that name, not just one', () => {
+    const src = fs.readFileSync(path.join(DIR, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
+    const build = src.match(/const idsByName = new Map\(\);[\s\S]*?\n  \}/)?.[0];
+    assert.ok(build, 'the lookup must collect every id for a name');
+    assert.match(build, /idsByName\.get\(n\)\.push\(d\.id\)/,
+      'ids accumulate rather than overwrite');
+
+    const use = src.match(/const ids = byId\.has\(want\)[\s\S]*?r\.deviceEntities\.push\(\.\.\.kept\);/)?.[0];
+    assert.ok(use, 'the rule must resolve a device name to ids');
+    assert.match(use, /ids\.flatMap/, 'every matching device is expanded');
+    assert.match(use, /ids\.length > 1/, 'and an ambiguous name is reported rather than silent');
+    assert.ok(!/idByName\.get/.test(src), 'the single-winner lookup must be gone');
   });
 });

@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.22';
+const VERSION = '2026.09.15.23';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -654,6 +654,27 @@ async function buildAllow(rpc, renderTemplate) {
   ALL_ENTITIES = states.map((e) => [e.entity_id, e.attributes?.friendly_name ?? null]);
   const byId = new Map(states.map((st) => [st.entity_id, st]));
   const registries = await fetchRegistries(rpc);
+  // The device list the console's picker searches. `entities` is what naming this device in a
+  // rule would actually pull in — the number that decides whether the rule is a good idea.
+  ALL_DEVICES = (() => {
+    const byDev = buildRegistryCtx(registries).byDevice;
+    const rows = (registries?.devices || [])
+      .map((d) => {
+        const name = String(d.name_by_user || d.name || '').trim();
+        return name ? { name, id: d.id, entities: (byDev.get(d.id) || []).length } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    // Collapse devices that share a name into one row: the rule names a NAME, and naming it
+    // expands all of them, so one row carrying the combined total is what the rule will do.
+    const byName = new Map();
+    for (const d of rows) {
+      const cur = byName.get(d.name);
+      if (cur) { cur.entities += d.entities; cur.devices += 1; }
+      else byName.set(d.name, { name: d.name, entities: d.entities, devices: 1 });
+    }
+    return [...byName.values()];
+  })();
   // Resolve client-pinned rules here: the device registry has just been fetched, and doing it
   // on every rebuild means a renamed device or a moved DHCP lease is picked up without a restart.
   await resolveConnRules(registries);
@@ -1324,6 +1345,12 @@ let RESOURCE_UNMET_COVERAGE = { checkable: 0, unknowable: 0 };
 let INSTANCE_ENTITIES = 0;
 // [[entity_id, friendly_name]] for the whole instance. See buildAllow.
 let ALL_ENTITIES = [];
+// Every device, by the name a rule would name it and with the size of what it expands to. Kept
+// for the same reason as ALL_ENTITIES: the console offers a device picker, and asking Home
+// Assistant again on every keystroke to answer "which devices are there" is absurd when the
+// registry has just been read. Names only — no areas, no identifiers, nothing the picker cannot
+// render. The entity registry this is derived from is ~10MB; this is a few hundred short strings.
+let ALL_DEVICES = [];
 
 // Every token a dashboard might need a resource FOR: `custom:x` card/row/badge/feature types,
 // and icon-pack prefixes (`foo:bar` where foo isn't built in).
@@ -1901,9 +1928,23 @@ async function resolveConnRules(registries) {
   const devices = registries?.devices || [];
   const entities = registries?.entities || [];
   const byId = new Map(devices.map((d) => [d.id, d]));
-  const idByName = new Map(devices
-    .map((d) => [String(d.name_by_user || d.name || '').toLowerCase(), d.id])
-    .filter(([n]) => n));
+  // Name -> every device with that name, not just one.
+  //
+  // This was a Map of name -> id, so two devices sharing a name collapsed to whichever came last
+  // in the registry and a rule naming it silently expanded the wrong one. Duplicate names are
+  // ordinary — an integration re-adds a device, or two panels are set up the same way — and
+  // nothing anywhere said which had been chosen.
+  //
+  // All of them are expanded now. That follows the asymmetry this codebase uses everywhere else:
+  // a needless entity costs bytes, a missing one blanks part of a card with no error. The log
+  // says when a name matched more than one, so an over-broad rule can be narrowed deliberately.
+  const idsByName = new Map();
+  for (const d of devices) {
+    const n = String(d.name_by_user || d.name || '').trim().toLowerCase();
+    if (!n) continue;
+    if (!idsByName.has(n)) idsByName.set(n, []);
+    idsByName.get(n).push(d.id);
+  }
   const entsFor = buildRegistryCtx({ devices, entities }).byDevice;
 
   for (const r of CONN_RULES) {
@@ -1938,13 +1979,20 @@ async function resolveConnRules(registries) {
 
     r.deviceEntities = [];
     for (const want of r.devices) {
-      const id = byId.has(want) ? want : idByName.get(want.toLowerCase());
-      if (!id) { log(`  client rule ${r.client}: no device named "${want}"`); continue; }
-      const rows = entsFor.get(id) || [];
+      const ids = byId.has(want) ? [want] : (idsByName.get(want.trim().toLowerCase()) || []);
+      if (!ids.length) { log(`  client rule ${r.client}: no device named "${want}"`); continue; }
+      if (ids.length > 1) {
+        warn(`  ${ids.length} devices are named "${want}" — the rule expands all of them;`
+          + ' name one by its device id to pick just that one');
+      }
+      const rows = ids.flatMap((id) => entsFor.get(id) || []);
       const kept = deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES);
       r.deviceEntities.push(...kept);
-      log(`  client rule ${r.client}: device "${byId.get(id)?.name ?? id}" -> ${kept.length} entities`
-        + ` ${describeDeviceSplit(rows)}`);
+      // Named by the rule's own wording rather than by a device id: `want` is what someone
+      // wrote, and when it matched several devices there is no single id to name here.
+      log(`  client rule ${r.client}: device "${want}"`
+        + (ids.length > 1 ? ` (${ids.length} devices)` : '')
+        + ` -> ${kept.length} entities ${describeDeviceSplit(rows)}`);
     }
   }
 }
@@ -3322,6 +3370,24 @@ const statsServer = http.createServer((req, res) => {
       }
     });
     return;
+  }
+  // Search devices by name, for the console's picker. Read-only like /entities.json, and it
+  // carries the entity COUNT rather than the entity ids: naming a device in a rule is a decision
+  // about how much it pulls in, and the ids themselves are what the picker exists to avoid
+  // making anyone type.
+  if (path.endsWith('/devices.json')) {
+    const u = new URL(req.url, 'http://x');
+    const q = (u.searchParams.get('q') || '').trim().toLowerCase();
+    const limit = Math.min(Number(u.searchParams.get('limit')) || 50, 200);
+    const matches = [];
+    for (const d of ALL_DEVICES) {
+      if (q && !d.name.toLowerCase().includes(q)) continue;
+      matches.push(d);
+      if (matches.length >= limit) break;
+    }
+    const body = JSON.stringify({ query: q, total: ALL_DEVICES.length, shown: matches.length, matches });
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(body);
   }
   // Search every entity on the instance, flagging which the union allowlist already carries.
   // Read-only, so it is not behind the Ingress gate that writes are.

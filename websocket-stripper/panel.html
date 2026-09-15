@@ -128,6 +128,30 @@
   .wiz-row span { flex: 0 0 150px; color: var(--muted); font-size: 12px; }
   .wiz-actions { display: flex; gap: 8px; margin-top: 12px; }
   .wiz-err { color: var(--warn); font-size: 12px; margin-top: 8px; }
+  /* Picker. The input is a search box AND a free-text field: entity ids are searchable, a
+     /regex/ is not, and both are legitimate values — so suggestions assist typing rather than
+     replacing it. */
+  .pick { flex: 1; min-width: 0; position: relative; }
+  .pick-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 4px; }
+  .pick-chip { display: inline-flex; align-items: center; gap: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 4px 1px 7px; max-width: 100%; }
+  .pick-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick-chip button { font: inherit; font-size: 13px; line-height: 1; color: var(--muted);
+    background: none; border: 0; padding: 0 2px; cursor: pointer; }
+  .pick-chip button:hover { color: var(--warn); }
+  .pick-menu { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin-top: 2px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.14); max-height: 220px; overflow-y: auto; }
+  .pick-opt { display: flex; align-items: baseline; gap: 8px; padding: 5px 9px; cursor: pointer;
+    font-size: 13px; }
+  .pick-opt:hover, .pick-opt.on { background: var(--bg); }
+  .pick-opt b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick-opt i { color: var(--muted); font-style: normal; font-size: 12px; margin-left: auto;
+    white-space: nowrap; }
+  .pick-none { padding: 5px 9px; font-size: 12px; color: var(--muted); }
   /* Values are typed as JSON, so the box is monospace. It fills the remaining space rather than
      setting a width of its own, so a long allowlist never pushes the row sideways. */
   .cfgval { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1382,7 +1406,10 @@ function kindFor(picked) {
 // an absent matcher: the engine treats a present dashboard as a scope, so `dashboard: ''` would
 // scope the rule to a dashboard that does not exist and it would never fire.
 function buildRule(key, values, effects) {
-  const list = (s) => s.split(',').map((x) => x.trim()).filter(Boolean);
+  // The pickers hand back arrays; a plain text field hands back a comma-separated string. Both
+  // are accepted so neither kind of field has to know what the other does.
+  const list = (v) => (Array.isArray(v) ? v : String(v || '').split(','))
+    .map((x) => String(x).trim()).filter(Boolean);
   const rule = {};
   for (const id of ['dashboard', 'user', 'client', 'user_agent']) {
     if (values[id]) rule[id] = values[id];
@@ -1394,6 +1421,136 @@ function buildRule(key, values, effects) {
   if (never.length) rule.never_forward = never;
   if (devices.length) rule.devices = devices;
   return rule;
+}
+
+// A field that searches, and still takes anything typed.
+//
+// The ask was to stop making people type entity ids and device names from memory. The trap in
+// answering it with a pure picker is that half the legitimate values are NOT searchable: an
+// always-forward entry is routinely a /regex/, which matches nothing in a list of entity ids and
+// is the whole point of the feature. So this searches as you type, and Enter commits whatever is
+// in the box whether or not it matched — a chip either way.
+//
+// `kind` selects the source: 'entity' and 'device' hit the read-only search endpoints, and a
+// fixed array is used for anything already known (the dashboards this app serves).
+function multiPicker(kind, placeholder, fixed) {
+  const wrap = document.createElement('div');
+  wrap.className = 'pick';
+  const chips = document.createElement('div');
+  chips.className = 'pick-chips';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = placeholder;
+  const menu = document.createElement('div');
+  menu.className = 'pick-menu';
+  menu.style.display = 'none';
+  wrap.append(chips, input, menu);
+
+  const values = [];
+  let cursor = -1;
+  let seq = 0;
+
+  const renderChips = () => {
+    chips.textContent = '';
+    values.forEach((v, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'pick-chip';
+      const t = document.createElement('span');
+      t.textContent = v;
+      t.title = v;
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.textContent = '×';
+      x.title = 'Remove';
+      x.onclick = () => { values.splice(i, 1); renderChips(); };
+      chip.append(t, x);
+      chips.appendChild(chip);
+    });
+  };
+  const add = (v) => {
+    const t = String(v).trim();
+    if (!t || values.includes(t)) return;
+    values.push(t);
+    renderChips();
+    input.value = '';
+    close();
+  };
+  const close = () => { menu.style.display = 'none'; menu.textContent = ''; cursor = -1; };
+
+  const show = (rows) => {
+    menu.textContent = '';
+    cursor = -1;
+    if (!rows.length) { close(); return; }
+    rows.forEach((r) => {
+      const opt = document.createElement('div');
+      opt.className = 'pick-opt';
+      const b = document.createElement('b');
+      b.textContent = r.value;
+      opt.appendChild(b);
+      if (r.note) {
+        const i = document.createElement('i');
+        i.textContent = r.note;
+        opt.appendChild(i);
+      }
+      // mousedown, not click: blur fires first on click and would close the menu underneath.
+      opt.onmousedown = (e) => { e.preventDefault(); add(r.value); };
+      menu.appendChild(opt);
+    });
+    menu.style.display = '';
+  };
+
+  const search = async (q) => {
+    const mine = ++seq;
+    if (fixed) {
+      const rows = fixed.filter((v) => !q || v.toLowerCase().includes(q.toLowerCase()))
+        .slice(0, 10).map((v) => ({ value: v }));
+      return show(rows);
+    }
+    if (!q) return close();
+    try {
+      const url = kind === 'device'
+        ? './devices.json?limit=8&q=' + encodeURIComponent(q)
+        : './entities.json?limit=8&q=' + encodeURIComponent(q);
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) return close();
+      const j = await res.json();
+      // A late answer for an earlier keystroke must not overwrite a newer one.
+      if (mine !== seq) return;
+      show((j.matches || []).map((m) => kind === 'device'
+        ? { value: m.name, note: m.entities + (m.entities === 1 ? ' entity' : ' entities') }
+        : { value: m.entity_id, note: m.name || '' }));
+    } catch { close(); }
+  };
+
+  let timer = null;
+  input.oninput = () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    // Debounced: this runs against a live instance, and a search per keystroke is rude.
+    timer = setTimeout(() => search(q), 160);
+  };
+  input.onfocus = () => { if (fixed) search(input.value.trim()); };
+  input.onblur = () => setTimeout(close, 120);
+  input.onkeydown = (e) => {
+    const opts = [...menu.querySelectorAll('.pick-opt')];
+    if (e.key === 'ArrowDown' && opts.length) {
+      e.preventDefault();
+      cursor = Math.min(cursor + 1, opts.length - 1);
+    } else if (e.key === 'ArrowUp' && opts.length) {
+      e.preventDefault();
+      cursor = Math.max(cursor - 1, 0);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      // The highlighted suggestion if one is, otherwise exactly what was typed — which is how a
+      // /regex/ gets in.
+      if (cursor >= 0 && opts[cursor]) add(opts[cursor].querySelector('b').textContent);
+      else add(input.value);
+      return;
+    } else if (e.key === 'Escape') { close(); return; } else { return; }
+    opts.forEach((o, i) => o.classList.toggle('on', i === cursor));
+  };
+
+  return { el: wrap, values, commitPending: () => { if (input.value.trim()) add(input.value); } };
 }
 
 function overrideWizard(d, save, say, addBtn) {
@@ -1479,8 +1636,37 @@ function overrideWizard(d, save, say, addBtn) {
       return inp;
     };
 
+    const served = (() => {
+      const o = d.options.find((x) => x.key === 'dashboards');
+      return Array.isArray(o?.value) ? o.value : [];
+    })();
     for (const id of picked) {
       const m = MATCHERS.find((x) => x.id === id);
+      // Only dashboards this app serves can be chosen anyway, so offering the list is both a
+      // convenience and a way to not name one that will never match.
+      if (id === 'dashboard' && served.length) {
+        const row = document.createElement('div');
+        row.className = 'wiz-row';
+        const l = document.createElement('span');
+        l.textContent = m.label;
+        const sel = document.createElement('select');
+        sel.className = 'cfgval';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '(choose a dashboard)';
+        sel.appendChild(blank);
+        for (const dash of served) {
+          const opt = document.createElement('option');
+          opt.value = dash;
+          opt.textContent = dash;
+          sel.appendChild(opt);
+        }
+        sel.value = values[id] || '';
+        sel.onchange = () => { values[id] = sel.value; clearErr(); };
+        row.append(l, sel);
+        bodyEl.appendChild(row);
+        continue;
+      }
       field(m.label, m.hint, (v) => { values[id] = v; }, values[id]);
     }
 
@@ -1491,13 +1677,29 @@ function overrideWizard(d, save, say, addBtn) {
     sep.textContent = 'What should it change? Comma-separated; a /regex/ works anywhere a literal does.';
     bodyEl.appendChild(sep);
 
-    field('Forward', 'sensor.doorbell, /^update\\./', (v) => { effects.always_forward = v; });
-    field('Never forward', 'sensor.noisy_thing', (v) => { effects.never_forward = v; });
+    // Searchable, and still free-text: see multiPicker. An always-forward entry is routinely a
+    // /regex/, which no list of entity ids can suggest.
+    const pickers = [];
+    const pick = (labelText, kind, hint, key, fixed) => {
+      const row = document.createElement('div');
+      row.className = 'wiz-row';
+      const l = document.createElement('span');
+      l.textContent = labelText;
+      const pk = multiPicker(kind, hint, fixed);
+      row.append(l, pk.el);
+      bodyEl.appendChild(row);
+      pickers.push(() => { pk.commitPending(); effects[key] = pk.values; });
+      return pk;
+    };
+    pick('Forward', 'entity', 'search entities, or type /^update\\./', 'always_forward');
+    pick('Never forward', 'entity', 'search entities, or type a /regex/', 'never_forward');
     // Whole devices are offered on every rule, not just device-matched ones: naming a device is
     // about what to SEND, which is independent of how the connection was identified.
-    field('Whole devices', 'Basement Stairs Panel', (v) => { effects.devices = v; });
+    pick('Whole devices', 'device', 'search devices by name', 'devices');
 
     actions.append(button('Add override', () => {
+      // A value typed but not committed with Enter is still what the person meant.
+      pickers.forEach((f) => f());
       for (const id of picked) {
         if (!values[id]) return fail('Fill in ' + MATCHERS.find((x) => x.id === id).label + '.');
       }

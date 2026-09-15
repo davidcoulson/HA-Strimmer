@@ -53,7 +53,12 @@ function spawnProxy({ mock, dashPaths, port, statsPort = 0, extraEnv = {} }) {
   };
   proc.stdout.on('data', onData);
   proc.stderr.on('data', onData);
-  const waitForLog = (re, ms = 8000) => new Promise((resolve, reject) => {
+  // 25s, not 8s. These wait on a freshly spawned proxy reaching a log line, and the suite runs
+  // its files in PARALLEL — a dozen node processes booting at once on a loaded machine pushed
+  // two of these past 8s and failed a green build twice. The number is not a performance
+  // budget: nothing here is measuring boot time, so a generous ceiling costs nothing while a
+  // genuine hang still fails, just later.
+  const waitForLog = (re, ms = 25000) => new Promise((resolve, reject) => {
     if (re.test(out)) return resolve(out);
     const l = { re, resolve: (v) => { clearTimeout(t); resolve(v); } };
     listeners.push(l);

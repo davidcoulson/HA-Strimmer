@@ -130,3 +130,63 @@ describe('the override list vocabulary', () => {
       'which config list the rule came from belongs in the tooltip, not a pill');
   });
 });
+
+// The picker searches, but it must not become search-ONLY.
+//
+// Half the legitimate values here cannot be found by searching: an always-forward entry is
+// routinely a /regex/, which matches nothing in a list of entity ids and is the whole point of
+// the feature. A picker that only accepts what it can suggest would quietly remove the ability
+// to write one — the feature would still look complete, and be strictly less capable.
+describe('the wizard pickers', () => {
+  const { buildRule } = load();
+
+  it('takes the arrays a picker produces and the strings a text field produces', () => {
+    const fromPicker = buildRule('overrides', { user: 'David' },
+      { always_forward: ['sensor.a', '/^update\\./'], devices: ['Basement Stairs Panel'] });
+    assert.deepEqual(plain(fromPicker.always_forward), ['sensor.a', '/^update\\./']);
+    assert.deepEqual(plain(fromPicker.devices), ['Basement Stairs Panel']);
+
+    const typed = buildRule('overrides', { user: 'David' },
+      { always_forward: 'sensor.a, /^update\\./' });
+    assert.deepEqual(plain(typed.always_forward), ['sensor.a', '/^update\\./'],
+      'a comma-separated string still works');
+
+    // An empty picker is an empty array, which must be omitted rather than written as "forward
+    // nothing" — the same rule an empty string follows.
+    const empty = buildRule('overrides', { user: 'David' },
+      { always_forward: [], never_forward: '', devices: ['x'] });
+    assert.ok(!('always_forward' in empty), 'an empty array must be omitted');
+    assert.ok(!('never_forward' in empty), 'an empty string must be omitted');
+    assert.deepEqual(plain(empty.devices), ['x']);
+  });
+
+  it('still accepts a value the search could never suggest', () => {
+    // The property that matters. A /regex/ matches nothing in a list of entity ids, so a picker
+    // that only committed the highlighted suggestion would silently remove the ability to write
+    // one — and would still look finished. The Enter handler must fall back to the raw input.
+    const onkey = panel.match(/input\.onkeydown = \(e\) => \{[\s\S]*?\n  \};/)?.[0];
+    assert.ok(onkey, 'the picker must handle Enter');
+    const enter = onkey.slice(onkey.indexOf("e.key === 'Enter'"));
+    assert.match(enter, /add\(opts\[cursor\]\.querySelector\('b'\)\.textContent\)/,
+      'a highlighted suggestion is committed');
+    assert.match(enter, /else add\(input\.value\)/,
+      'and anything else typed is committed as-is — this is how a /regex/ gets in');
+  });
+
+  it('commits a value typed but never confirmed with Enter', () => {
+    // Clicking "Add override" straight after typing must not silently discard what is in the box.
+    assert.match(panel, /commitPending\(\)/,
+      'the picker must expose a way to commit an uncommitted value');
+    assert.match(panel, /pickers\.forEach\(\(f\) => f\(\)\);/,
+      'the wizard must flush every picker before building the rule');
+  });
+
+  it('keeps a late search answer from overwriting a newer one', () => {
+    // Typing fast means several requests in flight; the slowest must not win.
+    const search = panel.match(/const search = async \(q\) => \{[\s\S]*?\n  \};/)?.[0];
+    assert.ok(search, 'the picker must have a search');
+    assert.match(search, /const mine = \+\+seq;/);
+    assert.match(search, /if \(mine !== seq\) return;/,
+      'a stale response must be discarded');
+  });
+});
