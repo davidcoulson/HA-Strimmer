@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.16';
+const VERSION = '2026.09.15.17';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3242,9 +3242,7 @@ const statsServer = http.createServer((req, res) => {
         section: OPTIONS[k]?.section || null,
         label: OPTIONS[k]?.label || k,
         source: own.managed.includes(k) ? 'console' : 'addon',
-        // `objects` needs a structured editor the console does not have yet, so it is shown but
-        // not offered — better than a text box that can only produce invalid JSON by hand.
-        editable: Boolean(EDITABLE_KEYS[k]) && EDITABLE_KEYS[k] !== 'objects' && !BOOTSTRAP_KEYS.has(k),
+        editable: Boolean(EDITABLE_KEYS[k]) && !BOOTSTRAP_KEYS.has(k),
       })),
     }, null, 2);
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });

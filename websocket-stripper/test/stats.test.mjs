@@ -817,8 +817,14 @@ describe('config endpoints', () => {
       assert.equal(d.options.find((o) => o.key === 'strip_entities'), undefined,
         'a legacy spelling must not get its own row');
       assert.ok(d.options.find((o) => o.key === 'trim_entities'), 'the canonical name is the row');
-      // Structured options are shown but not offered until there is an editor for them.
-      assert.equal(d.options.find((o) => o.key === 'user_overrides').editable, false);
+      // The structured lists are editable now that the Overrides screen can write them. They are
+      // still marked `objects`, because the page must NOT offer them as a JSON text box — that is
+      // what the override list and its wizard replaced.
+      const overrides = d.options.find((o) => o.key === 'user_overrides');
+      assert.equal(overrides.type, 'objects');
+      assert.equal(overrides.editable, true);
+      assert.equal(overrides.section, 'overrides',
+        'the override lists must land in the section that renders the rule editor');
     } finally { proxy.kill(); await mock.close(); }
   });
 

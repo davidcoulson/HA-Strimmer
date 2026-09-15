@@ -76,6 +76,36 @@
   .cfgsummary { flex: 1; color: var(--muted); font-size: 13px; }
   .cfgtag { font-size: 11px; color: var(--accent); border: 1px solid var(--accent);
     border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+  /* Overrides. One row per rule, whichever list it lives in, because "which of my rules touches
+     this panel" is a question about rules — not about which of four config keys holds them. */
+  .ovr { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--line); }
+  .ovr:last-of-type { border-bottom: none; }
+  .ovr-body { flex: 1; min-width: 0; }
+  .ovr-match { font-size: 13px; }
+  .ovr-match code { background: var(--bg); border-radius: 3px; padding: 0 4px; font-size: 12px; }
+  .ovr-effect { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .ovr-kind { font-size: 11px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+  .ovr-del { font: inherit; font-size: 13px; line-height: 1; color: var(--muted);
+    background: none; border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px;
+    cursor: pointer; }
+  .ovr-del:hover:not(:disabled) { color: var(--warn); border-color: var(--warn); }
+  .ovr-del:disabled { opacity: .4; cursor: default; }
+  .ovr-confirm { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--warn); }
+  /* The wizard. A dialog rather than an inline form: adding a rule is a short focused task, and
+     an inline form pushes the list it is about off the screen. */
+  .wiz { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-top: 12px;
+    background: var(--bg); }
+  .wiz h4 { margin: 0 0 2px; font-size: 13px; }
+  .wiz .step { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .wiz label { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+  .wiz input[type=text] { font: inherit; font-size: 13px; color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; flex: 1; min-width: 0; }
+  .wiz-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .wiz-row span { flex: 0 0 150px; color: var(--muted); font-size: 12px; }
+  .wiz-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .wiz-err { color: var(--warn); font-size: 12px; margin-top: 8px; }
   /* Values are typed as JSON, so the box is monospace. It fills the remaining space rather than
      setting a width of its own, so a long allowlist never pushes the row sideways. */
   .cfgval { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1125,6 +1155,329 @@ function drawChart(id, vals, times, colour, fmt, stepped) {
 //
 // Values are edited as JSON so a list or a string round-trips exactly as typed; a boolean is the
 // common case and gets a plain toggle instead. Writes go through Ingress only, like the pins.
+// The override lists, presented as one list of rules.
+//
+// They are four separate config keys because they are evaluated at four different moments: a
+// dashboard rule is applied when the allowlist is built, a client rule when the socket connects,
+// a user rule only once the auth token resolves, and a user-agent rule during attribution. That
+// split is real and the engine needs it. It is not, however, how anyone thinks about their own
+// configuration — "which rules affect the basement panel" is a question about rules. So the
+// console shows one list and remembers which key each row came from.
+const OVERRIDE_KINDS = {
+  dashboard_overrides: {
+    label: 'dashboard',
+    match: (r) => [['dashboard', r.dashboard]],
+  },
+  user_overrides: {
+    label: 'user',
+    match: (r) => [['user', r.user], ['dashboard', r.dashboard]],
+  },
+  client_overrides: {
+    label: 'device',
+    match: (r) => [['client', r.client]],
+  },
+  user_agent_dashboards: {
+    label: 'client app',
+    match: (r) => [['user agent', r.match]],
+  },
+};
+
+// What a rule DOES, in words. A rule whose effect is empty is worth saying out loud: it matches
+// something and then changes nothing, which is almost always a half-finished edit.
+function overrideEffect(kind, r) {
+  const bits = [];
+  if (kind === 'user_agent_dashboards') {
+    if (r.dashboard) bits.push('serve ' + r.dashboard);
+  } else {
+    if (r.always_forward?.length) bits.push('always ' + r.always_forward.join(', '));
+    if (r.never_forward?.length) bits.push('never ' + r.never_forward.join(', '));
+    if (r.devices?.length) bits.push('devices ' + r.devices.join(', '));
+  }
+  return bits.length ? bits.join(' · ') : 'no effect set';
+}
+
+// Flatten the four lists into rows, keeping the key and index so a delete can write the right
+// list back.
+function overrideRows(d) {
+  const out = [];
+  for (const key of Object.keys(OVERRIDE_KINDS)) {
+    const o = d.options.find((x) => x.key === key);
+    const list = Array.isArray(o?.value) ? o.value : [];
+    list.forEach((r, i) => out.push({ key, index: i, rule: r, option: o }));
+  }
+  return out;
+}
+
+function renderOverrides(box, d, save, say) {
+  const rows = overrideRows(d);
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'note';
+    empty.textContent = 'No overrides. Everything is served by the global rules above.';
+    box.appendChild(empty);
+  }
+
+  for (const row of rows) {
+    const kind = OVERRIDE_KINDS[row.key];
+    const el = document.createElement('div');
+    el.className = 'ovr';
+
+    const body = document.createElement('div');
+    body.className = 'ovr-body';
+
+    const match = document.createElement('div');
+    match.className = 'ovr-match';
+    const pairs = kind.match(row.rule).filter(([, v]) => v);
+    if (!pairs.length) {
+      match.textContent = 'matches everything';
+    } else {
+      match.append('when ');
+      pairs.forEach(([name, value], i) => {
+        if (i) match.append(' and ');
+        match.append(name + ' is ');
+        const c = document.createElement('code');
+        c.textContent = String(value);
+        match.append(c);
+      });
+    }
+
+    const effect = document.createElement('div');
+    effect.className = 'ovr-effect';
+    effect.textContent = overrideEffect(row.key, row.rule);
+
+    body.append(match, effect);
+
+    const tag = document.createElement('span');
+    tag.className = 'ovr-kind';
+    tag.textContent = kind.label;
+    tag.title = row.key;
+
+    el.append(body, tag);
+
+    const canEdit = d.writable && d.editableHere;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'ovr-del';
+    del.textContent = '🗑';
+    del.title = canEdit ? 'Remove this override' : 'Open from the Home Assistant sidebar to edit';
+    del.disabled = !canEdit;
+    // Two steps, because a delete here is not undoable from the panel and the rows look alike.
+    del.onclick = () => {
+      const confirmBox = document.createElement('span');
+      confirmBox.className = 'ovr-confirm';
+      confirmBox.append('Remove this override?');
+      const yes = document.createElement('button');
+      yes.type = 'button';
+      yes.className = 'cfgbtn';
+      yes.textContent = 'Remove';
+      yes.onclick = () => {
+        yes.disabled = true;
+        const next = (Array.isArray(row.option.value) ? row.option.value : []).filter((_, i) => i !== row.index);
+        save(row.option, 'adopt', next);
+      };
+      const no = document.createElement('button');
+      no.type = 'button';
+      no.className = 'cfgbtn';
+      no.textContent = 'Cancel';
+      no.onclick = () => { confirmBox.replaceWith(del); };
+      confirmBox.append(yes, no);
+      del.replaceWith(confirmBox);
+    };
+    el.appendChild(del);
+    box.appendChild(el);
+  }
+
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'cfgbtn';
+  add.textContent = 'Add override';
+  add.style.marginTop = '10px';
+  add.disabled = !(d.writable && d.editableHere);
+  add.onclick = () => { add.disabled = true; box.appendChild(overrideWizard(d, save, say, add)); };
+  box.appendChild(add);
+}
+
+// Adding a rule: pick what to match on, then what it should do.
+//
+// The engine decides WHERE a rule can live from what it matches on, so the wizard works that out
+// rather than asking. Not every combination exists: a rule cannot match both a user and a device,
+// because those are resolved at different moments in the connection and no list holds both. The
+// wizard says so instead of writing a rule into the nearest list and letting it never fire —
+// which is the failure this whole screen is meant to prevent.
+const MATCHERS = [
+  { id: 'dashboard', label: 'Dashboard', hint: 'url_path, e.g. basement-stairs-panel' },
+  { id: 'user', label: 'Home Assistant user', hint: 'name from Settings -> People, or a user id' },
+  { id: 'client', label: 'Device', hint: 'IP, CIDR (10.2.4.0/24) or hostname' },
+  { id: 'user_agent', label: 'Client app', hint: 'part of the User-Agent, e.g. io.robbie.HomeAssistant' },
+];
+
+// Which config key a set of matchers compiles to, or why it cannot.
+function kindFor(picked) {
+  const has = (id) => picked.includes(id);
+  if (has('user_agent')) {
+    if (picked.length > 1) return { error: 'A client-app rule cannot also match on anything else — it is used only when nothing else identifies the connection.' };
+    return { key: 'user_agent_dashboards' };
+  }
+  if (has('user') && has('client')) {
+    return { error: 'A rule cannot match both a user and a device: the device is known when the socket opens, the user only after the token resolves, and no rule list holds both.' };
+  }
+  if (has('client')) {
+    if (has('dashboard')) return { error: 'A device rule cannot also match a dashboard — device rules apply wherever that device connects.' };
+    return { key: 'client_overrides' };
+  }
+  if (has('user')) return { key: 'user_overrides' };
+  if (has('dashboard')) return { key: 'dashboard_overrides' };
+  return { error: 'Pick at least one thing to match on. A rule that matches everything is what the global lists above already are.' };
+}
+
+// Turn the wizard's answers into the shape the chosen list expects.
+function buildRule(key, values, effects) {
+  const list = (s) => s.split(',').map((x) => x.trim()).filter(Boolean);
+  if (key === 'user_agent_dashboards') {
+    return { match: values.user_agent, dashboard: effects.assume_dashboard };
+  }
+  const rule = {};
+  if (key === 'dashboard_overrides') rule.dashboard = values.dashboard;
+  if (key === 'user_overrides') {
+    rule.user = values.user;
+    if (values.dashboard) rule.dashboard = values.dashboard;
+  }
+  if (key === 'client_overrides') rule.client = values.client;
+  rule.always_forward = list(effects.always_forward || '');
+  rule.never_forward = list(effects.never_forward || '');
+  if (key === 'client_overrides') rule.devices = list(effects.devices || '');
+  return rule;
+}
+
+function overrideWizard(d, save, say, addBtn) {
+  const wiz = document.createElement('div');
+  wiz.className = 'wiz';
+  const picked = [];
+  const values = {};
+
+  const title = document.createElement('h4');
+  const step = document.createElement('div');
+  step.className = 'step';
+  const bodyEl = document.createElement('div');
+  const err = document.createElement('div');
+  err.className = 'wiz-err';
+  err.style.display = 'none';
+  const actions = document.createElement('div');
+  actions.className = 'wiz-actions';
+  wiz.append(title, step, bodyEl, err, actions);
+
+  const fail = (t) => { err.style.display = ''; err.textContent = t; };
+  const clearErr = () => { err.style.display = 'none'; };
+  const close = () => { wiz.remove(); addBtn.disabled = false; };
+
+  const button = (text, onclick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cfgbtn';
+    b.textContent = text;
+    b.onclick = onclick;
+    return b;
+  };
+
+  // Step 1 — what to match on.
+  function stepMatch() {
+    clearErr();
+    title.textContent = 'Add an override';
+    step.textContent = 'Step 1 of 2 — what should this rule match? Pick one or more; they all have to be true.';
+    bodyEl.textContent = '';
+    actions.textContent = '';
+
+    for (const m of MATCHERS) {
+      const row = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = picked.includes(m.id);
+      cb.onchange = () => {
+        const at = picked.indexOf(m.id);
+        if (cb.checked && at === -1) picked.push(m.id);
+        if (!cb.checked && at !== -1) picked.splice(at, 1);
+        clearErr();
+      };
+      const text = document.createElement('span');
+      text.textContent = m.label;
+      row.append(cb, text);
+      bodyEl.appendChild(row);
+    }
+    actions.append(button('Next', () => {
+      const k = kindFor(picked);
+      if (k.error) return fail(k.error);
+      stepValues(k.key);
+    }), button('Cancel', close));
+  }
+
+  // Step 1b — the values for each chosen matcher, and what the rule does.
+  function stepValues(key) {
+    clearErr();
+    step.textContent = 'Step 2 of 2 — fill in what to match, then what the rule should do.';
+    bodyEl.textContent = '';
+    actions.textContent = '';
+
+    const field = (labelText, hint, onInput, value) => {
+      const row = document.createElement('div');
+      row.className = 'wiz-row';
+      const l = document.createElement('span');
+      l.textContent = labelText;
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = hint;
+      inp.value = value || '';
+      inp.oninput = () => { onInput(inp.value.trim()); clearErr(); };
+      row.append(l, inp);
+      bodyEl.appendChild(row);
+      return inp;
+    };
+
+    for (const id of picked) {
+      const m = MATCHERS.find((x) => x.id === id);
+      field(m.label, m.hint, (v) => { values[id] = v; }, values[id]);
+    }
+
+    const effects = {};
+    const sep = document.createElement('div');
+    sep.className = 'step';
+    sep.style.marginTop = '10px';
+    sep.textContent = key === 'user_agent_dashboards'
+      ? 'Which dashboard should this app be served?'
+      : 'What should it change? Comma-separated; a /regex/ works anywhere a literal does.';
+    bodyEl.appendChild(sep);
+
+    if (key === 'user_agent_dashboards') {
+      field('Serve dashboard', 'url_path', (v) => { effects.assume_dashboard = v; });
+    } else {
+      field('Always forward', 'sensor.doorbell, /^update\\./', (v) => { effects.always_forward = v; });
+      field('Never forward', 'sensor.noisy_thing', (v) => { effects.never_forward = v; });
+      if (key === 'client_overrides') {
+        field('Whole devices', 'Basement Stairs Panel', (v) => { effects.devices = v; });
+      }
+    }
+
+    actions.append(button('Add override', () => {
+      for (const id of picked) {
+        if (!values[id]) return fail('Fill in ' + MATCHERS.find((x) => x.id === id).label + '.');
+      }
+      const rule = buildRule(key, values, effects);
+      // A rule that matches something and changes nothing is a half-finished edit, and it is
+      // invisible once saved — it just sits in the list doing nothing.
+      const doesSomething = key === 'user_agent_dashboards'
+        ? Boolean(rule.dashboard)
+        : Boolean(rule.always_forward.length || rule.never_forward.length || rule.devices?.length);
+      if (!doesSomething) return fail('This rule would not change anything — fill in at least one effect.');
+
+      const option = d.options.find((o) => o.key === key);
+      const next = [...(Array.isArray(option?.value) ? option.value : []), rule];
+      save(option, 'adopt', next);
+    }), button('Back', stepMatch), button('Cancel', close));
+  }
+
+  stepMatch();
+  return wiz;
+}
+
 // One option, drawn according to its type.
 //
 // A boolean is a checkbox with a sentence next to it, not a row in a table whose second column
@@ -1257,7 +1610,10 @@ async function renderConfig() {
     blurb.textContent = sec.blurb;
     box.append(h, blurb);
 
-    for (const o of opts) box.appendChild(configRow(o, d, save, say));
+    // Overrides are rules, not settings: four config keys hold them but nobody thinks in config
+    // keys, so that section gets its own list-and-wizard rather than four rows saying "2 rules".
+    if (sec.id === 'overrides') renderOverrides(box, d, save, say);
+    else for (const o of opts) box.appendChild(configRow(o, d, save, say));
     host.appendChild(box);
   }
 
