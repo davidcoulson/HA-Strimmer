@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026.09.15.24 — 2026-09-15
+
+**The user cache survives a restart.**
+
+Resolving a user means opening a second websocket to Home Assistant to ask who a token belongs to,
+and every message on that connection is held until it answers — measured at 195–324ms on a healthy
+instance, and about 3.5s once under load. The cache already spared the repeat cost within a
+process; it is now kept in `/data`, so a restart does not make every session pay again. Verified:
+`user cache: 4 still valid, 0 expired`.
+
+**The TTL is deliberately unchanged at ten minutes.** "Users rarely change" argues for caching for
+hours, and that is the half worth refusing: the TTL is what bounds how long a revoked token or a
+renamed user keeps applying rules after Home Assistant has stopped agreeing. A restart takes about
+twelve seconds, so ten minutes already spans one — persistence buys the restart case with **no
+increase in staleness at all**. An entry older than the TTL is dropped on load rather than trusted
+because it was written down.
+
+**What is on disk:** `sha256(token)` -> `{ id, name }`. Never the token, and nothing from the user
+object beyond what the rules match on. It is still a token verifier and `/data` is included in
+Home Assistant backups — which is why it stores as little as it can. A failed lookup is still
+never cached, so one slow moment from Home Assistant cannot disable a user's rules.
+
+Note that the lookup is skipped entirely for any dashboard no user rule targets, so this only ever
+mattered for connections that were already paying for it.
+
+---
+
 ## 2026.09.15.23 — 2026-09-15
 
 **A searchable picker for entities and devices, and a device-name bug worth knowing about.**

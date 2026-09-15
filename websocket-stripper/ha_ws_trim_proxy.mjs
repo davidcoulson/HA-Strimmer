@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.23';
+const VERSION = '2026.09.15.24';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1850,6 +1850,55 @@ async function buildResources(rpc, keysByDash) {
 // session's reconnects.
 const USER_CACHE = new Map();                 // sha256(token) -> { user, at }
 const USER_TTL_MS = 10 * 60 * 1000;
+// Kept across restarts, in /data, so a restart does not make every session pay the lookup again.
+//
+// THE TTL IS NOT EXTENDED, and that is the point. "Users rarely change" argues for caching for
+// hours, but a long window is exactly what makes a revoked token or a renamed user keep applying
+// rules after Home Assistant has stopped agreeing. A rebuild takes about twelve seconds, so the
+// existing ten minutes already spans a restart — persistence buys the restart case with no
+// increase in staleness at all. Entries older than the TTL are dropped on load, so a file left
+// from last week is simply ignored.
+//
+// What is written: sha256(token) -> { id, name }. Never the token, and nothing from the user
+// object beyond what the rules match on. It is still a token VERIFIER and it is in /data, which
+// Home Assistant backups include — that is the cost of this, and the reason it stores as little
+// as it can get away with.
+const USER_CACHE_FILE = CONFIG_DIR ? `${CONFIG_DIR}/users.json` : null;
+
+function loadUserCache() {
+  if (!USER_CACHE_FILE || !fs.existsSync(USER_CACHE_FILE)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(USER_CACHE_FILE, 'utf8'));
+    const now = Date.now();
+    let kept = 0, expired = 0;
+    for (const [key, v] of Object.entries(raw?.users || {})) {
+      if (!v?.user?.id || typeof v.at !== 'number') continue;
+      if (now - v.at >= USER_TTL_MS) { expired++; continue; }
+      USER_CACHE.set(key, { user: v.user, at: v.at });
+      kept++;
+    }
+    if (kept || expired) log(`user cache: ${kept} still valid, ${expired} expired`);
+  } catch (e) {
+    // A corrupt cache must never cost the add-on its boot: the worst case without it is that
+    // the next lookup is slow, which is the state this file exists to improve, not to require.
+    warn(`could not read ${USER_CACHE_FILE} (${e.message}) — starting with an empty user cache`);
+  }
+}
+
+// Written through a temp file and renamed, like every other file this add-on owns, so a crash
+// mid-write cannot leave one that fails to parse on the next boot.
+function saveUserCache() {
+  if (!USER_CACHE_FILE) return;
+  try {
+    const users = {};
+    for (const [k, v] of USER_CACHE) users[k] = v;
+    const tmp = `${USER_CACHE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, users }));
+    fs.renameSync(tmp, USER_CACHE_FILE);
+  } catch (e) {
+    logThrottled('usercache-write', `could not write the user cache (${e.message})`);
+  }
+}
 // Generous, because the cost of timing out is silently serving the wrong allowlist, while the
 // cost of waiting is a one-off delay on a connection that is already waiting on Home Assistant
 // anyway. Only ever paid once per token per TTL, and never when HA is healthy.
@@ -1872,8 +1921,13 @@ function resolveUser(token) {
       // Only cache a REAL answer. Caching a failure meant one slow moment from Home Assistant
       // disabled a user's rules for the full TTL — the rules silently stopped applying long
       // after HA recovered, which is exactly how "my updates disappeared" happened.
-      if (user) USER_CACHE.set(key, { user, at: Date.now() });
+      if (user) {
+        // Only what the rules match on, so the file on disk carries no more identity than it
+        // must — see the note on USER_CACHE_FILE.
+        USER_CACHE.set(key, { user: { id: user.id, name: user.name }, at: Date.now() });
+      }
       if (USER_CACHE.size > 200) USER_CACHE.delete(USER_CACHE.keys().next().value);
+      if (user) saveUserCache();
       try { ws.close(); } catch {}
       resolve(user);
     };
@@ -3645,6 +3699,8 @@ for (const m of CONFIG_WARNINGS) warn(`  config: ${m}`);
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
 // One line for the whole rule set, because 'my override does nothing' is the commonest
 // complaint and the first thing worth knowing is whether it was parsed at all.
+// Before anything can ask for a user: a restart should not make every session pay again.
+loadUserCache();
 log(`overrides: ${CONN_RULES.length} rule(s)`
   + (CONN_RULES.length ? ` — ${CONN_RULES.filter((r) => r.user).length} keyed to a user, `
       + `${CONN_RULES.filter((r) => r.client).length} to a device, `
