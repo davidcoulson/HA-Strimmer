@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026.09.15.20 — 2026-09-15
+
+**Configuration moved into the app's own panel, and override rules became one thing.**
+
+**A Config tab that is a control panel, not a reference.** The add-on's options outgrew what a
+Supervisor schema can express: nested groups do not render in the Configuration tab at all,
+sub-options cannot carry descriptions, and there is no validation beyond types. Options are now
+grouped into sections — Trimming, Dashboards and entities, Custom cards, Overrides, Device
+discovery, Monitoring, Websocket — each boolean is a checkbox with a sentence beside it, and each
+list is its items with a remove button and an add box rather than a JSON array in a text field.
+Order within a section is editorial, not alphabetical: alphabetical opened the trim list with
+"Only the dashboard being viewed" and buried "Entity websocket", which decides whether any of the
+rest matters.
+
+Changes are **per-key**: an option is owned by the console only because someone deliberately
+changed it there, and everything else still comes from the add-on's own Configuration tab. Taking
+a setting over never changes it — it is seeded from whatever is already in effect. Setup options
+(`proxy_port`, `mgmt_port`, `ha_base`, `allow_ws_url`, `log_level`) are deliberately **not**
+editable here: how the process binds and finds Home Assistant has to stay fixable from Home
+Assistant when this console is the thing that is broken.
+
+**One override rule type, any combination of matchers.** `dashboard_overrides`, `user_overrides`,
+`client_overrides` and `user_agent_dashboards` existed because rules are evaluated at four
+different moments — not because they were four different kinds of thing. They are now compiled
+into a single `overrides` list with one matcher, and **a rule may match on a dashboard, a user, a
+device and a client app at once**: "David, on lovelace, from the office panel" is one rule. The
+old keys still work and are read into the same list at startup, so no configuration needs
+changing.
+
+Timing is derived from the rule instead of the key it sat under: a rule naming a **user** waits
+for the auth token to resolve, because that is the first moment the whole rule can be decided;
+everything else applies when the socket opens. A rule with **no** matcher is dropped and logged
+rather than applied everywhere — that is what the global always/never lists already are. Startup
+logs the rule count broken down by matcher, because "my override does nothing" is the commonest
+complaint and whether it parsed at all is the first thing worth knowing.
+
+The panel shows every rule as one list, whichever key holds it, with a pill per matcher, its
+effect in words, delete behind a confirmation, and a wizard that asks what to match on and then
+what to do.
+
+**A stored cross-site scripting hole in the panel, closed.** Request paths, methods and addresses
+went from the HTTP log straight into `innerHTML`, so **anyone who could reach the listen port
+could store markup that ran the next time an admin opened the console**. Every value is built as
+text now, and a test refuses `innerHTML` anywhere in the panel unless a comment justifies it.
+
+**Two renames**, both with the old name still honoured and read *second*, so a config carrying
+both obeys the new one:
+
+- `strip_entities` → **`trim_entities`**. The option doing the central trim was the one not called
+  `trim_*`.
+- `per_dashboard` → **`by_dashboard`**. The old name described the mechanism, not the effect.
+
+`strip_entities: false` and `per_dashboard: false` are deliberate choices, so an inert key would
+have silently reversed them for exactly the people who had set them.
+
+**Also:** `panel.html` is parsed by the test suite — it is served as a blob and only runs in a
+browser, so a syntax error previously survived a green suite and a clean deploy and showed up as a
+blank console.
+
+---
+
 ## 2026.09.15.1 — 2026-09-15
 
 **`trim_extra_modules` — the JavaScript integrations inject into every page.**
