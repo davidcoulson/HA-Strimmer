@@ -2,41 +2,28 @@
   <img src="assets/banner.png" alt="WebSocket Stripper — not the whole house" width="640">
 </p>
 
-### Your Home Assistant dashboards are slow because every page loads *your entire house*.
-
-Open a dashboard — even one showing four lights — and Home Assistant sends the browser
-**every entity you own**, plus a full catalogue of every entity, device and area in the
-house, plus every custom card you have ever installed. Then it streams every change to all
-of it, forever. On a big install that is tens of megabytes before a single card appears. On
-a wall panel or an old tablet, it is the difference between a dashboard and a loading
-screen.
-
-This app sits in front of Home Assistant and sends each dashboard **only what it
-actually shows**. Same Home Assistant. Same dashboards. Same cards. Just not the other
-9,000 entities.
-
-**On a phone this is the difference between usable and not.** Measured end-to-end in a
-browser, the same dashboard: **5.8 MB of entity data becomes 844 KB**, and the load goes
-from **8.6 s to 3.3 s on 4G** — or **47 s to 18 s** on a weak cellular link. That is 29
-seconds of waiting deleted, and about 5 MB of mobile data *per page load* that never
-leaves the house.
-
----
-
 ## 🚀 TL;DR
 
-Home Assistant sends every dashboard your **entire house** — every entity, every device name,
-every custom card — and then streams changes to all of it forever. This app sits in front of
-Home Assistant and sends each dashboard **only what it actually shows**. Same HA, same
-dashboards, same cards.
+### Your Home Assistant dashboards are slow because every page loads *your entire house*.
 
-On a wall panel that is **60 seconds down to 16**. On a phone over 4G, **8.6 s down to 3.3 s**.
+Open a dashboard showing four lights and Home Assistant sends the browser **every entity you
+own**, a catalogue of every device and area in the house, and every custom card you have ever
+installed — then streams changes to all of it, forever. This app sits in front of Home Assistant
+and sends each dashboard **only what it actually shows**. Same HA, same dashboards, same cards.
+
+| | |
+|---|---|
+| 🖥️ **Wall panel** | dashboard appears in **60 s → 16 s** |
+| 📱 **Phone on 4G** | **8.6 s → 3.3 s**, and ~5 MB less mobile data *per page load* |
+| 📡 **Weak cellular** | **47 s → 18 s** |
 
 | | |
 |---|---|
 | 📦 **Install it** | **[Installation guide →](docs/INSTALL.md)** — about five minutes on HA OS, or a plain Docker container |
 | ⚙️ **Configure it** | **[Every option, described →](websocket-stripper/DOCS.md)** — the same text appears in the app's Documentation tab |
 | 📈 **Check the numbers** | **[Full method and raw runs →](docs/PERFORMANCE.md)** |
+
+---
 
 ## 🧬 This is a fork
 
