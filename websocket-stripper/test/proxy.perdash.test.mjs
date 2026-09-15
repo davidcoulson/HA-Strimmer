@@ -1746,3 +1746,50 @@ describe('an override that matches a role', () => {
     assert.ok(michelle.has('light.living_room'), 'and still gets the dashboard itself');
   });
 });
+
+// Matching how someone signed in.
+//
+// "Anything logged in through trusted networks" is the kiosk pattern expressed without naming a
+// device or an address — the addresses move, the login method does not. It is identity, so it
+// waits for the auth gate exactly as `user` and `role` do.
+describe('an override that matches the sign-in method', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({
+      mock, dashPaths: 'test-dash,auto-dash', port,
+      extraEnv: {
+        OVERRIDES: JSON.stringify([
+          { auth_provider: 'trusted_networks', always_forward: ['/^sensor\\.decoy_/'] },
+        ]),
+      },
+    });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  const injectedForToken = async (token) => {
+    await httpGet(`http://127.0.0.1:${port}/test-dash/main`);
+    const seq = mock.subscribeEntitiesSeq();
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, token);
+    await c.authed;
+    c.send({ type: 'subscribe_entities' });
+    const got = await mock.waitForSubscribeEntities(seq);
+    c.close();
+    return new Set(got ?? []);
+  };
+
+  it('applies to a user who signed in that way', async () => {
+    const kiosk = await injectedForToken('kiosk-token');
+    assert.ok(kiosk.has('sensor.decoy_power'),
+      'a trusted-networks login gets the rule without being named');
+  });
+
+  it('does not apply to a password login', async () => {
+    const david = await injectedForToken('david-token');
+    assert.ok(!david.has('sensor.decoy_power'),
+      'signing in with a password must not pick up a trusted-networks rule');
+    assert.ok(david.has('light.living_room'), 'and the dashboard itself is unaffected');
+  });
+});

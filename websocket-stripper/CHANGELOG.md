@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026.09.15.30 — 2026-09-15
+
+**Three more things an override rule can match on**, all from data this app already had and none
+of it newly collected.
+
+**`mdns_kind`** — what a device announces itself as: `Kiosk Satellite`, `ESPHome`, `ha-paneld`,
+`Google Cast`. "Every Kiosk Satellite panel" as one rule, with no addresses to maintain as DHCP
+moves them. **It matches ANY record for an address, not the first**, because a panel commonly
+announces itself more than once: measured here, three of twenty-four discovered addresses advertise
+both `Kiosk Satellite` and `ESPHome` with different versions. Testing only the first record would
+have made the rule depend on which multicast answer arrived first.
+
+**`host`** — the hostname the client actually arrived on. One instance is reachable by several
+names, and "anything coming in via the IoT entry point" is a rule that address lists approximate
+badly.
+
+**`auth_provider`** — `homeassistant` or `trusted_networks`. "Anything logged in through trusted
+networks" is the kiosk pattern without naming a device: the addresses move, the login method does
+not. Identity, so it waits for the auth gate exactly as `user` and `role` do.
+
+**Unknown means no.** A device that announced nothing does not match an `mdns_kind` rule, and a
+connection with no hostname does not match a `host` rule. These matchers WIDEN what a client is
+served, so an unknown device silently matching would hand entities to anything on the network.
+
+**An mDNS name is a label a device chose for itself** — unverified and trivially spoofable by
+anything on the network. Fine for "serve this panel more entities"; not a security boundary. The
+same reason discovery is observational everywhere else here.
+
+The user cache gains `providers` (the credential TYPES, never the credential records) because a
+rule reads it; entries written before this are dropped on load rather than left to make such a rule
+silently fail to match.
+
+---
+
 ## 2026.09.15.29 — 2026-09-15
 
 **Override rules can match a ROLE instead of a person.**

@@ -45,11 +45,20 @@ describe('the persistent user cache', () => {
   it('writes the token HASH and only the fields the rules match on', () => {
     const finish = src.match(/const finish = \(user\) => \{[\s\S]*?\n    \};/)?.[0];
     assert.ok(finish, 'the lookup must have a completion path');
-    // id, name and is_admin — and nothing else. is_admin earns its place because a rule can
-    // match `role: admin`; the rest of Home Assistant's user object still stays out of the file.
-    assert.match(finish, /id: user\.id, name: user\.name, is_admin: Boolean\(user\.is_admin\)/,
+    // Exactly the four fields a matcher reads: id and name for `user`, is_admin for `role`,
+    // providers for `auth_provider`. Asserted on the stored OBJECT rather than on the absence of
+    // a word anywhere in the function — the code legitimately reads user.credentials to derive
+    // providers, and an earlier version of this test failed on that read while the file it was
+    // guarding was perfectly correct.
+    const stored = finish.match(/user: \{[\s\S]*?\n          \}/)?.[0];
+    assert.ok(stored, 'the cache must write a user object');
+    const fields = [...stored.matchAll(/^\s{12}([a-z_]+):/gm)].map((m) => m[1]).sort();
+    assert.deepEqual(fields, ['id', 'is_admin', 'name', 'providers'],
       'only what the rules read is stored');
-    assert.ok(!/credentials|mfa_modules|is_owner/.test(finish),
+    // Provider TYPES, never the credential records themselves.
+    assert.match(stored, /providers: \(user\.credentials \|\| \[\]\)\.map\(\(c\) => String\(c\?\.type/,
+      'a rule asks how someone signed in, never which credential');
+    assert.ok(!/mfa_modules|is_owner/.test(stored),
       'no user field beyond what a matcher reads may be written to disk');
     // The key must never be the token itself.
     assert.match(src, /const key = tokenKey\(token\)/);

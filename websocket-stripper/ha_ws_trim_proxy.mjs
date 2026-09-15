@@ -59,7 +59,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.29';
+const VERSION = '2026.09.15.30';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -323,6 +323,20 @@ function compileOverride(o) {
     // matcher rather than a name. `role` rather than `admin: true` because it reads the way the
     // question is asked, and because it does not need rewriting if HA ever grows a third.
     role: o.role === 'admin' || o.role === 'user' ? o.role : null,
+    // How the user signed in: `homeassistant` (password) or `trusted_networks`. Identity, so it
+    // waits for the auth gate like `user` and `role` do.
+    authProvider: typeof o.auth_provider === 'string' && o.auth_provider
+      ? o.auth_provider.trim().toLowerCase() : null,
+    // What the device says it IS, over mDNS: "Kiosk Satellite", "ESPHome", "ha-paneld".
+    //
+    // An mDNS name is a label a device chose for itself, unverified and trivially spoofable by
+    // anything on the network. That is fine for "serve this panel more entities" and is NOT a
+    // security boundary — the same reason discovery is observational everywhere else here.
+    mdnsKind: typeof o.mdns_kind === 'string' && o.mdns_kind
+      ? o.mdns_kind.trim().toLowerCase() : null,
+    // The hostname the client actually arrived on, which is how one instance can be reached by
+    // several names — an IoT entry point, a Cloudflare one, a bare address.
+    host: typeof o.host === 'string' && o.host ? o.host.trim().toLowerCase() : null,
     client,
     // A UA is matched the same way an entity pattern is: literal substring or /regex/.
     userAgent: typeof o.user_agent === 'string' && o.user_agent ? parseRules([o.user_agent])[0] : null,
@@ -354,7 +368,8 @@ const CONN_RULES = (() => {
     // always/never lists already are. Silently applying one everywhere is not a reasonable
     // reading of a rule someone thought they were scoping, so it is dropped and logged.
     .filter((r) => {
-      const scoped = r.dashboard || r.user || r.role || r.client || r.userAgent;
+      const scoped = r.dashboard || r.user || r.role || r.authProvider
+        || r.client || r.userAgent || r.mdnsKind || r.host;
       if (!scoped) CONFIG_WARNINGS.push('ignoring an override with no matcher — it would apply to every connection; use always_forward/never_forward for that');
       return scoped;
     });
@@ -371,6 +386,16 @@ function matchesConnection(r, ctx) {
     if (!ctx.ua) return false;
     const hit = r.userAgent.re ? r.userAgent.re.test(ctx.ua) : ctx.ua.includes(r.userAgent.literal);
     if (!hit) return false;
+  }
+  if (r.host) {
+    if (!ctx.host || String(ctx.host).toLowerCase() !== r.host) return false;
+  }
+  if (r.mdnsKind) {
+    // EVERY record for this address, not the first. A panel here advertises itself twice — as a
+    // Kiosk Satellite and as ESPHome, with different versions — so testing only the first record
+    // would answer "is this ESPHome?" with whichever one happened to arrive first.
+    const rows = ctx.ip ? (discovery.lookup(ctx.ip) || []) : [];
+    if (!rows.some((row) => String(row.kind || '').toLowerCase() === r.mdnsKind)) return false;
   }
   return true;
 }
@@ -2025,6 +2050,9 @@ function loadUserCache() {
       // lookup and gets the right answer immediately.
       if (!v?.user?.id || typeof v.at !== 'number') continue;
       if (typeof v.user.is_admin !== 'boolean') { expired++; continue; }
+      // Same reasoning as is_admin: an entry written before auth_provider existed would make such
+      // a rule silently fail to match for the rest of its TTL.
+      if (!Array.isArray(v.user.providers)) { expired++; continue; }
       if (now - v.at >= USER_TTL_MS) { expired++; continue; }
       USER_CACHE.set(key, { user: v.user, at: v.at });
       kept++;
@@ -2079,7 +2107,14 @@ function resolveUser(token) {
         // is_admin joins id and name because a rule can now match on it. Still only what the
         // rules read — the rest of Home Assistant's user object stays out of the file.
         USER_CACHE.set(key, {
-          user: { id: user.id, name: user.name, is_admin: Boolean(user.is_admin) },
+          user: {
+            id: user.id,
+            name: user.name,
+            is_admin: Boolean(user.is_admin),
+            // Just the provider TYPES, not the credential records: a rule asks "how did they sign
+            // in", never "which credential".
+            providers: (user.credentials || []).map((c) => String(c?.type || '').toLowerCase()),
+          },
           at: Date.now(),
         });
       }
@@ -2218,7 +2253,8 @@ function rulesForConnection(ctx) {
   // A role counts as identity just as much as a name does. Testing only for `user` let a
   // role-only rule through here, where no user is known yet — so `role: admin` was applied to
   // every connection, including non-admins, which is the exact opposite of what it says.
-  const hits = CONN_RULES.filter((r) => !r.user && !r.role && matchesConnection(r, ctx));
+  const hits = CONN_RULES.filter((r) => !r.user && !r.role && !r.authProvider
+    && matchesConnection(r, ctx));
   if (!hits.length) return null;
   return {
     always: hits.flatMap((r) => r.always),
@@ -2258,7 +2294,7 @@ function applyClientRules(set, extra) {
 function userRulesCouldApply(dash) {
   // A role rule needs the user resolved just as much as a named-user rule does, so it has to open
   // the same gate. Missing this would leave role rules never applying, silently.
-  const withUser = CONN_RULES.filter((r) => r.user || r.role);
+  const withUser = CONN_RULES.filter((r) => r.user || r.role || r.authProvider);
   if (!withUser.length) return false;
   if (dash === null || dash === undefined) return true;
   return withUser.some((r) => r.dashboard === null || r.dashboard === dash);
@@ -2275,10 +2311,16 @@ function rulesForUser(user, ctx) {
   // with a dashboard, a device or a client app: the user is simply the last thing to resolve, so
   // this is the first moment the whole rule can be decided.
   const isAdmin = Boolean(user.is_admin);
-  const hits = CONN_RULES.filter((r) => (r.user || r.role)
+  // Providers come from the cached shape when this is a cache hit and from Home Assistant's own
+  // reply when it is not, so both paths have to be read.
+  const providers = (user.providers
+    ?? (user.credentials || []).map((c) => String(c?.type || '').toLowerCase()))
+    .map((x) => String(x).toLowerCase());
+  const hits = CONN_RULES.filter((r) => (r.user || r.role || r.authProvider)
     // A named user must match by name or id; a rule with only a role matches any user in it.
     && (!r.user || names.includes(r.user))
     && (!r.role || (r.role === 'admin' ? isAdmin : !isAdmin))
+    && (!r.authProvider || providers.includes(r.authProvider))
     && matchesConnection(r, ctx));
   if (!hits.length) return null;
   return {
@@ -2806,7 +2848,7 @@ server.on('upgrade', (req, socket, head) => {
     // Client-pinned rules apply on top of whichever dashboard set was chosen, and regardless of
     // whether the dashboard could be attributed at all — the point of pinning to a device is
     // that it holds even when the page changes.
-    const ruleCtx = { ip: rt.ip, ua: req.headers?.['user-agent'] || null, dash };
+    const ruleCtx = { ip: rt.ip, ua: req.headers?.['user-agent'] || null, dash, host: rt.host };
     let set = applyClientRules(dashSet, rulesForConnection(ruleCtx));
     const pinned = set !== dashSet;
     const afterRules = set.size;
@@ -2946,7 +2988,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         // Rebuilt from what bridge() was handed rather than captured in the upgrade handler:
         // the two are different functions, and reaching across cost a silent ReferenceError
         // inside this promise chain — the widening simply never happened and nothing said so.
-        const extra = rulesForUser(user, { ip: meta.ip, ua: meta.ua ?? null, dash });
+        const extra = rulesForUser(user, { ip: meta.ip, ua: meta.ua ?? null, dash, host: meta.host ?? null });
         // Log the miss too. A rule that matches nothing is indistinguishable from no rule at
         // all otherwise — and the usual cause is that HA's user NAME ("David Coulson") is not
         // the first name people write in config.
@@ -4089,7 +4131,10 @@ log(`overrides: ${CONN_RULES.length} rule(s)`
       + `${CONN_RULES.filter((r) => r.role).length} to a role, `
       + `${CONN_RULES.filter((r) => r.client).length} to a device, `
       + `${CONN_RULES.filter((r) => r.dashboard).length} to a dashboard, `
-      + `${CONN_RULES.filter((r) => r.userAgent).length} to a client app` : ''));
+      + `${CONN_RULES.filter((r) => r.userAgent).length} to a client app, `
+      + `${CONN_RULES.filter((r) => r.mdnsKind).length} to a device kind, `
+      + `${CONN_RULES.filter((r) => r.host).length} to a hostname, `
+      + `${CONN_RULES.filter((r) => r.authProvider).length} to a sign-in method` : ''));
 log(`options: by_dashboard=${PER_DASH} trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES} trim_services=${TRIM_SERVICES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together
 // (host boot, a core update), and core can take minutes to answer — the proxy's job is to

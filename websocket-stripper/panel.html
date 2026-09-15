@@ -1213,7 +1213,8 @@ const OVERRIDE_KINDS = {
   overrides: {
     label: 'rule',
     match: (r) => [['dashboard', r.dashboard], ['user', r.user], ['role', r.role],
-      ['device', r.client], ['client app', r.user_agent]],
+      ['signed in via', r.auth_provider], ['device kind', r.mdns_kind],
+      ['hostname', r.host], ['device', r.client], ['client app', r.user_agent]],
   },
   dashboard_overrides: {
     label: 'dashboard',
@@ -1386,6 +1387,10 @@ const MATCHERS = [
   { id: 'dashboard', label: 'Dashboard', hint: 'url_path, e.g. basement-stairs-panel' },
   { id: 'user', label: 'Home Assistant user', hint: 'name from Settings -> People, or a user id' },
   { id: 'role', label: 'Role', hint: 'admin or user', choices: ['admin', 'user'] },
+  { id: 'auth_provider', label: 'Signed in via', hint: 'how the user logged in',
+    choices: ['homeassistant', 'trusted_networks'] },
+  { id: 'mdns_kind', label: 'Device kind (mDNS)', hint: 'Kiosk Satellite, ESPHome, ha-paneld' },
+  { id: 'host', label: 'Hostname used', hint: 'the name this client connected to' },
   { id: 'client', label: 'Device', hint: 'IP, CIDR (10.2.4.0/24) or hostname' },
   { id: 'user_agent', label: 'Client app', hint: 'part of the User-Agent, e.g. io.robbie.HomeAssistant' },
 ];
@@ -1412,7 +1417,8 @@ function buildRule(key, values, effects) {
   const list = (v) => (Array.isArray(v) ? v : String(v || '').split(','))
     .map((x) => String(x).trim()).filter(Boolean);
   const rule = {};
-  for (const id of ['dashboard', 'user', 'role', 'client', 'user_agent']) {
+  for (const id of ['dashboard', 'user', 'role', 'auth_provider', 'mdns_kind', 'host',
+    'client', 'user_agent']) {
     if (values[id]) rule[id] = values[id];
   }
   const always = list(effects.always_forward || '');
@@ -1661,7 +1667,7 @@ function overrideWizard(d, save, say, addBtn) {
         for (const c of m.choices) {
           const opt = document.createElement('option');
           opt.value = c;
-          opt.textContent = c === 'admin' ? 'admin' : 'not an admin';
+          opt.textContent = c === 'admin' ? 'admin' : c === 'user' ? 'not an admin' : c;
           sel.appendChild(opt);
         }
         sel.value = values[id] || '';

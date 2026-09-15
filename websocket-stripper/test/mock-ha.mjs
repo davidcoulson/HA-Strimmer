@@ -20,8 +20,14 @@ export function getFreePort() {
 
 // token -> the user HA would report for it.
 const DEFAULT_USERS = {
-  'david-token': { id: 'u-david', name: 'David', is_admin: true },
-  'michelle-token': { id: 'u-michelle', name: 'Michelle', is_admin: false },
+  // `credentials` mirrors what auth/current_user really returns, so a rule matching the
+  // sign-in method is exercised against the real shape rather than an invented one.
+  'david-token': { id: 'u-david', name: 'David', is_admin: true,
+    credentials: [{ type: 'homeassistant' }] },
+  'kiosk-token': { id: 'u-kiosk', name: 'Kiosk', is_admin: false,
+    credentials: [{ type: 'trusted_networks' }] },
+  'michelle-token': { id: 'u-michelle', name: 'Michelle', is_admin: false,
+    credentials: [{ type: 'homeassistant' }] },
   default: { id: 'u-default', name: 'Default', is_admin: false },
 };
 
