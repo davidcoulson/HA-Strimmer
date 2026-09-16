@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.16.6';
+const VERSION = '2026.09.16.7';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3948,7 +3948,6 @@ function statsExtras() {
       version: ALLOW_VERSION,
       byDashboard: Object.fromEntries([...ALLOW_BY_DASH].map(([d, s]) => [d, s.size])),
     },
-    http: (() => { const h = httpLog.snapshot({ limit: 0 }); return { total: h.total, byStatusClass: h.byStatusClass, slowest: h.slowest.slice(0, 5) }; })(),
     resources: {
       byDashboard: Object.fromEntries(RESOURCE_STATS),
       // Dropped by EVERY dashboard: either genuinely unused (uninstall it) or a resident module

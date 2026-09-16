@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.09.16.7 — 2026-09-16
+
+**Housekeeping.** Every stats snapshot also took a snapshot of the request log, sorted its
+slowest requests and packaged a summary — which `snapshot()` then dropped on the way out, since
+it builds its result field by field and the panel reads the request log from `access.json`
+directly. The block is gone. Every consumer of `stats.json`, including the panel's five-second
+poll and the MQTT publisher, does slightly less work per call. No behaviour change.
+
+---
+
 ## 2026.09.16.6 — 2026-09-16
 
 **Housekeeping.** The proxy imported `node:module` and never used it — the compile cache is
