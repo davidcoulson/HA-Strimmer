@@ -770,8 +770,7 @@ function drawSankey(host, flows) {
       nodes[i].set(v, (nodes[i].get(v) || 0) + f.n);
     });
   }
-  const ordered = nodes.map((m) => [...m].sort((a, b) => b[1] - a[1]));
-  const tallest = Math.max(...ordered.map((c) => c.length));
+  const tallest = Math.max(...nodes.map((c) => c.size));
   // Tall enough that a one-in-thirty path is still a band you can point at. Driven by the
   // busiest column, because that is what has to fit.
   const H = TOP + PAD + Math.max(170, 52 * tallest);
@@ -785,7 +784,7 @@ function drawSankey(host, flows) {
   // path visible and legible while the big ones still dominate. The numbers next to each label
   // are what should be read for exact proportions — the bands are for shape.
   const MIN_H = 15;
-  const pos = ordered.map((col, i) => {
+  const layout = (col, i) => {
     const gaps = GAP * Math.max(col.length - 1, 0);
     const avail = Math.max(usable - gaps, col.length * MIN_H);
     const share = Math.max(avail - MIN_H * col.length, 0);
@@ -797,7 +796,39 @@ function drawSankey(host, flows) {
       y += h + GAP;
     }
     return m;
-  });
+  };
+
+  // Node order. The first column is biggest-first. Every later column is ordered by where its
+  // traffic COMES FROM: each node sits at the flow-weighted average height of its sources in the
+  // column to its left, biggest-first only as a tie-break.
+  //
+  // Sorting every column by size — the obvious rule, and the one this used — crossed bands for
+  // no reason. Measured on a live instance: the entry point `10.2.4.6` (164, fed by `direct`) sat
+  // above `10-2-3-6.coulson.io` (126, fed by `nginxproxymanager`) because 164 > 126, so the
+  // green band from the lower route had to cross the blue band from the upper one. A column
+  // ordered by its sources' positions puts the destinations of the top route at the top, and
+  // that alone removes every crossing a three-column diagram can avoid.
+  const pos = [];
+  for (let i = 0; i < COLS.length; i++) {
+    let col = [...nodes[i]];
+    if (i === 0) {
+      col.sort((a, b) => b[1] - a[1]);
+    } else {
+      const prev = pos[i - 1];
+      const centre = new Map();
+      for (const f of flows) {
+        const src = prev.get(cellOf(f, COLS[i - 1]));
+        const dst = cellOf(f, COLS[i]);
+        if (!src) continue;
+        const c = centre.get(dst) || { sum: 0, n: 0 };
+        c.sum += (src.y + src.h / 2) * f.n; c.n += f.n;
+        centre.set(dst, c);
+      }
+      const bary = (name) => { const c = centre.get(name); return c && c.n ? c.sum / c.n : Infinity; };
+      col.sort((a, b) => (bary(a[0]) - bary(b[0])) || (b[1] - a[1]));
+    }
+    pos.push(layout(col, i));
+  }
 
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H,
     role: 'img', 'aria-label': 'Connection paths from origin through route to hostname' });
@@ -819,7 +850,16 @@ function drawSankey(host, flows) {
       const k = `${cellOf(f, COLS[i])}\u0000${cellOf(f, COLS[i + 1])}`;
       links.set(k, (links.get(k) || 0) + f.n);
     }
-    for (const [k, n] of [...links].sort((a, b) => b[1] - a[1])) {
+    // Bands leave each node in the order their destinations appear down the next column, and
+    // arrive at each node in the order their sources appear down the previous one. Drawing them
+    // biggest-first instead let two bands out of one node swap places between the columns and
+    // cross each other — the same node order, the same links, and a needless X in the middle.
+    const at = (col, name) => pos[col].get(name)?.y ?? Infinity;
+    const drawOrder = [...links].sort((p, q) => {
+      const [pa, pb] = p[0].split('\u0000'), [qa, qb] = q[0].split('\u0000');
+      return (at(i, pa) - at(i, qa)) || (at(i + 1, pb) - at(i + 1, qb));
+    });
+    for (const [k, n] of drawOrder) {
       const [a, b] = k.split('\u0000');
       const from = pos[i].get(a), to = pos[i + 1].get(b);
       if (!from || !to) continue;

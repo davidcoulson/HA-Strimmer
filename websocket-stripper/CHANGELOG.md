@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026.09.16.3 — 2026-09-16
+
+**The connection-path diagram crossed its bands for no reason.** Every column was ordered by
+size, so on the instance this was found on the entry point `10.2.4.6` (164 connections, fed by
+`direct`) sat above `10-2-3-6.coulson.io` (126, fed by `nginxproxymanager`) — and the green band
+from the lower route had to cross the blue band from the upper one to reach it. Each column
+after the first is now ordered by where its traffic comes from: a node sits at the flow-weighted
+height of its sources in the column to its left, biggest-first only as a tie-break. Bands are
+also drawn in source-then-destination order rather than biggest-first, so two bands out of one
+node cannot swap places between the columns. Checked against the live flows: seven bands, no
+crossings.
+
+---
+
 ## 2026.09.16.2 — 2026-09-16
 
 **The panel, after a UX review.** No proxy behaviour changes; everything here is in the console

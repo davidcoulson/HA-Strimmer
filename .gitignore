@@ -228,3 +228,7 @@ secrets.local.*
 
 # Local dev MCP config (chrome-devtools-mcp) — not for the public add-on repo
 .mcp.json
+
+# Per-machine Claude Code settings (permission allowlist names local MCP server ids)
+.claude/settings.json
+.claude/settings.local.json
