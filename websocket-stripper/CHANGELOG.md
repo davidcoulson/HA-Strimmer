@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026.09.15.37 — 2026-09-15
+
+**`trim_extra_modules` silently broke per-browser dashboard attribution.** If you run that option,
+this is a real correctness fix.
+
+A connection is attributed **cookie first**, then the IP hint, then the User-Agent. The `ws_dash`
+cookie was only ever set by the proxy's `proxyRes` hook — but `serveDashboardPage()`, the one
+request the app answers itself in order to rewrite a page's injected-module list, **writes its own
+response, so that hook never runs**. The cookie lives for a year.
+
+The result: a browser stayed pinned to whichever dashboard had served it last *before*
+`trim_extra_modules` was switched on, and every later visit to a different dashboard was served
+the wrong dashboard's entities and resources — permanently, surviving reloads and cache-busting.
+
+Observed on the instance this was found on: a browser sitting on `/dashboard-test` receiving
+`office-tablet`'s 88 entities and 7 resources, repeatedly. It cost most of an evening to corner,
+and sent a dashboard investigation down entirely the wrong path.
+
+**Wall panels never showed it**, which is why it hid: each loads exactly one dashboard, and a
+browser with *no* cookie falls through to the IP hint, which is refreshed on every request. Only a
+browser that moves between dashboards is affected.
+
+Both answer paths now share one `dashCookieHeader()` definition, so they cannot drift — a test
+asserts they produce byte-identical cookies, lifetime included, because a browser's attribution
+must not depend on which code path happened to serve it.
+
+**The log now names which signal won.** `entity payload delivered to 10.2.4.129 (dashboard-test
+via cookie)` — or `(union — no dashboard attributed)`. Without it, a connection attributed to the
+wrong dashboard is unreproducible once closed: the Clients tab shows it live, but the log is what
+survives, and that is the gap that made this bug so expensive.
+
+**That log line also had no test, and the first attempt at it crashed a live instance.** The
+dashboard clause sits inside a ternary on `dash`, and every existing test connected
+*unattributed* — so `dash` was null, the branch was never evaluated, and a `ReferenceError` in it
+passed 421 tests before failing on the first real panel that had a dashboard. The suite now covers
+both branches of that line, with a test that reproduces the crash exactly when the bug is
+reintroduced.
+
+Two things are worth taking from it. A log line is code, and an untested branch is untested
+whether or not it looks trivial. And the `.34` decision to make a `ReferenceError` fatal rather
+than retried is what turned it into an obvious outage instead of an add-on that stays up serving
+nothing — the failure mode that previously took an afternoon to notice, twice.
+
+---
+
 ## 2026.09.15.36 — 2026-09-15
 
 **The resource diagnostics now check themselves.**

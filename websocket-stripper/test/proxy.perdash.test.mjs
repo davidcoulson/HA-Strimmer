@@ -1917,3 +1917,143 @@ describe('the dropped-by-all resource warning', () => {
     } finally { px.kill(); await m2.close(); }
   });
 });
+
+// Attribution is decided cookie-first, and the cookie stopped being refreshed the moment
+// trim_extra_modules started rewriting dashboard pages.
+//
+// serveDashboardPage() writes the response ITSELF, so `proxy.on('proxyRes')` — the only place
+// that set ws_dash — never ran for a page it handled. The cookie lives a year, so a browser
+// stayed pinned to whichever dashboard had served it last BEFORE the option was turned on, and
+// every later visit to a different dashboard was served the wrong one's entities and resources.
+// Observed on the live instance: a browser on /dashboard-test receiving office-tablet's 88
+// entities and 7 resources, repeatedly, surviving a cache-busting reload.
+//
+// Wall panels never showed it: each loads one dashboard, and a browser with NO cookie falls
+// through to the IP hint, which is refreshed on every request. Only a browser that moves between
+// dashboards is affected — which is why it looked like a phantom for so long.
+describe('the dashboard attribution cookie', () => {
+  const CFG = { views: [{ cards: [{ type: 'custom:my-fancy-card', entity: 'light.living_room' }] }] };
+  const MODS = ['/res/my-fancy-card.js', '/res/unrelated-widget.js'];
+
+  const getHeaders = (url) => new Promise((resolve, reject) => {
+    const req = http.get(url, { headers: { accept: 'text/html' } }, (res) => {
+      let body = ''; res.on('data', (c) => body += c);
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on('error', reject);
+  });
+
+  const cookieFrom = (headers) => {
+    const raw = headers['set-cookie'] || [];
+    return (Array.isArray(raw) ? raw : [raw]).find((c) => c.startsWith('ws_dash=')) || null;
+  };
+
+  const boot = async (extraEnv) => {
+    const mock = await startMockHa({ configs: { 'res-dash': CFG }, extraModules: MODS });
+    const port = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: 'res-dash', port,
+      extraEnv: { TRIM_RESOURCES: '1', ...extraEnv } });
+    await px.waitForLog(READY);
+    return { mock, port, px };
+  };
+
+  it('is set when the app serves the page itself (trim_extra_modules on)', async () => {
+    const { mock, port, px } = await boot({ TRIM_EXTRA_MODULES: '1' });
+    try {
+      const res = await getHeaders(`http://127.0.0.1:${port}/res-dash`);
+      // Confirm we really exercised the self-served path, or this test proves nothing: the
+      // dropped module is absent only when serveDashboardPage() rewrote the body itself.
+      assert.ok(!res.body.includes('/res/unrelated-widget.js'),
+        'the page must have been rewritten by the app, not streamed through the proxy');
+      const cookie = cookieFrom(res.headers);
+      assert.ok(cookie, 'the self-served page must still attribute the browser to this dashboard');
+      assert.match(cookie, /^ws_dash=res-dash;/);
+    } finally { px.kill(); await mock.close(); }
+  });
+
+  it('is set identically when the proxy serves the page (trim_extra_modules off)', async () => {
+    const { mock, port, px } = await boot({});
+    try {
+      const res = await getHeaders(`http://127.0.0.1:${port}/res-dash`);
+      const cookie = cookieFrom(res.headers);
+      assert.ok(cookie, 'the proxied page sets it too');
+      assert.match(cookie, /^ws_dash=res-dash;/);
+    } finally { px.kill(); await mock.close(); }
+  });
+
+  // Both paths must agree on the VALUE, not merely both set something: a browser's attribution
+  // must not depend on which code path happened to answer.
+  it('both paths produce the same cookie, lifetime included', async () => {
+    const on = await boot({ TRIM_EXTRA_MODULES: '1' });
+    let a, b;
+    try { a = cookieFrom((await getHeaders(`http://127.0.0.1:${on.port}/res-dash`)).headers); }
+    finally { on.px.kill(); await on.mock.close(); }
+    const off = await boot({});
+    try { b = cookieFrom((await getHeaders(`http://127.0.0.1:${off.port}/res-dash`)).headers); }
+    finally { off.px.kill(); await off.mock.close(); }
+    assert.equal(a, b, 'the two answer paths must not disagree about attribution');
+  });
+});
+
+// The delivered-payload log line, for an ATTRIBUTED connection.
+//
+// This existed with zero coverage and shipped a ReferenceError to a live instance. Every other
+// test connects unattributed, so `dash` is null — and the line's dashboard clause is inside a
+// ternary on `dash`, so the whole branch was never evaluated by the suite. The one path that
+// runs on every real panel was the one path nothing exercised.
+//
+// The fix it guards is small; the shape of the miss is the point. A log line is code.
+describe('the delivered-payload log line', () => {
+  const CFG = { views: [{ cards: [{ type: 'custom:my-fancy-card', entity: 'light.living_room' }] }] };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  it('names the dashboard AND the signal that attributed it', async () => {
+    const mock = await startMockHa({ configs: { 'p-dash': CFG } });
+    const port = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: 'p-dash', port });
+    try {
+      await px.waitForLog(READY);
+      // Load the page first: that is what attributes this address to the dashboard. Without it
+      // the connection lands on the union and the branch under test never runs — which is
+      // exactly how the suite missed a ReferenceError here.
+      await httpGet(`http://127.0.0.1:${port}/p-dash`);
+
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+      await c.authed;
+      c.send({ type: 'subscribe_entities', id: 90 });
+      await wait(200);
+      mock.pushEntityEvent({ a: { 'light.living_room': { s: 'on' } } });
+      await wait(500);
+      c.close();
+
+      const line = px.out.split('\n').find((l) => l.includes('entity payload delivered to'));
+      assert.ok(line, `the payload log line must appear; proxy said:\n${px.out.slice(-800)}`);
+      assert.match(line, /\(p-dash via \w+\)/,
+        'an attributed connection must name its dashboard and the signal that chose it');
+      assert.doesNotMatch(px.out, /is not defined|ReferenceError/,
+        'evaluating that line must not throw');
+    } finally { px.kill(); await mock.close(); }
+  });
+
+  // The other branch, so narrowing the line to nothing would not pass.
+  it('says so plainly when nothing attributed the connection', async () => {
+    const mock = await startMockHa({ configs: { 'p-dash': CFG } });
+    const port = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: 'p-dash', port });
+    try {
+      await px.waitForLog(READY);
+      // No page load, so no cookie and no IP hint: this connection gets the union.
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+      await c.authed;
+      c.send({ type: 'subscribe_entities', id: 91 });
+      await wait(200);
+      mock.pushEntityEvent({ a: { 'light.living_room': { s: 'on' } } });
+      await wait(500);
+      c.close();
+
+      const line = px.out.split('\n').find((l) => l.includes('entity payload delivered to'));
+      assert.ok(line, 'the line appears for an unattributed connection too');
+      assert.match(line, /no dashboard attributed/);
+    } finally { px.kill(); await mock.close(); }
+  });
+});

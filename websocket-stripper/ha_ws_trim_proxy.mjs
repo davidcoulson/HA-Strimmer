@@ -76,7 +76,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.36';
+const VERSION = '2026.09.15.37';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1285,10 +1285,7 @@ proxy.on('proxyRes', (proxyRes, req) => {
   if (!dash) return;
   const existing = proxyRes.headers['set-cookie'];
   const prior = Array.isArray(existing) ? existing : existing ? [existing] : [];
-  proxyRes.headers['set-cookie'] = [
-    ...prior,
-    `${DASH_COOKIE}=${encodeURIComponent(dash)}; Path=/; Max-Age=31536000; SameSite=Lax`,
-  ];
+  proxyRes.headers['set-cookie'] = [...prior, dashCookieHeader(dash)];
 });
 
 proxy.on('proxyReq', (proxyReq, req) => {
@@ -2610,6 +2607,21 @@ function noteClientDash(req) {
 // empty entity_ids means "no filter" to HA, i.e. the whole firehose.
 const DASH_COOKIE = 'ws_dash';
 
+// One definition, because there are TWO places that answer a dashboard page: the proxy's
+// `proxyRes` hook, and serveDashboardPage() when trim_extra_modules rewrites the page itself.
+// They must set the same cookie with the same lifetime or a browser's attribution depends on
+// which path happened to serve it.
+const dashCookieHeader = (dash) =>
+  `${DASH_COOKIE}=${encodeURIComponent(dash)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+
+// Append to whatever cookies the response already carries, rather than replacing them.
+function addDashCookie(res, dash) {
+  const prior = res.getHeader('set-cookie');
+  const cookies = Array.isArray(prior) ? [...prior] : (prior ? [prior] : []);
+  cookies.push(dashCookieHeader(dash));
+  res.setHeader('set-cookie', cookies);
+}
+
 /// The dashboard this browser was last served, from its own cookie. Per-browser, so it
 /// survives NAT — unlike the IP hint, which every device behind one address shares.
 function dashFromCookie(req) {
@@ -2694,6 +2706,18 @@ async function serveDashboardPage(req, res, dash) {
     res.setHeader(k, v);
   }
   res.setHeader('content-length', String(out.length));
+  // Attribute this browser to this dashboard — the same cookie the proxyRes hook sets.
+  //
+  // It has to be repeated here because this function writes the response ITSELF, so that hook
+  // never runs for a page it handles. The effect was a browser pinned to whichever dashboard it
+  // happened to be served BEFORE trim_extra_modules started rewriting pages: the cookie is first
+  // in allowFor()'s precedence and lives for a year, so it never got corrected, and every later
+  // load of a different dashboard was served the wrong one's entities and resources.
+  //
+  // Wall panels never showed it — each loads one dashboard, and a browser with no cookie at all
+  // falls through to the IP hint, which is updated on every request. It only bites a browser
+  // that moves between dashboards, which is why it looked like a phantom.
+  addDashCookie(res, dash);
   res.writeHead(r.status);
   res.end(out);
   logThrottled(`extramod:${dash}`, `  extra modules trimmed for ${dash}: removed ${dropped.length} `
@@ -3354,7 +3378,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
             initialEntityCount: entities,
             initialDrainMs: sentAt - queuedAt,
           });
-          log(`entity payload delivered to ${meta.ip ?? '?'}${dash ? ` (${dash})` : ''}: `
+          // Which signal won the attribution — cookie, ip or user-agent. Read off `meta`, which
+          // bridge() already receives it in; the bare `via` from the caller's scope is NOT
+          // visible here, and writing it that way took the add-on down on a live instance.
+          // `meta` defaults to {}, so a future plumbing slip renders "undefined" rather than
+          // throwing inside a write callback.
+          log(`entity payload delivered to ${meta.ip ?? '?'}`
+            + `${dash ? ` (${dash} via ${meta.via})` : ' (union — no dashboard attributed)'}: `
             + `${(bytes / 1024).toFixed(1)}KB / ${entities} entities in ${sentAt - tOpen}ms from connect `
             + `(${sentAt - queuedAt}ms to the network stack)`);
         });
