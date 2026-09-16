@@ -5,42 +5,79 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WebSocket Stripper</title>
 <style>
+  /* Home Assistant's own tokens, so the page reads as part of the frontend it sits inside.
+     Ingress iframes receive none of HA's theme variables, which is why these are copied rather
+     than inherited: light is HA's default theme, dark is its built-in dark theme. The blue-tinted
+     greys this used before stood out against HA's neutral surfaces. */
   :root {
-    --bg: #f5f6f8; --card: #ffffff; --fg: #1b1f23; --muted: #6b7280;
-    --line: #e5e7eb; --accent: #03a9f4; --good: #2e7d32; --warn: #b26a00;
+    color-scheme: light;
+    --bg: #fafafa; --card: #ffffff; --fg: #212121; --muted: #727272;
+    --line: rgba(0, 0, 0, .12); --accent: #03a9f4;
+    --good: #43a047; --warn: #ffa600; --error: #db4437;
+    /* Route colours. The route is the question the diagram exists to answer — "which entry point
+       did this come through" — so it is what carries the colour; origin and hostname nodes stay
+       neutral rather than competing with it. Hues are separated enough to stay distinct for the
+       common forms of colour blindness. */
+    --r-direct: #2e7d32; --r-proxy: #0277bd; --r-cloudflare: #ef6c00;
+    --r-ingress: #6a1b9a; --r-unknown: #78909c;
+    /* Icons, as MDI paths in a data URI. Masked with currentColor where the colour must follow
+       the text (buttons, sort arrows); the magnifier is a background image so it needs its own
+       fill per theme. */
+    --i-delete: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'/%3E%3C/svg%3E");
+    --i-arrow-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13,20H11V8L5.5,13.5L4.08,12.08L12,4.16L19.92,12.08L18.5,13.5L13,8V20Z'/%3E%3C/svg%3E");
+    --i-arrow-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11,4H13V16L18.5,10.5L19.92,11.92L12,19.84L4.08,11.92L5.5,10.5L11,16V4Z'/%3E%3C/svg%3E");
+    --i-unfold: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z'/%3E%3C/svg%3E");
+    --i-magnify: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23727272' d='M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z'/%3E%3C/svg%3E");
   }
+  /* Dark: HA's built-in dark theme. Two selectors carry the same values on purpose — the system
+     preference applies unless the toggle says light, and the toggle saying dark wins outright. */
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #111418; --card: #1c2026; --fg: #e8eaed; --muted: #9aa0a6;
-      --line: #2b313a; --accent: #4fc3f7; --good: #81c784; --warn: #ffb74d;
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #111111; --card: #1c1c1c; --fg: #e1e1e1; --muted: #9b9b9b;
+      --line: rgba(255, 255, 255, .12);
+      --r-direct: #81c784; --r-proxy: #4fc3f7; --r-cloudflare: #ffb74d;
+      --r-ingress: #ce93d8; --r-unknown: #90a4ae;
+      --i-magnify: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%239b9b9b' d='M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z'/%3E%3C/svg%3E");
     }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #111111; --card: #1c1c1c; --fg: #e1e1e1; --muted: #9b9b9b;
+    --line: rgba(255, 255, 255, .12);
+    --r-direct: #81c784; --r-proxy: #4fc3f7; --r-cloudflare: #ffb74d;
+    --r-ingress: #ce93d8; --r-unknown: #90a4ae;
+    --i-magnify: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%239b9b9b' d='M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z'/%3E%3C/svg%3E");
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font: 14px/1.5 Roboto, "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
-  h1 { font-size: 20px; margin: 0 0 2px; }
-  h2 { font-size: 14px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  /* Sentence case throughout. Home Assistant's card headers are 16px medium in the text colour,
+     and its labels are plain secondary text — no small caps, no letter spacing. */
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 20px; font-weight: 400; margin: 0 0 2px; }
+  h2 { font-size: 16px; font-weight: 500; margin: 0 0 12px; color: var(--fg); }
   .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
   .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-  .big { font-size: 26px; font-weight: 600; }
+  .big { font-size: 26px; font-weight: 500; }
   .big.good { color: var(--good); }
-  .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .label { color: var(--muted); font-size: 12px; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th, td { text-align: right; padding: 8px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
   tr:last-child td { border-bottom: none; }
   .scroll { overflow-x: auto; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
   .pill.on { color: var(--good); border-color: var(--good); }
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
-  /* Range toggle. Sits in the h2, so it inherits the uppercase treatment and has to opt out. */
-  .seg { float: right; text-transform: none; letter-spacing: 0; }
-  .seg button { font: inherit; font-size: 11px; color: var(--muted); background: var(--bg);
-    border: 1px solid var(--line); padding: 2px 8px; cursor: pointer; }
+  /* Range toggle, in the card heading. */
+  .seg { float: right; font-weight: 400; }
+  .seg button { font: inherit; font-size: 12px; color: var(--muted); background: var(--bg);
+    border: 1px solid var(--line); padding: 3px 10px; cursor: pointer; }
   .seg button:first-child { border-radius: 4px 0 0 4px; }
   .seg button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
   .seg button.on { color: var(--card); background: var(--accent); border-color: var(--accent); }
@@ -53,25 +90,41 @@
   #sankey .sub { fill: var(--muted); font-size: 10px; }
   #sankey .band { opacity: .42; }
   #sankey .band:hover { opacity: .75; }
-  #sankey .col { fill: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+  #sankey .col { fill: var(--muted); font-size: 11px; }
   #paths-detail { margin-top: 12px; }
   #paths-detail summary { color: var(--muted); font-size: 12px; cursor: pointer; }
-  .cfgbtn { font: inherit; font-size: 12px; color: var(--accent); background: none;
-    border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .cfgbtn { font: inherit; font-size: 13px; font-weight: 500; color: var(--accent); background: none;
+    border: 1px solid var(--line); border-radius: 4px; padding: 4px 12px; cursor: pointer; }
   .cfgbtn:hover { border-color: var(--accent); }
   .cfgbtn:disabled { opacity: .5; cursor: default; }
+  /* A destructive action looks like one: Home Assistant's error red, so "Remove" and "Cancel"
+     are not the same button with different words. */
+  .cfgbtn.danger { color: var(--error); border-color: var(--error); }
+  .cfgbtn.danger:hover { background: rgba(219, 68, 55, .1); }
   /* Sections. Each is a labelled group with its own blurb; the rows inside are a single column so
-     a checkbox and its sentence sit together rather than being separated by a table gutter. */
-  .cfgsec { margin-top: 20px; }
+     a switch and its sentence sit together rather than being separated by a table gutter. */
+  .cfgsec { margin-top: 24px; }
   .cfgsec:first-child { margin-top: 4px; }
-  .cfgsec h3 { font-size: 13px; margin: 0 0 2px; text-transform: uppercase;
-    letter-spacing: .04em; color: var(--fg); }
-  .cfgsec .note { margin: 0 0 10px; }
-  .cfgrow { display: flex; align-items: center; gap: 10px; padding: 5px 0;
+  .cfgsec h3 { font-size: 14px; font-weight: 500; margin: 0 0 2px; color: var(--fg); }
+  .cfgsec .note { margin: 0 0 8px; }
+  /* Rows at Home Assistant's settings-row height, so they read as controls and not a spreadsheet. */
+  .cfgrow { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 4px 0;
     border-bottom: 1px solid var(--line); }
   .cfgrow:last-child { border-bottom: none; }
-  .cfgbool { display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; }
-  .cfgbool input[disabled] { cursor: default; }
+  .cfgbool { display: flex; align-items: center; gap: 12px; cursor: pointer; flex: 1; }
+  /* A switch, not a checkbox — what Home Assistant uses for every boolean setting. The native
+     checkbox stays underneath for keyboard, screen readers and the change event; only its
+     appearance is replaced. */
+  .cfgbool input[type=checkbox] { appearance: none; -webkit-appearance: none; margin: 0;
+    flex: 0 0 auto; width: 36px; height: 20px; border-radius: 10px; position: relative;
+    background: var(--muted); opacity: .55; cursor: pointer; transition: background .15s, opacity .15s; }
+  .cfgbool input[type=checkbox]::before { content: ''; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .3); }
+  .cfgbool input[type=checkbox]:checked { background: var(--accent); opacity: 1; }
+  .cfgbool input[type=checkbox]:checked::before { transform: translateX(16px); }
+  .cfgbool input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .cfgbool input[disabled] { cursor: default; opacity: .3; }
   .cfgname { flex: 0 0 210px; color: var(--muted); font-size: 13px; }
   .cfgsummary { flex: 1; color: var(--muted); font-size: 13px; }
   /* Lists are shown as their items. A JSON array in a text box made "Dashboards to serve" look
@@ -84,7 +137,7 @@
   .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chip button { font: inherit; font-size: 13px; line-height: 1; color: var(--muted);
     background: none; border: 0; padding: 0 2px; cursor: pointer; }
-  .chip button:hover { color: var(--warn); }
+  .chip button:hover { color: var(--error); }
   .chip button:disabled { opacity: .35; cursor: default; }
   .chip-empty { color: var(--muted); font-size: 13px; font-style: italic; }
   .chip-add { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -109,12 +162,17 @@
     max-width: 210px; }
   .ovr-kind { font-size: 11px; color: var(--muted); border: 1px solid var(--line);
     border-radius: 999px; padding: 0 7px; white-space: nowrap; }
-  .ovr-del { font: inherit; font-size: 13px; line-height: 1; color: var(--muted);
-    background: none; border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px;
-    cursor: pointer; }
-  .ovr-del:hover:not(:disabled) { color: var(--warn); border-color: var(--warn); }
-  .ovr-del:disabled { opacity: .4; cursor: default; }
-  .ovr-confirm { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--warn); }
+  /* An icon button: the MDI delete glyph masked in the text colour, in Home Assistant's round
+     hover target. It used to be a trash-can emoji, which renders differently on every platform. */
+  .ovr-del { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%;
+    background: none; color: var(--muted); cursor: pointer; flex: 0 0 auto; }
+  .ovr-del::before { content: ''; display: block; width: 20px; height: 20px; margin: auto;
+    background: currentColor; -webkit-mask: var(--i-delete) center / contain no-repeat;
+    mask: var(--i-delete) center / contain no-repeat; }
+  .ovr-del:hover:not(:disabled) { color: var(--error); background: rgba(219, 68, 55, .1); }
+  .ovr-del:focus-visible { outline: 2px solid var(--accent); }
+  .ovr-del:disabled { opacity: .3; cursor: default; }
+  .ovr-confirm { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--error); }
   /* The wizard. A dialog rather than an inline form: adding a rule is a short focused task, and
      an inline form pushes the list it is about off the screen. */
   .wiz { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-top: 12px;
@@ -127,7 +185,7 @@
   .wiz-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
   .wiz-row span { flex: 0 0 150px; color: var(--muted); font-size: 12px; }
   .wiz-actions { display: flex; gap: 8px; margin-top: 12px; }
-  .wiz-err { color: var(--warn); font-size: 12px; margin-top: 8px; }
+  .wiz-err { color: var(--error); font-size: 12px; margin-top: 8px; }
   /* Picker. The input is a search box AND a free-text field: entity ids are searchable, a
      /regex/ is not, and both are legitimate values — so suggestions assist typing rather than
      replacing it. */
@@ -140,7 +198,7 @@
   .pick-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pick-chip button { font: inherit; font-size: 13px; line-height: 1; color: var(--muted);
     background: none; border: 0; padding: 0 2px; cursor: pointer; }
-  .pick-chip button:hover { color: var(--warn); }
+  .pick-chip button:hover { color: var(--error); }
   .pick-menu { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin-top: 2px;
     background: var(--card); border: 1px solid var(--line); border-radius: 6px;
     box-shadow: 0 6px 20px rgba(0,0,0,.14); max-height: 220px; overflow-y: auto; }
@@ -164,29 +222,26 @@
      neutral rather than competing with it. Hues are separated enough to stay distinct for the
      common forms of colour blindness, and each has a dark-theme variant because the light-theme
      values go muddy on a dark ground. */
-  :root {
-    --r-direct: #2e7d32; --r-proxy: #0277bd; --r-cloudflare: #ef6c00;
-    --r-ingress: #6a1b9a; --r-unknown: #78909c;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --r-direct: #81c784; --r-proxy: #4fc3f7; --r-cloudflare: #ffb74d;
-      --r-ingress: #ce93d8; --r-unknown: #90a4ae;
-    }
-  }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
   .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-  .filter { width: 100%; margin-bottom: 10px; padding: 7px 10px; font: inherit; font-size: 13px;
-    color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
-  .filter:focus { outline: none; border-color: var(--accent); }
+  /* Search fields carry a leading magnifier, the way Home Assistant's do. */
+  .search { width: 100%; margin-bottom: 10px; padding: 8px 10px 8px 36px; font: inherit; font-size: 14px;
+    color: var(--fg); background: var(--bg) var(--i-magnify) 10px center / 18px no-repeat;
+    border: 1px solid var(--line); border-radius: 8px; }
+  .search:focus { outline: none; border-color: var(--accent); }
   /* Sortable headers. The arrow is a ::after so it never shifts the column width when it
-     appears — a header that reflows the table on click is worse than no indicator at all. */
+     appears — a header that reflows the table on click is worse than no indicator at all. MDI
+     arrows masked in the current colour, rather than unicode arrows that differ per font. */
   th.sortable { cursor: pointer; user-select: none; }
   th.sortable:hover { color: var(--fg); }
-  th.sortable::after { content: '↕'; opacity: .25; margin-left: 5px; font-size: 10px; }
-  th.sortable.up::after { content: '↑'; opacity: 1; color: var(--accent); }
-  th.sortable.down::after { content: '↓'; opacity: 1; color: var(--accent); }
+  th.sortable::after { content: ''; display: inline-block; width: 12px; height: 12px;
+    margin-left: 4px; vertical-align: -2px; opacity: .3; background: currentColor;
+    -webkit-mask: var(--i-unfold) center / contain no-repeat; mask: var(--i-unfold) center / contain no-repeat; }
+  th.sortable.up::after { opacity: 1; background: var(--accent);
+    -webkit-mask-image: var(--i-arrow-up); mask-image: var(--i-arrow-up); }
+  th.sortable.down::after { opacity: 1; background: var(--accent);
+    -webkit-mask-image: var(--i-arrow-down); mask-image: var(--i-arrow-down); }
   th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   /* Tab bar. Sticky, because the panel is long and losing the tabs on scroll is the one thing
      that makes tabs worse than a single page. */
@@ -203,8 +258,19 @@
   .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
   .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .card[hidden] { display: none; }
-  .err { color: var(--warn); }
+  .err { color: var(--error); }
   a { color: var(--accent); }
+  /* Feedback as a snackbar at the bottom, where Home Assistant puts it. A note at the top of
+     the Config card was off-screen for every edit made further down. */
+  .toast { position: fixed; left: 16px; bottom: 16px; z-index: 50;
+    max-width: min(560px, calc(100% - 32px)); background: #323232; color: #fff;
+    border-radius: 4px; padding: 12px 16px; font-size: 14px; line-height: 1.4;
+    box-shadow: 0 3px 5px -1px rgba(0, 0, 0, .2), 0 6px 10px rgba(0, 0, 0, .14);
+    opacity: 0; transform: translateY(8px); transition: opacity .15s, transform .15s;
+    pointer-events: none; }
+  .toast.show { opacity: 1; transform: none; }
+  .toast.err { background: var(--error); }
+  @media (max-width: 600px) { .toast { left: 0; right: 0; bottom: 0; max-width: none; border-radius: 0; } }
   .chart { margin-bottom: 14px; }
   .chart svg { width: 100%; height: 110px; display: block; margin-top: 4px; }
   /* The peak value lives in HTML, not inside the SVG: the chart is stretched to the card width
@@ -224,7 +290,17 @@
 </style>
 </head>
 <body>
-  <h1><span class="dot"></span>WebSocket Stripper</h1>
+  <div class="topbar">
+    <h1><span class="dot"></span>WebSocket Stripper</h1>
+    <!-- Ingress never passes Home Assistant's theme into this frame, so the page can only follow
+         the OS — a dark HA on a light desktop got a light panel inside a dark frame. This lets a
+         person say which, and remembers it. -->
+    <span class="seg" id="theme" role="group" aria-label="Theme">
+      <button type="button" data-theme="auto" class="on">Auto</button><button
+        type="button" data-theme="light">Light</button><button
+        type="button" data-theme="dark">Dark</button>
+    </span>
+  </div>
   <div class="sub" id="sub">loading…</div>
 
   <nav class="tabs" id="tabs" role="tablist">
@@ -255,7 +331,7 @@
   </div>
 
   <div class="card" data-tab="overview">
-    <h2>Last 24 hours <span id="histSpan" class="label" style="text-transform:none;letter-spacing:0"></span></h2>
+    <h2>Last 24 hours <span id="histSpan" class="label"></span></h2>
     <div id="histEmpty" class="note">Collecting. One sample is taken at startup and every five
       minutes after; the charts draw once there are two, so about five minutes from a restart.</div>
     <div id="histBody" hidden>
@@ -302,11 +378,8 @@
       and is applied immediately — the allowlist rebuilds and panels pick it up on their next
       reconnect, with no restart. <code>never_forward</code> still wins over it.</div>
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:10px">
-      <input id="ent-q" type="search" placeholder="entity id or name — e.g. assist_satellite, porch, vacuum"
-             autocomplete="off" spellcheck="false"
-             style="flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit">
-    </div>
+    <input id="ent-q" class="search" type="search" placeholder="Search entities by id or name — e.g. assist_satellite, porch, vacuum"
+           autocomplete="off" spellcheck="false">
     <div id="ent-wrap" class="tblwrap" style="display:none"><table id="ent"><thead>
       <tr><th>Entity</th><th>Name</th><th>Sent now</th><th></th></tr>
     </thead><tbody></tbody></table></div>
@@ -344,8 +417,8 @@
           type="button" data-cols="all">All columns</button>
       </span>
     </h2>
-    <input id="cl-filter" class="filter" type="search" autocomplete="off"
-      placeholder="Filter — type any part of a row (10.2.4, office, cloudflare…)">
+    <input id="cl-filter" class="search" type="search" autocomplete="off"
+      placeholder="Filter clients — any part of a row (10.2.4, office, cloudflare…)">
     <div class="scroll"><table id="cl"><thead>
       <tr><th>Client</th><th>Device</th><th>From</th><th>Entry point</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
     </thead><tbody></tbody></table></div>
@@ -456,6 +529,48 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+
+// ---- theme ------------------------------------------------------------------------------
+// auto follows the OS; light and dark are pinned. Applied before anything is drawn so the first
+// paint is right, and re-applied to the charts, which read their colours from the stylesheet.
+function applyTheme(t) {
+  const want = (t === 'light' || t === 'dark') ? t : 'auto';
+  if (want === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = want;
+  for (const b of $('theme').querySelectorAll('button')) b.classList.toggle('on', b.dataset.theme === want);
+  try { localStorage.setItem('stripper-theme', want); } catch { /* private mode */ }
+}
+{
+  let want = 'auto';
+  try { want = localStorage.getItem('stripper-theme') || 'auto'; } catch { /* ignore */ }
+  applyTheme(want);
+}
+$('theme').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-theme]');
+  if (!b) return;
+  applyTheme(b.dataset.theme);
+  // Anything that baked a colour in at draw time.
+  if (typeof renderPaths === 'function') renderPaths();
+  if (typeof tickHistory === 'function') tickHistory();
+});
+
+// ---- toast ------------------------------------------------------------------------------
+// One snackbar, reused. Text only, never markup: what it shows often ends in a server message.
+const toastEl = (() => {
+  const d = document.createElement('div');
+  d.className = 'toast';
+  d.setAttribute('role', 'status');
+  d.setAttribute('aria-live', 'polite');
+  document.body.appendChild(d);
+  return d;
+})();
+let toastTimer = null;
+function toast(text, kind) {
+  toastEl.textContent = text;
+  toastEl.className = 'toast show' + (kind === 'err' ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), kind === 'err' ? 8000 : 5000);
+}
 
 // Tabs. The panel outgrew a single scroll: ten cards, and the ones people open it for — is it
 // working, what is it saving — were being pushed below the diagnostics. Selection is remembered,
@@ -1468,7 +1583,8 @@ function renderOverrides(box, d, save, say) {
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'ovr-del';
-    del.textContent = '🗑';
+    // The glyph is CSS (see .ovr-del); the button carries its name for screen readers.
+    del.setAttribute('aria-label', 'Remove this override');
     del.title = canEdit ? 'Remove this override' : 'Open from the Home Assistant sidebar to edit';
     del.disabled = !canEdit;
     // Two steps, because a delete here is not undoable from the panel and the rows look alike.
@@ -1478,7 +1594,7 @@ function renderOverrides(box, d, save, say) {
       confirmBox.append('Remove this override?');
       const yes = document.createElement('button');
       yes.type = 'button';
-      yes.className = 'cfgbtn';
+      yes.className = 'cfgbtn danger';
       yes.textContent = 'Remove';
       yes.onclick = () => {
         yes.disabled = true;
@@ -2088,7 +2204,9 @@ async function renderConfig() {
     d = await r.json();
   } catch { return; }
   const msg = $('cfg-msg');
-  const say = (t) => { msg.style.display = ''; msg.textContent = t; };
+  // Outcomes go to the snackbar at the bottom of the screen, which is where the eye is after
+  // clicking a control further down a long page — the note at the top of this card was not.
+  const say = (t) => toast(t);
   const save = async (o, action, value) => {
     try {
       const r = await fetch('./config', {
@@ -2096,15 +2214,19 @@ async function renderConfig() {
         body: JSON.stringify({ key: o.key, action, value }),
       });
       const j = await r.json();
-      say(r.ok ? `${o.key}: ${j.note}` : `${o.key}: ${j.error}`);
-    } catch (e) { say(String(e)); }
+      if (r.ok) toast(`${o.label || o.key}: ${j.note}`);
+      else toast(`${o.label || o.key}: ${j.error}`, 'err');
+    } catch (e) { toast(String(e), 'err'); }
     renderConfig();
   };
 
-  // Said once, at the top, rather than repeated down a column of twenty rows.
+  // A standing condition rather than an outcome, so it stays at the top of the card rather than
+  // passing through the snackbar.
+  msg.style.display = 'none';
   if (d.writable && !d.editableHere) {
-    say('Viewing on the app\'s own port. Changes are only accepted through Home Assistant — '
-      + 'open the panel from the Home Assistant sidebar to edit.');
+    msg.style.display = '';
+    msg.textContent = 'Viewing on the app\'s own port. Changes are only accepted through Home Assistant — '
+      + 'open the panel from the Home Assistant sidebar to edit.';
   }
 
   const host = $('cfgsections');

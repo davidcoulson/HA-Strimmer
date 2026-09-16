@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026.09.16.4 — 2026-09-16
+
+**The panel now looks like the frontend it sits inside.** No proxy behaviour changes.
+
+- **Home Assistant's own colour tokens.** Light is HA's default theme (`#fafafa` ground, white
+  cards, `#212121` text); dark is its built-in dark theme (`#111111`, `#1c1c1c`, `#e1e1e1`), with
+  dividers at 12% alpha, 12px card corners and Roboto first in the font stack. The blue-tinted
+  greys stood out against HA's neutral surfaces. Success, warning and error use HA's values too.
+- **A Light / Dark / Auto toggle in the header.** Ingress passes none of HA's theme into the
+  frame, so the page could only follow the OS — a dark HA on a light desktop got a light panel in
+  a dark frame. The choice is remembered per browser.
+- **Sentence case throughout.** Card headers are 16px medium in the text colour; table headers,
+  labels and section titles are plain secondary text — no small caps, no letter spacing.
+- **Switches, not checkboxes,** for every boolean option, in rows at HA's 48px settings-row
+  height. The native checkbox stays underneath for keyboard and screen readers.
+- **MDI icons** replace the trash-can emoji on override rows and the unicode sort arrows on
+  table headers, and the search fields carry a leading magnifier. Inline SVG masks in the
+  current colour, so they follow the theme.
+- **Save feedback is a snackbar** at the bottom of the screen, where HA puts it; the note at the
+  top of the Config card was off-screen for every edit made further down. Errors show in red.
+- **"Remove" on an override is error-red,** so a destructive button no longer looks like Cancel.
+
+---
+
 ## 2026.09.16.3 — 2026-09-16
 
 **The connection-path diagram crossed its bands for no reason.** Every column was ordered by
