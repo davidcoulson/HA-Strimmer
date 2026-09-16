@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.09.16.6 — 2026-09-16
+
+**Housekeeping.** The proxy imported `node:module` and never used it — the compile cache is
+turned on by `NODE_COMPILE_CACHE` in the Dockerfile, deliberately, and the comment explaining why
+still says so. The import is gone. No behaviour change.
+
+---
+
 ## 2026.09.16.5 — 2026-09-16
 
 **Four small correctness fixes from the review.**

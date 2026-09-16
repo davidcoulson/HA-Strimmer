@@ -25,7 +25,6 @@
 //   STRIP_ENTITIES (default 1; 0 = passthrough for A/B compare),
 //   ALLOW_WS_URL / ALLOW_TOKEN (override the allowlist-precompute connection).
 
-import module from 'node:module';
 import http from 'node:http';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -76,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.16.5';
+const VERSION = '2026.09.16.6';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
