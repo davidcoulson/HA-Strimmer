@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import crypto from 'node:crypto';
 import { WebSocket } from 'ws';
 import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 import { STATES, DASH_TEST } from './fixtures.mjs';
@@ -128,6 +129,31 @@ describe('proxy integration (strip on)', () => {
     const xff = mock.lastXFF();
     assert.ok(xff, 'HA saw an X-Forwarded-For header');
     assert.ok(!xff.includes('::ffff:'), `XFF should be bare IPv4, got ${xff}`);
+  });
+
+  // The intercepted websocket is the one connection the proxy opens itself, so httpxy's xfwd
+  // never touched it and Home Assistant saw every trimmed panel as the proxy's own address —
+  // which is what HA's ip_ban keys on, so one panel with a stale token could have banned them all.
+  it('the HA-side bridge socket carries the browser behind it, with For and Proto in step', async () => {
+    let at = mock.state.wsUpgradeHeaders.length;
+    const direct = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await direct.authed;
+    const seenDirect = mock.state.wsUpgradeHeaders[at];   // the bridge; the probe follows it
+    direct.close();
+    assert.equal(seenDirect['x-forwarded-for'], '127.0.0.1', 'no upstream proxy: the peer itself');
+    assert.equal(seenDirect['x-forwarded-proto'], 'http');
+    assert.ok(seenDirect['x-forwarded-host'], 'the host the browser dialled');
+
+    // Behind an upstream proxy the chain is kept, not replaced — the same rule as HTTP.
+    at = mock.state.wsUpgradeHeaders.length;
+    const behind = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'test-token',
+      { 'x-forwarded-for': '::ffff:10.9.9.9, 192.168.1.1', 'x-forwarded-proto': 'https' });
+    await behind.authed;
+    const seenBehind = mock.state.wsUpgradeHeaders[at];
+    behind.close();
+    assert.equal(seenBehind['x-forwarded-for'], '10.9.9.9, 192.168.1.1',
+      'the chain survives intact, with the IPv4-mapped form normalised in place');
+    assert.equal(seenBehind['x-forwarded-proto'], 'https', 'the browser\'s real scheme is kept');
   });
 
   it('injects the allowlist into a no-filter subscribe_entities', async () => {
@@ -301,6 +327,146 @@ describe('subscribe_events state_changed is filtered too', () => {
     if (!mock.sendRaw) return;
     assert.ok(seen.includes('light.living_room'), 'an allowed entity still arrives');
     assert.ok(!seen.includes('light.decoy'), 'a disallowed entity must not reach the browser');
+  });
+});
+
+// A rebuild that ADDS entities recycles open connections so they re-subscribe (issue #7). It
+// used to recycle every one of them whenever the union grew, so pinning one entity for one
+// dashboard bounced every wall panel in the house. Only the connections whose OWN dashboard
+// grew should go.
+describe('a grown allowlist reconnects only the dashboards that grew', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  it('leaves a panel on an unchanged dashboard connected', async () => {
+    // Both clients share 127.0.0.1, so the IP hint cannot tell them apart; the cookie can, and
+    // it wins over the hint.
+    const open = async (dash) => {
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'test-token', { cookie: `ws_dash=${dash}` });
+      await c.authed;
+      c.send({ type: 'subscribe_entities' });
+      const closed = new Promise((r) => c.ws.once('close', () => r(true)));
+      return { c, closed };
+    };
+    const a = await open('test-dash');
+    const b = await open('auto-dash');
+    await new Promise((r) => setTimeout(r, 200));
+
+    // light.decoy is on neither dashboard, so this grows auto-dash AND the union — which is the
+    // case that used to drop everything.
+    mock.setConfig('auto-dash', { views: [{ path: 'main', cards: [
+      { type: 'entities', entities: ['light.living_room', 'light.decoy'] },
+    ] }] });
+    mock.fireLovelaceUpdated('auto-dash');
+    await proxy.waitForLog(/reconnecting 1 of 2 open dashboard connection\(s\)[^\n]*\(auto-dash\)/, 15000);
+
+    assert.equal(await Promise.race([b.closed, new Promise((r) => setTimeout(() => r(false), 2000))]), true,
+      'the panel on the dashboard that grew must be recycled');
+    assert.equal(await Promise.race([a.closed, new Promise((r) => setTimeout(() => r(false), 500))]), false,
+      'the panel on the unchanged dashboard must stay connected');
+    a.c.close(); b.c.close();
+  });
+});
+
+// A command on the control connection that is never answered. handshakeTimeout only covers the
+// upgrade; a Home Assistant that answered it and then wedged on get_states left the rebuild
+// awaiting forever, and with it the `rebuilding` flag — so no later dashboard edit could trigger
+// another. The add-on sat up serving the last allowlist and logging nothing.
+describe('a wedged control command is bounded', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash', port, extraEnv: { CONTROL_RPC_TIMEOUT_MS: '1500' } });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  it('times out, drops the socket, and rebuilds on the reconnect once HA answers again', async () => {
+    mock.state.hangTypes.add('get_states');          // accepted and never answered
+    mock.fireLovelaceUpdated('test-dash');
+    await proxy.waitForLog(/get_states unanswered for 1500ms/, 10000);
+    await proxy.waitForLog(/recompute failed: get_states timed out after 1500ms/, 5000);
+    // The drop is what makes recovery automatic: onGone() reconnects with backoff.
+    await proxy.waitForLog(/control ws down; reconnecting/, 5000);
+    mock.state.hangTypes.delete('get_states');
+    // READY again, on the NEW socket: waitForLog matches the whole output, and the first
+    // subscription line is already there, so poll past a marker instead.
+    const marker = proxy.out.length;
+    const deadline = Date.now() + 20000;
+    while (!READY.test(proxy.out.slice(marker))) {
+      if (Date.now() > deadline) throw new Error(`no re-subscription\n${proxy.out.slice(marker)}`);
+      await delay(50);
+    }
+    assert.match(proxy.out.slice(marker), /allowlist recomputed \(reconnect\)/);
+    // And the flag was released: a later edit still rebuilds.
+    mock.setConfig('test-dash', { views: [{ path: 'main', cards: [
+      { type: 'entities', entities: ['light.living_room', 'light.decoy'] },
+    ] }] });
+    mock.fireLovelaceUpdated('test-dash');
+    await proxy.waitForLog(/allowlist recomputed \(test-dash\)/, 15000);
+  });
+});
+
+// A browser that stops reading. Everything sent to it queued in the proxy with no bound but the
+// panel's eventual TCP reset, because nothing stopped reading from Home Assistant on its behalf.
+describe('backpressure from a browser that is not reading', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash', port,
+      extraEnv: { BACKPRESSURE_HIGH_BYTES: String(256 * 1024), BACKPRESSURE_STALL_MS: '2500', LOG_LEVEL: 'debug' } });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  // A frame the proxy passes through untouched: no id, a type it does not trim. Random bytes,
+  // because the browser leg negotiates permessage-deflate and 200KB of 'x' would leave as 200
+  // bytes — nothing would ever queue.
+  const bigFrame = JSON.stringify({ type: 'pong', pad: crypto.randomBytes(150 * 1024).toString('base64') });
+  const flood = async (n) => { for (let i = 0; i < n; i++) { mock.sendRaw(bigFrame); await delay(5); } };
+  const openStalled = async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/websocket`);
+    ws.on('error', () => {});
+    await new Promise((res) => ws.on('open', res));
+    await new Promise((res) => ws.on('message', (raw) => {
+      const m = JSON.parse(raw.toString());
+      if (m.type === 'auth_required') ws.send(JSON.stringify({ type: 'auth', access_token: 'test-token' }));
+      if (m.type === 'auth_ok') res();
+    }));
+    ws.pause();                                        // stop reading, like a hung panel
+    return ws;
+  };
+
+  it('pauses the HA stream past the high mark and resumes once the client drains it', async () => {
+    const ws = await openStalled();
+    const marker = proxy.out.length;
+    await flood(60);                                   // 12MB at a client reading nothing
+    await proxy.waitForLog(/is not keeping up \(\d+KB queued\) — pausing its HA stream/, 10000);
+    ws.resume();
+    await proxy.waitForLog(/drained to \d+KB — resuming its HA stream/, 10000);
+    assert.equal(ws.readyState, WebSocket.OPEN, 'a slow client that drains is kept');
+    assert.doesNotMatch(proxy.out.slice(marker), /read nothing for/);
+    ws.close();
+  });
+
+  it('closes a client that makes no progress at all for the stall window', async () => {
+    const ws = await openStalled();
+    const closed = new Promise((res) => ws.on('close', res));
+    await flood(60);
+    await proxy.waitForLog(/read nothing for 2.5s with \d+KB queued — closing/, 15000);
+    // A paused socket does not see the FIN either; resume so the client can observe what the
+    // proxy did. The assertion is that the proxy closed it, which is why terminate() matters:
+    // a close FRAME would still be queued behind the backlog.
+    ws.resume();
+    await closed;
   });
 });
 

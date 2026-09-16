@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026.09.16.1 — 2026-09-16
+
+**Four behaviours from the same review, all around a connection that stops behaving.**
+
+- **A wedged control command is now bounded.** `handshakeTimeout` only covered the upgrade; a
+  Home Assistant that answered it and then never replied to `get_states` left the rebuild
+  awaiting forever — and with it the `rebuilding` flag, so no later dashboard edit could ever
+  trigger another. The add-on sat up serving the last allowlist and logging nothing. Every
+  command on the control connection now times out (`CONTROL_RPC_TIMEOUT_MS`, default 60s, env
+  only like `PROXY_TIMEOUT_MS`) and drops the socket, so the ordinary reconnect path rebuilds.
+- **The HA-side bridge socket carries `X-Forwarded-*` and the User-Agent.** It is the one
+  connection the proxy opens itself rather than through httpxy, so nothing set those headers and
+  Home Assistant saw every trimmed panel as the proxy's own address. HA's failed-login handling
+  keys on that address: with `ip_ban_enabled`, one panel holding a stale token could have got the
+  proxy banned — every panel at once. Same rule as HTTP: set only when absent, For normalised in
+  place, so the For and Proto chains stay in step.
+- **Backpressure on a browser that stops reading.** Nothing paused the HA side on a stalled
+  client, so its backlog grew in this process without bound. Past a high mark
+  (`BACKPRESSURE_HIGH_BYTES`, default 8MB) the HA stream is paused and resumed once the queue
+  drains to a quarter of that; a client that makes no progress at all for `BACKPRESSURE_STALL_MS`
+  (default 60s) is terminated — not closed, since a close frame would queue behind the very
+  backlog it is not reading — and reconnects fresh. `stats.json` gains `backpressure: { pauses,
+  stalls }`: pauses are a slow link, a climbing stall count is a broken panel.
+- **One user lookup per token, not one per socket.** A kiosk load opens several websockets within
+  milliseconds, all with the same token, and each opened its own probe to Home Assistant before
+  the first had answered. Later callers now wait on the first's promise.
+
+**The registry cache could answer a widened user with another connection's rows.** A real
+correctness fix for anyone using `user_overrides` (or a `role:` / `auth_provider:` rule).
+
+The cache key carries a signature of the connection's allowlist, and that allowlist is still
+moving while the user-rule gate is closed — the whole reason the signature is taken lazily. But
+the cache **lookup** ran at receive time, ahead of the gate: a registry request arriving while
+`auth/current_user` was in flight took the signature of the *pre-rule* set, found the entry a
+connection without the rule had left there, and answered with rows missing exactly the entities
+the rule adds. A hit returned before ever reaching the queue, so the gate never saw it. The
+existing two-users test only ran the order that happens to pass (widened user first, cache cold).
+Reversing the order and slowing the lookup reproduces it every time; that test is now in the
+suite, and the lookup runs inside the held thunk alongside the `subscribe_entities` stamp.
+
+**Pins from the panel now write to the source that owns the option.** There are two —
+Supervisor's options and the console's config store — and the store wins at boot. A pin was
+written to Supervisor regardless, so once `always_forward` or `resources_always_forward` had
+been taken over in the console the pin landed in the shadowed source: it applied until the next
+restart and then silently vanished, with the panel having said "pinned". Standalone containers,
+which have no Supervisor, got "not running as an add-on" and could not pin at all; they now
+write to the store in `/data`, seeded from whatever is in effect so the env-configured entries
+are carried along. The pin response carries `source: addon | console`.
+
+**A rebuild that adds entities now reconnects only the panels whose dashboard grew.** It used
+to drop every open bridge whenever the union gained anything, so pinning one entity for the
+admin dashboard bounced every wall panel in the house — each reconnecting to be served exactly
+what it already had. Growth is judged per dashboard, which also catches an entity *moving*
+between dashboards, where the union is unchanged and the receiving panel was never recycled.
+Unattributed connections still follow the union. The log line reads
+`reconnecting 1 of 6 open dashboard connection(s) … (office-tablet)`.
+
+---
+
 ## 2026.09.15.37 — 2026-09-15
 
 **`trim_extra_modules` silently broke per-browser dashboard attribution.** If you run that option,

@@ -129,6 +129,13 @@ export function recordTraffic(kind, bytes) {
 export function recordCacheHit(bytes) { cache.hits += 1; cache.bytes += bytes; }
 export function recordCacheMiss() { cache.misses += 1; }
 
+// Clients that could not keep up. `pauses` is how often a browser's send queue passed the high
+// mark and its HA stream was held; `stalls` how often one made no progress at all and was
+// closed. A pause is a slow link doing what a slow link does; a climbing stall count is a panel
+// that is broken.
+const backpressure = { pauses: 0, stalls: 0 };
+export function recordBackpressure(kind) { if (kind === 'stall') backpressure.stalls += 1; else backpressure.pauses += 1; }
+
 export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, hop, hops, device }) {
   const id = nextConnId++;
   connTotal += 1;
@@ -362,6 +369,7 @@ export function snapshot(extra = {}) {
       bytes: events.bytes,
       bytesPerMin: Math.round(events.bytes / Math.max((now - startedAt) / 60000, 1 / 60)),
     },
+    backpressure: { ...backpressure },
     registryCache: {
       hits: cache.hits,
       misses: cache.misses,
@@ -466,6 +474,7 @@ export function reset() {
   trims.clear();
   events.count = 0; events.bytes = 0;
   cache.hits = 0; cache.misses = 0; cache.bytes = 0;
+  backpressure.pauses = 0; backpressure.stalls = 0;
   traffic.clear();
   conns.clear();
   byFlow.clear();

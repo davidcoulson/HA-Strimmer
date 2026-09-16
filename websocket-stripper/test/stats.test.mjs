@@ -11,6 +11,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import http from 'node:http';
 import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 import * as stats from '../stats.mjs';
@@ -503,6 +505,17 @@ describe('runtime version reporting', () => {
   });
 });
 
+describe('backpressure counters', () => {
+  it('tell a slow client (paused) apart from a broken one (stalled)', () => {
+    stats.reset();
+    assert.deepEqual(stats.snapshot().backpressure, { pauses: 0, stalls: 0 });
+    stats.recordBackpressure('pause');
+    stats.recordBackpressure('pause');
+    stats.recordBackpressure('stall');
+    assert.deepEqual(stats.snapshot().backpressure, { pauses: 2, stalls: 1 });
+  });
+});
+
 describe('registry cache hit rate', () => {
   it('is null before anything has been asked for, not zero', () => {
     // A 0% hit rate on zero requests is a fiction. Publishing it would put a false trough in the
@@ -948,6 +961,72 @@ describe('config editability is reported per request', () => {
         }).on('error', reject);
       });
       assert.equal(viaIngress.editableHere, true, 'an Ingress request must be able to edit');
+    } finally { proxy.kill(); await mock.close(); }
+  });
+});
+
+// A pin from the panel writes to whichever source OWNS the option. There are two — Supervisor's
+// options.json and the console's config store in /data — and the store wins at boot. Writing
+// to Supervisor regardless, which is what this used to do, put the pin in the source being
+// shadowed: it applied until the next restart and then silently vanished, with the panel having
+// said "pinned". Standalone containers, which have no Supervisor, got "not running as an add-on"
+// and could not pin at all.
+describe('pins are written to the source that owns the option', () => {
+  const bootWith = async ({ configDir, extraEnv = {} }) => {
+    const mock = await startMockHa();
+    const port = await getFreePort(); const sp = await getFreePort();
+    const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1', CONFIG_DIR: configDir,
+        SUPERVISOR_TOKEN: '', ...extraEnv } });
+    let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+    const deadline = Date.now() + 15000;
+    while (!/for live allowlist updates/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return { mock, proxy, sp, out: () => out };
+  };
+  // Through Ingress, which is what a write needs; the refusal path is covered above.
+  const pinIng = (port, entity_id) => new Promise((resolve, reject) => {
+    const data = JSON.stringify({ entity_id });
+    const r = http.request({ host: '127.0.0.1', port, path: '/pin-entity', method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data),
+        'x-ingress-path': '/api/hassio_ingress/test' } },
+      (res) => { let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(b) })); });
+    r.on('error', reject); r.end(data);
+  });
+  const stored = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+
+  it('goes to the console store when the console already owns always_forward', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pin-store-'));
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
+      version: 1, managed: { always_forward: ['light.bedroom'] }, history: [],
+    }));
+    const { mock, proxy, sp } = await bootWith({ configDir: dir });
+    try {
+      const res = await pinIng(sp, 'light.decoy');
+      assert.equal(res.status, 200, JSON.stringify(res.json));
+      assert.equal(res.json.source, 'console', 'the store owns the key, so the store gets the pin');
+      assert.deepEqual(stored(dir).managed.always_forward, ['light.bedroom', 'light.decoy'],
+        'the pin must land beside what the console already had, or it is gone at the next restart');
+      assert.equal(res.json.applied, true, 'and it still takes effect live');
+
+      const again = await pinIng(sp, 'light.decoy');
+      assert.equal(again.json.already, true, 'pinning twice is reported, not duplicated');
+      assert.deepEqual(stored(dir).managed.always_forward, ['light.bedroom', 'light.decoy']);
+    } finally { proxy.kill(); await mock.close(); }
+  });
+
+  it('works standalone too, seeding the store from what is in effect', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pin-store-'));
+    const { mock, proxy, sp } = await bootWith({ configDir: dir, extraEnv: { ALWAYS_FORWARD: 'light.bedroom' } });
+    try {
+      const res = await pinIng(sp, 'light.decoy');
+      assert.equal(res.status, 200, JSON.stringify(res.json));
+      assert.equal(res.json.source, 'console');
+      // The env-configured entry is carried into the store, so taking ownership loses nothing.
+      assert.deepEqual(stored(dir).managed.always_forward, ['light.bedroom', 'light.decoy']);
     } finally { proxy.kill(); await mock.close(); }
   });
 });

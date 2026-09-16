@@ -1062,6 +1062,74 @@ describe('get_services caching', () => {
         'Michelle must NOT inherit David\'s cached registry rows');
     } finally { px.kill(); await m2.close(); }
   });
+
+  // The test above runs the widened user FIRST, so his registry is a cache miss and nothing
+  // sits in the cache with the base signature when he asks. Reverse the order and slow the user
+  // lookup down, and the registry request arrives while the gate is still closed. The lookup
+  // used to run at receive time, ahead of the gate — so it took the signature of the PRE-rule
+  // set, found Michelle's entry, and answered David with rows missing light.kitchen. Nothing
+  // logged it; the card simply had no name.
+  it('a widened user asking for the registry while the gate is closed still gets the widened rows', async () => {
+    const m2 = await startMockHa();
+    // Long enough that the registry request cannot beat the lookup, so the race is the same
+    // every run rather than a coin toss on a fast loopback.
+    m2.state.currentUserDelayMs = 400;
+    const p2 = await getFreePort();
+    const px = spawnProxy({
+      mock: m2, dashPaths: 'test-dash', port: p2,
+      extraEnv: { USER_OVERRIDES: JSON.stringify([
+        { user: 'David', dashboard: 'test-dash', always_forward: ['light.kitchen'] },
+      ]) },
+    });
+    try {
+      await px.waitForLog(READY);
+      const registryFor = async (token) => {
+        await httpGet(`http://127.0.0.1:${p2}/test-dash/main`);
+        const c = haClient(`ws://127.0.0.1:${p2}/api/websocket`, token);
+        await c.authed;
+        const rows = (await c.rpc({ type: 'config/entity_registry/list' })).result;
+        c.close();
+        return new Set(rows.map((r) => r.entity_id));
+      };
+      // Michelle FIRST, so the base-allowlist answer is what sits in the cache when David asks.
+      const michelle = await registryFor('michelle-token');
+      const david = await registryFor('david-token');
+      assert.ok(!michelle.has('light.kitchen'), 'Michelle has no rule, so her rows must not widen');
+      assert.ok(david.has('light.kitchen'),
+        'David must get his widened registry even when a base-allowlist entry is already cached');
+    } finally { px.kill(); await m2.close(); }
+  });
+
+  // A kiosk load opens several websockets within milliseconds, all with one token. Each used to
+  // open its own probe to Home Assistant before the first had answered — N identical questions
+  // on the busiest moment of a page load.
+  it('several connections with one token share a single in-flight user lookup', async () => {
+    const m2 = await startMockHa();
+    m2.state.currentUserDelayMs = 300;                 // long enough for all three to overlap
+    const p2 = await getFreePort();
+    const px = spawnProxy({
+      mock: m2, dashPaths: 'test-dash', port: p2,
+      extraEnv: { USER_OVERRIDES: JSON.stringify([
+        { user: 'David', dashboard: 'test-dash', always_forward: ['light.kitchen'] },
+      ]) },
+    });
+    try {
+      await px.waitForLog(READY);
+      await httpGet(`http://127.0.0.1:${p2}/test-dash/main`);
+      const before = m2.rpcCount('auth/current_user');
+      const clients = [1, 2, 3].map(() => haClient(`ws://127.0.0.1:${p2}/api/websocket`, 'david-token'));
+      await Promise.all(clients.map((c) => c.authed));
+      // Something gated on the lookup, so every connection has demonstrably waited it out.
+      const results = await Promise.all(clients.map((c) => c.rpc({ type: 'get_states' })));
+      clients.forEach((c) => c.close());
+      for (const r of results) {
+        assert.ok(r.result.some((s) => s.entity_id === 'light.kitchen'),
+          'every connection still gets the rule applied');
+      }
+      assert.equal(m2.rpcCount('auth/current_user') - before, 1,
+        'three overlapping connections must cost Home Assistant one lookup, not three');
+    } finally { px.kill(); await m2.close(); }
+  });
 });
 
 describe('registry trimming', () => {

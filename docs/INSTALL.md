@@ -252,6 +252,9 @@ are JSON.
 | `TRIM_TRANSLATIONS` | `trim_translations` | **Off by default, and the most lossy option here** — a missing translation renders its raw key on the dashboard. ~190 KB saved per load when it fits. |
 | `LOG_LEVEL` | `log_level` | `warn` / `info` (default) / `debug`. |
 | `PROXY_TIMEOUT_MS` | — | How long to wait on Home Assistant before returning 502 (default `120000`). `0` disables. |
+| `CONTROL_RPC_TIMEOUT_MS` | — | How long one command on the allowlist-building connection may go unanswered before the connection is dropped and rebuilt (default `60000`). |
+| `BACKPRESSURE_HIGH_BYTES` | — | Bytes queued for a browser that is not reading before its HA stream is paused (default 8 MB); resumed at a quarter of that. |
+| `BACKPRESSURE_STALL_MS` | — | How long a paused browser may make no progress at all before it is disconnected (default `60000`). |
 | `RESOURCES_ALWAYS_FORWARD` | `resources_always_forward` | URL fragments, e.g. `kiosk-mode`. |
 | `RESOURCES_NEVER_FORWARD` | `resources_never_forward` | |
 | `DASHBOARD_OVERRIDES` | `dashboard_overrides` | JSON array. Always/never lists scoped to one dashboard. |

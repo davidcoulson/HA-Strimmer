@@ -142,7 +142,18 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
     self-identify and the admin user matches a user rule — and the hit rate fell from **97.9%
     to 9.1%**. Correct and useless. Identity belongs in the key, not in a bypass.
   - The signature is taken **lazily at the first cacheable request**, not at connection open,
-    because `user_overrides` widens the set after the auth gate resolves.
+    because `user_overrides` widens the set after the auth gate resolves. **And the cache lookup
+    itself runs inside the gated thunk** (`cachedOrForward`), not at receive time. Looking it up
+    on receipt bypassed the gate: a hit answered before reaching the queue, with the PRE-rule
+    signature, so a widened user was served another connection's rows when the cache was already
+    warm for that dashboard. The test with a slowed `auth/current_user` pins this.
+  - **Pins from the panel write to whichever source owns the option** (`appendToListOption`):
+    the console store if it has taken `always_forward`/`resources_always_forward` over, else
+    Supervisor. Writing to Supervisor unconditionally put the pin in the shadowed source, so it
+    vanished at the next restart.
+  - **A rebuild recycles only the bridges whose own dashboard grew** (`openBridges` maps close
+    → dashboard; unattributed bridges follow the union). It used to drop every open connection
+    whenever the union gained anything.
   - Note for testing it: every loopback test client is `127.0.0.1`, so a `client_overrides` pin
     widens all of them or none and the collision case never arises. Use two USERS instead —
     that is what `two users on one dashboard never share each other's cached registry` does,
@@ -215,6 +226,22 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   camera streams for two reasons worth not re-deriving: it is an **inactivity** timer, so an
   MJPEG/HLS stream resets it as frames flow; and httpxy applies it in `webIncomingMiddleware`
   only, so `proxy.ws()` upgrades are untouched.
+- **The control connection's commands are bounded too (`CONTROL_RPC_TIMEOUT_MS`, 60s).**
+  `handshakeTimeout` covers only the upgrade; an HA that wedged on `get_states` left the rebuild
+  awaiting forever and the `rebuilding` flag set, so no edit could ever trigger another. Expiry
+  drops the socket so `onGone()` rebuilds on a fresh one. The mock's `hangTypes` exercises it.
+- **The HA-side bridge socket carries `X-Forwarded-*` (`forwardHeadersFor`).** It is the one
+  connection opened without httpxy, so HA saw every trimmed panel as the proxy's address — which
+  is what `ip_ban` keys on. Same rule as HTTP: set only when absent, For normalised in place.
+  The mock records every `/api/websocket` upgrade's headers in order; note the proxy opens TWO
+  per browser (bridge, then the identity probe), so a test reads the first after its marker.
+- **Backpressure (`BP_HIGH_BYTES` / `BP_STALL_MS`).** `safeSend` checks `bufferedAmount` after
+  every write; past the high mark the HA socket is `pause()`d and polled back to a quarter of
+  it. A client with no progress for the stall window is **`terminate()`d, not `close()`d** — a
+  close frame queues behind the backlog it is not reading and ws holds it 30s more. Testing it
+  needs an INCOMPRESSIBLE payload: the browser leg deflates, so 200KB of `x` leaves as 200 bytes.
+- **`resolveUser` dedups in flight by token hash (`USER_INFLIGHT`).** A kiosk load opens several
+  sockets with one token; they used to cost one probe each.
 - **HTTP/2 and QUIC are settled: NO. Do not revisit without new facts.** httpxy has an `http2`
   option, but it only affects httpxy's own `listen()` helper (`http2.createSecureServer`) — we
   build our own server and call `proxy.web()`, so it is inert here, and it serves h2 rather than

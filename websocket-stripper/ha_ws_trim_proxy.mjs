@@ -76,7 +76,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.37';
+const VERSION = '2026.09.16.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -172,6 +172,25 @@ const STATS_PORT_FILE = '/tmp/stats-port';
 // timeout is testable at a sane duration, and as an escape hatch for a pathologically slow
 // upstream. 0 disables it.
 const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS || '120000', 10);
+// How long one command on the CONTROL connection may go unanswered. Env-only for the same
+// reasons as PROXY_TIMEOUT_MS. Nothing bounded this before: handshakeTimeout covers only the
+// upgrade, so a Home Assistant that answered the handshake and then wedged on `get_states` left
+// the rebuild awaiting forever — and with it the `rebuilding` flag, so no later dashboard edit
+// could ever trigger another. The add-on sat up, serving the last allowlist, logging nothing.
+// Generous, because a full get_states on a large instance is legitimately slow; it only has to be
+// shorter than "forever". On expiry the socket is dropped, so the ordinary reconnect path rebuilds.
+const CONTROL_RPC_TIMEOUT_MS = parseInt(process.env.CONTROL_RPC_TIMEOUT_MS || '60000', 10);
+// Backpressure on the browser leg. A wall panel on weak wifi that stops reading — or a phone
+// that went to sleep mid-stream — leaves everything sent to it queued in THIS process, and nothing
+// stopped reading from Home Assistant on its behalf, so the queue had no bound but the panel's
+// eventual TCP reset. Home Assistant itself drops a client that falls 4,096 messages behind. Here
+// the HA-side socket is paused instead once the browser's send queue passes the high mark, and
+// resumed once it drains to a quarter of that; a client that makes no progress at all for the
+// stall window is closed, since it will reconnect fresh and re-subscribe, which is cheaper than
+// holding its backlog. Sized in bytes because that is what the memory cost is.
+const BP_HIGH_BYTES = parseInt(process.env.BACKPRESSURE_HIGH_BYTES || String(8 * 1024 * 1024), 10);
+const BP_LOW_BYTES = Math.max(1, Math.floor(BP_HIGH_BYTES / 4));
+const BP_STALL_MS = parseInt(process.env.BACKPRESSURE_STALL_MS || '60000', 10);
 const DASH_PATHS = toList(OPT.dashboards ?? (process.env.DASH_PATHS || process.env.DASH_PATH));
 // trim_entities: true (default) = inject the allowlist so HA streams only needed entities.
 //   false = pass the websocket straight through (full firehose) for A/B comparison.
@@ -584,8 +603,9 @@ const PER_DASH = OPT.by_dashboard !== undefined ? !!OPT.by_dashboard
 const TRIM_REGISTRIES = OPT.trim_registries !== undefined ? !!OPT.trim_registries
   : (process.env.TRIM_REGISTRIES ?? '1') !== '0';
 // Every live browser <-> HA bridge, so a grown allowlist can reach already-open pages
-// (issue #7). See refreshOpenConnections().
-const openBridges = new Set();
+// (issue #7). close() -> the dashboard it serves (null for the union), so a rebuild can recycle
+// only the connections whose set actually grew. See refreshOpenConnections().
+const openBridges = new Map();
 // False until the first allowlist lands. HA may still be booting when we start, and injecting
 // an EMPTY allowlist would render every card "unavailable" until a manual reload — so until
 // this flips we refuse /api/websocket upgrades instead (the frontend just keeps retrying).
@@ -912,6 +932,14 @@ function applyAllow(built, why, { merge = false } = {}) {
   }
   const added = [...next].filter((e) => !ALLOW.has(e)).sort();
   const removed = [...ALLOW].filter((e) => !next.has(e)).sort();
+  // Which DASHBOARDS gained an entity, judged per dashboard rather than from the union. The
+  // union can stay put while a dashboard grows — an entity moving from one dashboard to another
+  // — and a panel on the receiving dashboard still needs to re-subscribe to see it.
+  const grown = new Set();
+  for (const [p, s] of nextByDash) {
+    const old = ALLOW_BY_DASH.get(p);
+    if (!old || [...s].some((e) => !old.has(e))) grown.add(p);
+  }
   ALLOW = next;
   ALLOW_BY_DASH = nextByDash;
   // Retire the cached registry answers whenever the allowlist actually moved. Without this
@@ -927,7 +955,7 @@ function applyAllow(built, why, { merge = false } = {}) {
   if (added.length) log(`  +added: ${fmt(added)}`);
   if (removed.length) log(`  -removed: ${fmt(removed)}`);
   if (!added.length && !removed.length) log('  (no change)');
-  if (added.length) refreshOpenConnections();
+  if (added.length || grown.size) refreshOpenConnections(grown, added.length > 0);
 }
 
 // `subscribe_entities` is sent ONCE per connection and HA has no way to amend a live
@@ -937,10 +965,20 @@ function applyAllow(built, why, { merge = false } = {}) {
 // disconnect, reconnects on its own, and re-subscribes against the current allowlist.
 // Only on GROWTH. A shrink means the open page is carrying entities it no longer needs,
 // which is harmless — and churning every kiosk over a removal would be a bad trade.
-function refreshOpenConnections() {
+//
+// And only the connections that GREW. This used to drop every open bridge whenever the union
+// gained anything, so pinning one entity for the admin dashboard bounced every wall panel in
+// the house — each reconnecting to be served exactly what it already had. A bridge serving one
+// dashboard is recycled when THAT dashboard's set grew; a bridge on the union (unattributed)
+// when the union did. A connection widened by a rule or by self-identification sits on top of
+// one of those two sets, so the same test holds for it.
+function refreshOpenConnections(grown, unionGrew) {
   if (!STRIP || !openBridges.size) return;
-  log(`  reconnecting ${openBridges.size} open dashboard connection(s) to pick up the new entities`);
-  for (const close of [...openBridges]) { try { close(); } catch {} }
+  const victims = [...openBridges].filter(([, d]) => (d === null ? unionGrew : grown.has(d)));
+  if (!victims.length) return;
+  log(`  reconnecting ${victims.length} of ${openBridges.size} open dashboard connection(s) to pick up `
+    + `the new entities (${[...grown].join(', ') || 'union'})`);
+  for (const [close] of victims) { try { close(); } catch {} }
 }
 
 // ---- persistent control connection: compute the allowlist + watch for dashboard edits ----
@@ -965,7 +1003,24 @@ function startController() {
       // would ever schedule a reconnect and the add-on would sit at 503 forever looking healthy.
       const ws = new WebSocket(ALLOW_WS_URL, { handshakeTimeout: 15000 });
       let id = 1; const pending = {}; let gone = false;
-      const rpc = (o) => { o.id = id++; return new Promise((res, rej) => { pending[o.id] = [res, rej]; ws.send(JSON.stringify(o)); }); };
+      // Every command is bounded — see CONTROL_RPC_TIMEOUT_MS. Expiry drops the socket rather
+      // than merely rejecting: the socket is evidently not answering, and onGone() is the one
+      // path that already knows how to wait for a healthy HA and rebuild.
+      const rpc = (o) => {
+        o.id = id++;
+        return new Promise((res, rej) => {
+          const timer = setTimeout(() => {
+            if (!pending[o.id]) return;
+            delete pending[o.id];
+            rej(new Error(`${o.type} timed out after ${CONTROL_RPC_TIMEOUT_MS}ms`));
+            logThrottled('ctrl-rpc-timeout', `control ws: ${o.type} unanswered for ${CONTROL_RPC_TIMEOUT_MS}ms — dropping the connection to rebuild on a fresh one`);
+            try { ws.close(); } catch {}
+          }, CONTROL_RPC_TIMEOUT_MS);
+          timer.unref?.();
+          pending[o.id] = [(v) => { clearTimeout(timer); res(v); }, (e) => { clearTimeout(timer); rej(e); }];
+          ws.send(JSON.stringify(o));
+        });
+      };
 
       // `render_template` is a SUBSCRIPTION, not a one-shot: HA answers `result` (null)
       // immediately and then pushes an `event` carrying the rendered text, re-pushing it
@@ -2158,12 +2213,21 @@ function tokenKey(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
+// Lookups in flight, by token hash. A kiosk load opens several websockets within a few
+// milliseconds of each other, all carrying the same token, and each one used to open its own
+// probe socket to Home Assistant before the first had answered — N identical questions for one
+// answer, on the busiest moment of a page load. The second and later callers now wait on the
+// first's promise. The result is cached the moment it lands, so nothing after that pays either.
+const USER_INFLIGHT = new Map();                // sha256(token) -> Promise<user|null>
+
 function resolveUser(token) {
   const key = tokenKey(token);
   const hit = USER_CACHE.get(key);
   if (hit && Date.now() - hit.at < USER_TTL_MS) return Promise.resolve(hit.user);
+  const inflight = USER_INFLIGHT.get(key);
+  if (inflight) return inflight;
 
-  return new Promise((resolve) => {
+  const lookup = new Promise((resolve) => {
     let settled = false;
     const finish = (user) => {
       if (settled) return;
@@ -2214,6 +2278,10 @@ function resolveUser(token) {
     ws.on('error', () => { clearTimeout(timer); finish(null); });
     ws.on('close', () => { clearTimeout(timer); finish(null); });
   });
+  USER_INFLIGHT.set(key, lookup);
+  // Never rejects (finish() resolves null on every failure), so a bare then() is safe here.
+  lookup.then(() => USER_INFLIGHT.delete(key));
+  return lookup;
 }
 
 // ---- client-pinned rules ----
@@ -2977,7 +3045,7 @@ server.on('upgrade', (req, socket, head) => {
     }
     const device = discovery.lookup(rt.ip);
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
-      ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned,
+      ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned, fwd: forwardHeadersFor(req),
       device: device ? { kind: device[0].kind, name: device[0].name, version: device[0].version } : null,
       origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
     }));
@@ -2998,6 +3066,32 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
+// The headers the HA-side bridge socket carries, so Home Assistant sees the BROWSER rather
+// than this proxy.
+//
+// The intercepted websocket is the one connection this add-on opens itself instead of through
+// httpxy, so nothing set X-Forwarded-* on it: every trimmed panel reached Home Assistant as
+// 127.0.0.1 (or the container's address). Two things that cost. HA's failed-login handling keys
+// on the client address, so with `ip_ban_enabled` one panel holding a stale token could get the
+// proxy's OWN address banned — and with it every panel at once. And HA's log named the proxy for
+// every connection, so "which device keeps failing auth" had no answer on the HA side.
+//
+// Same rule as the HTTP path: each header is set only when absent, and For is normalised in
+// place, so the For and Proto chains agree in length — the invariant HA's forwarded middleware
+// enforces (see the X-Forwarded-For notes in CLAUDE.md). The User-Agent comes along because HA
+// logs it beside the address.
+function forwardHeadersFor(req) {
+  const h = req.headers || {};
+  const out = {};
+  const xff = h['x-forwarded-for'] ? normalizeXff(h['x-forwarded-for']) : normalizeIp(req.socket?.remoteAddress);
+  if (xff) out['x-forwarded-for'] = xff;
+  out['x-forwarded-proto'] = String(h['x-forwarded-proto'] || (req.socket?.encrypted ? 'https' : 'http'));
+  const host = h['x-forwarded-host'] || h.host;
+  if (host) out['x-forwarded-host'] = String(host);
+  if (h['user-agent']) out['user-agent'] = String(h['user-agent']);
+  return out;
+}
+
 // `allow` is THIS connection's allowlist — one dashboard's, or the union when the client
 // couldn't be attributed. Captured per bridge rather than read from the global, so two
 // kiosks on different dashboards get genuinely different subscriptions.
@@ -3006,7 +3100,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // the timing report says is relative to this.
   const tOpen = Date.now();
   let timedInitial = false;
-  const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0 });
+  const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0, headers: meta.fwd || {} });
   const connId = stats.connOpen({
     ip: meta.ip, dash, via: meta.via, allowSize: baseAllow.size, ua: meta.ua,
     origin: meta.origin, route: meta.route, host: meta.host, hop: meta.hop, hops: meta.hops,
@@ -3046,6 +3140,49 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const pendingTypes = new Map();
   const queue = []; let haOpen = false;
   const toHA = (s) => { if (haOpen) haWs.send(s); else queue.push(s); };
+
+  // ---- backpressure (see BP_HIGH_BYTES) ----
+  // `bufferedAmount` is what `ws` has accepted for this browser and not yet handed to the
+  // kernel — the exact quantity that grows without bound when a client stops reading. Checked
+  // after every send rather than on a timer, so a single oversized frame trips it immediately.
+  let bpPaused = false;
+  let bpTimer = null;
+  const bpResume = (why) => {
+    if (!bpPaused) return;
+    bpPaused = false;
+    clearInterval(bpTimer); bpTimer = null;
+    try { haWs.resume(); } catch {}
+    debug(`${meta.ip ?? '?'} ${why} — resuming its HA stream`);
+  };
+  const bpCheck = () => {
+    if (bpPaused) return;
+    const queued = browserWs.bufferedAmount;
+    if (queued <= BP_HIGH_BYTES) return;
+    bpPaused = true;
+    stats.recordBackpressure('pause');
+    logThrottled(`bp:${meta.ip}`, `${meta.ip ?? '?'} is not keeping up (${(queued / 1024).toFixed(0)}KB queued`
+      + `${dash ? `, ${dash}` : ''}) — pausing its HA stream until it drains`);
+    try { haWs.pause(); } catch {}
+    // Progress is "the queue got smaller", not "it is below the mark": a client draining a
+    // large backlog slowly is alive and must not be cut off for being slow.
+    let lowest = queued;
+    let lastProgress = Date.now();
+    bpTimer = setInterval(() => {
+      const now = browserWs.bufferedAmount;
+      if (now < lowest) { lowest = now; lastProgress = Date.now(); }
+      if (now <= BP_LOW_BYTES) return bpResume(`drained to ${(now / 1024).toFixed(0)}KB`);
+      if (Date.now() - lastProgress > BP_STALL_MS) {
+        stats.recordBackpressure('stall');
+        log(`${meta.ip ?? '?'} read nothing for ${BP_STALL_MS / 1000}s with ${(now / 1024).toFixed(0)}KB queued — closing; it will reconnect fresh`);
+        // terminate(), not close(): a close frame would queue BEHIND the backlog the client is
+        // not reading, and ws then holds the socket — and the backlog — for another 30s before
+        // giving up. The client was not reading; there is nobody to be graceful to.
+        try { browserWs.terminate(); } catch {}
+        close();
+      }
+    }, 100);
+    bpTimer.unref?.();
+  };
 
   // This connection's allowlist. Starts as the dashboard's shared set and may be replaced once
   // the user behind the token is known. Never mutated in place — other connections share it.
@@ -3103,9 +3240,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         }
         if (extra) {
           allow = applyUserRules(allow, extra);
-          // The set changed, so any signature taken before now is stale. In practice none has
-          // been: the gate holds every message until this resolves. Reset anyway rather than
-          // depend on that ordering staying true.
+          // The set changed, so any signature taken before now is stale. The gate holds every
+          // message until this resolves, and the cache lookups run inside the held thunks
+          // (cachedOrForward), so none should have been taken — but that was once untrue, and
+          // silently, so reset rather than depend on the ordering.
           allowSigReset();
           log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
             + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`);
@@ -3134,22 +3272,11 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       pendingTypes.set(m.id, m.type);
     }
     if (STRIP && m && m.type === 'get_states') getStatesIds.add(m.id);
-    if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) {
-      const kind = REGISTRY_TYPES.get(m.type);
-      const hit = REG_RESPONSE_CACHE.get(regCacheKey(kind, dash, cacheSig()));
-      if (hit !== undefined) {
-        // Answer locally and never forward: HA is not asked to build the registry again.
-        // Safe against HA's increasing-id rule because nothing is sent to HA at all, and
-        // the browser still sees replies in the order it asked.
-        logThrottled(`regcache:${kind}`, `${kind} registry served from cache${dash ? ` (${dash})` : ''}`, LEVELS.debug);
-        stats.recordCacheHit(hit.length);
-        safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
-        return;
-      }
-      // A miss: this goes to HA to be built. Counted so the hit RATE has a denominator.
-      stats.recordCacheMiss();
-      registryIds.set(m.id, kind);
-    }
+    // A request the shared cache may be able to answer. The lookup itself is deferred to the
+    // thunk below — see cachedOrForward — so it runs at FLUSH time, after any user rule has
+    // settled the allowlist. Only what to look up is decided here.
+    let cacheKind = null;
+    if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) cacheKind = REGISTRY_TYPES.get(m.type);
     if (STRIP && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
     // get_services is every service of every integration, sent on every page load, and — like
     // the registries — identical for every client on a given allowlist. It was the last of the
@@ -3168,17 +3295,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (m && SHAPE_TYPES.has(m.type)) shapeIds.set(m.id, m.type);
     if (STRIP && TRIM_THEMES && m && m.type === 'frontend/get_themes') themeIds.add(m.id);
     if (STRIP && TRIM_REPAIRS && m && m.type === 'repairs/list_issues') repairIds.add(m.id);
-    if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') {
-      const hit = REG_RESPONSE_CACHE.get(regCacheKey('services', dash, cacheSig()));
-      if (hit !== undefined) {
-        logThrottled('regcache:services', `get_services served from cache${dash ? ` (${dash})` : ''}`, LEVELS.debug);
-        stats.recordCacheHit(hit.length);
-        safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
-        return;
-      }
-      stats.recordCacheMiss();
-      serviceIds.add(m.id);
-    }
+    if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') cacheKind = 'services';
     // No event_type means "every event", which includes state_changed.
     if (STRIP && m && m.type === 'subscribe_events'
         && (!m.event_type || m.event_type === 'state_changed')) {
@@ -3246,6 +3363,30 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       stateChangedSubs.delete(m.subscription);
       registrySubs.delete(m.subscription);
     }
+    // Answer a registry or get_services request from the shared cache, or mark it so HA's reply
+    // is trimmed and cached. Returns null on a hit (nothing goes to HA at all — safe against
+    // HA's increasing-id rule, and the browser still sees replies in the order it asked).
+    //
+    // A THUNK, like the subscribe_entities stamp above, and for the same reason. The cache key
+    // carries the signature of this connection's allowlist, and that allowlist is still moving
+    // while the user-rule gate is closed. Looking the key up at receive time — which is what
+    // this did — took the signature of the PRE-rule set, found the entry another connection on
+    // the same dashboard had left there, and answered a widened user with rows missing exactly
+    // the entities the rule adds. The gate never saw it: a hit returned before reaching the
+    // queue. Reproduced with a slow auth/current_user in test/proxy.perdash.test.mjs.
+    const cachedOrForward = (kind) => () => {
+      const hit = REG_RESPONSE_CACHE.get(regCacheKey(kind, dash, cacheSig()));
+      if (hit !== undefined) {
+        logThrottled(`regcache:${kind}`, `${kind === 'services' ? 'get_services' : `${kind} registry`} served from cache${dash ? ` (${dash})` : ''}`, LEVELS.debug);
+        stats.recordCacheHit(hit.length);
+        safeSend(`{"id":${m.id},"type":"result","success":true,"result":${hit}}`);
+        return null;
+      }
+      // A miss: this goes to HA to be built. Counted so the hit RATE has a denominator.
+      stats.recordCacheMiss();
+      if (kind === 'services') serviceIds.add(m.id); else registryIds.set(m.id, kind);
+      return s;
+    };
     sendOrQueue(stampAllow
       ? () => {
         // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
@@ -3261,6 +3402,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         m.entity_ids = [...allow];         // HA now streams only this connection's allowlist
         return JSON.stringify(m);
       }
+      : cacheKind ? cachedOrForward(cacheKind)
       : () => s);
   });
 
@@ -3661,9 +3803,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // handed to the socket, so the gap between calling send() and the callback firing IS the
   // time the payload spent going out. On a LAN that is ~0; on a phone over cellular it is the
   // link, which is exactly the number worth reporting.
-  function safeSend(s, cb) { try { if (browserWs.readyState === 1) browserWs.send(s, cb); } catch {} }
-  const close = () => { openBridges.delete(close); stats.connClose(connId); try { browserWs.close(); } catch {} try { haWs.close(); } catch {} };
-  openBridges.add(close);            // so a grown allowlist can recycle this connection (#7)
+  function safeSend(s, cb) { try { if (browserWs.readyState === 1) { browserWs.send(s, cb); bpCheck(); } } catch {} }
+  const close = () => {
+    openBridges.delete(close); stats.connClose(connId);
+    if (bpTimer) { clearInterval(bpTimer); bpTimer = null; }
+    try { browserWs.close(); } catch {} try { haWs.close(); } catch {}
+  };
+  openBridges.set(close, dash);      // so a grown allowlist can recycle this connection (#7)
   browserWs.on('close', close); browserWs.on('error', close);
   haWs.on('close', close);
   haWs.on('error', (e) => { logThrottled(`haws:${e.code || e.message}`, `HA ws error ${e.message}`); close(); });
@@ -3870,44 +4016,57 @@ function viaIngress(req) {
   return peer.startsWith('172.30.32.') || peer === '127.0.0.1' || peer === '::1';
 }
 
-// Append a URL fragment to `resources_always_forward` through Supervisor.
+// Append one value to a list option, writing to WHICHEVER SOURCE CURRENTLY OWNS IT.
 //
-// Read-modify-write rather than a blind set: the options object holds every setting the user has,
-// and writing only this field would silently discard the rest.
-async function pinResource(fragment) {
-  if (!inAddon) throw new Error('not running as an add-on');
-  const headers = { Authorization: `Bearer ${process.env.SUPERVISOR_TOKEN}`, 'content-type': 'application/json' };
-  const cur = await (await fetch('http://supervisor/addons/self/info', { headers, signal: AbortSignal.timeout(8000) })).json();
-  const options = { ...(cur?.data?.options ?? {}) };
-  const list = Array.isArray(options.resources_always_forward) ? [...options.resources_always_forward] : [];
-  if (list.includes(fragment)) return { already: true, list };
-  list.push(fragment);
-  options.resources_always_forward = list;
-  const res = await fetch('http://supervisor/addons/self/options', {
-    method: 'POST', headers, body: JSON.stringify({ options }), signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`supervisor returned ${res.status}`);
-  return { already: false, list };
+// There are two places an option can live — Supervisor's options.json and the console's
+// config store in /data — and effectiveOptions() lets the store win. This used to write to
+// Supervisor unconditionally, so once `always_forward` had been taken over in the console a pin
+// landed in the source that was being shadowed: it applied for the rest of the process's life,
+// then vanished at the next restart, with both the log and the panel having said "pinned".
+//
+//   * managed by the console  -> the store, whatever mode this is running in
+//   * an add-on, not managed  -> Supervisor, so the Configuration tab stays authoritative
+//   * standalone, not managed -> the store, seeded from what is in effect right now. That makes
+//                                the key console-managed from here on, which is honest: there is
+//                                no other writable source, and the env var still seeds it.
+//
+// Supervisor writes are read-modify-write rather than a blind set: the options object holds
+// every setting the user has, and writing only this field would silently discard the rest.
+async function appendToListOption(key, value, envName) {
+  const managed = ownership(YAML_OPT, CONFIG_STORE).managed.includes(key);
+  if (inAddon && !managed) {
+    const headers = { Authorization: `Bearer ${process.env.SUPERVISOR_TOKEN}`, 'content-type': 'application/json' };
+    const cur = await (await fetch('http://supervisor/addons/self/info', { headers, signal: AbortSignal.timeout(8000) })).json();
+    const options = { ...(cur?.data?.options ?? {}) };
+    const list = Array.isArray(options[key]) ? [...options[key]] : [];
+    if (list.includes(value)) return { already: true, list, source: 'addon' };
+    list.push(value);
+    options[key] = list;
+    const res = await fetch('http://supervisor/addons/self/options', {
+      method: 'POST', headers, body: JSON.stringify({ options }), signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) throw new Error(`supervisor returned ${res.status}`);
+    return { already: false, list, source: 'addon' };
+  }
+  if (!CONFIG_DIR) throw new Error('nowhere to save this: not running as an add-on and no /data volume is mounted');
+  // The live store first — OPT is a boot-time snapshot and does not see a pin made a moment
+  // ago — then the option as booted, then the env var, exactly as the boot-time parse reads it.
+  const current = toList(CONFIG_STORE.managed[key] ?? OPT[key] ?? process.env[envName]);
+  if (current.includes(value)) return { already: true, list: current, source: 'console' };
+  const list = [...current, value];
+  const next = adopt(CONFIG_STORE, key, list, YAML_OPT);
+  writeStore(CONFIG_DIR, next);
+  CONFIG_STORE = next;
+  return { already: false, list, source: 'console' };
 }
+
+// Append a URL fragment to `resources_always_forward`.
+const pinResource = (fragment) => appendToListOption('resources_always_forward', fragment, 'RESOURCES_ALWAYS_FORWARD');
 
 // The entity equivalent of pinResource. A literal entity_id, not a pattern: the panel offers
 // this from a search result, so the exact id is already known and a regex would be a way to get
 // it wrong. `never_forward` still wins afterwards, as it does over everything.
-async function pinEntity(entityId) {
-  if (!inAddon) throw new Error('not running as an add-on');
-  const headers = { Authorization: `Bearer ${process.env.SUPERVISOR_TOKEN}`, 'content-type': 'application/json' };
-  const cur = await (await fetch('http://supervisor/addons/self/info', { headers, signal: AbortSignal.timeout(8000) })).json();
-  const options = { ...(cur?.data?.options ?? {}) };
-  const list = Array.isArray(options.always_forward) ? [...options.always_forward] : [];
-  if (list.includes(entityId)) return { already: true, list };
-  list.push(entityId);
-  options.always_forward = list;
-  const res = await fetch('http://supervisor/addons/self/options', {
-    method: 'POST', headers, body: JSON.stringify({ options }), signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`supervisor returned ${res.status}`);
-  return { already: false, list };
-}
+const pinEntity = (entityId) => appendToListOption('always_forward', entityId, 'ALWAYS_FORWARD');
 
 const statsServer = http.createServer((req, res) => {
   // Ingress rewrites the path prefix, so match on the tail rather than the whole URL.

@@ -97,6 +97,11 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
                                // which is different from a dead one and is the case nothing
                                // used to bound
     hangUpgrades: false,       // accept the TCP connection, never answer the upgrade
+    hangTypes: new Set(),      // message types to accept and never answer — a wedged command,
+                               // on an otherwise healthy socket, which is what a timeout is for
+    wsUpgradeHeaders: [],      // headers of every /api/websocket upgrade accepted, in order. The
+                               // proxy opens TWO per browser — the bridge, then an identity probe —
+                               // so a test wanting the bridge's takes the first after its marker.
     rawUpgrades: new Set(),
     sockets: new Set(),        // EVERY accepted socket, so close() can't hang (see close())
     mainSockets: [],           // client sockets, oldest first — see sendRaw below
@@ -146,6 +151,7 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
       return;
     }
     if (req.url.startsWith('/api/websocket')) {
+      state.wsUpgradeHeaders.push({ ...req.headers });
       wss.handleUpgrade(req, socket, head, (ws) => haProtocol(ws));
     } else {
       // plain echo socket — stands in for /api/webrtc/ws camera signaling
@@ -188,6 +194,7 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
         return;
       }
       if (m.type) state.rpcCounts.set(m.type, (state.rpcCounts.get(m.type) || 0) + 1);
+      if (state.hangTypes.has(m.type)) return;          // counted, then never answered
       const ok = (result) => ws.send(JSON.stringify({ id: m.id, type: 'result', success: true, result }));
       if (m.type === 'auth/current_user') {
         // This socket is an identity probe, not a browser connection — the proxy opens it purely

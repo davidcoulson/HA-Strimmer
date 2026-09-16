@@ -170,7 +170,7 @@ describe('#7 a grown allowlist reaches already-open pages', () => {
       ] }],
     });
     mock.fireLovelaceUpdated('test-dash');
-    await proxy.waitForLog(/reconnecting 1 open dashboard connection/, 10000);
+    await proxy.waitForLog(/reconnecting 1 of 1 open dashboard connection/, 10000);
 
     // The open socket is dropped; a real frontend reconnects here on its own.
     await closed;
@@ -185,7 +185,7 @@ describe('#7 a grown allowlist reaches already-open pages', () => {
     const marker = proxy.out.length;
     mock.fireLovelaceUpdated('test-dash');           // same config -> no growth
     await delay(2500);
-    assert.doesNotMatch(proxy.out.slice(marker), /reconnecting \d+ open dashboard/);
+    assert.doesNotMatch(proxy.out.slice(marker), /reconnecting \d+ of \d+ open dashboard/);
     assert.equal(browser.readyState, WebSocket.OPEN, 'connection left alone');
     browser.close();
   });
