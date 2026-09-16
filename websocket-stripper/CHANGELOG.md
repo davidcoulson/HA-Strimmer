@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026.09.16.5 — 2026-09-16
+
+**Four small correctness fixes from the review.**
+
+- **An icon pack needed only by an `always_forward` entity is now kept.** Resource keys were
+  computed on each dashboard's set *before* the overrides were applied, so an entity that reached
+  a dashboard only through `always_forward` contributed no icon namespace — the entity was sent
+  and the pack that renders its icon was dropped, a blank icon with no error anywhere. The keys
+  are computed after the override pass, against the set the dashboard is actually served. A test
+  pins it.
+- **A rebuild can no longer trim a dashboard's theme away mid-flight.** The set of themes in use
+  was emptied at the start of a rebuild and refilled across the dashboard loop, which awaits
+  between dashboards; a `get_themes` reply landing in that window was trimmed against a
+  half-filled set. It is built into a local and swapped in at the end, like the resource maps.
+  Only `trim_themes` was affected.
+- **Hostname rules resolve in parallel.** They resolved one at a time, so a panel that was
+  powered off held every rule after it for the length of its DNS timeout, on every rebuild.
+- **The client-hint and self-identification maps are genuinely bounded.** They pruned only
+  expired entries at the cap, so more live clients than the cap grew without limit; the oldest
+  now go too.
+
+---
+
 ## 2026.09.16.4 — 2026-09-16
 
 **The panel now looks like the frontend it sits inside.** No proxy behaviour changes.

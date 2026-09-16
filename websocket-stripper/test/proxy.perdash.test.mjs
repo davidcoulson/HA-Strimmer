@@ -13,6 +13,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { WebSocket as WS } from 'ws';
 import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
+import { STATES } from './fixtures.mjs';
 
 // How many resources the mock serves. Derived, not hard-coded: two tests assert "nothing
 // was removed", and a literal count made adding a fixture resource look like a regression.
@@ -683,6 +684,25 @@ describe('resource trimming', () => {
     const urls = await resourcesFor(p2, '/res-dash');
     px.kill();
     assert.ok(urls.includes('/res/global-patcher.js'), 'always_forward must win over the content match');
+  });
+
+  // An entity that reaches a dashboard only through always_forward carries its icon namespace
+  // with it. The resource keys used to be computed on the PRE-override set, so the entity was
+  // sent while the icon pack that renders it was dropped — a blank icon with no error anywhere.
+  it('an icon pack needed only by an always_forward entity is kept', async () => {
+    const iconic = { entity_id: 'light.iconic', state: 'on', attributes: { friendly_name: 'Iconic', icon: 'cbi:bulb' } };
+    const m2 = await startMockHa({ configs: { 'res-dash': CFG }, states: [...STATES, iconic] });
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock: m2, dashPaths: 'res-dash', port: p2,
+      extraEnv: { TRIM_RESOURCES: '1', ALWAYS_FORWARD: 'light.iconic' } });
+    try {
+      await px.waitForLog(READY);
+      const urls = await resourcesFor(p2, '/res-dash');
+      assert.match(px.out, /resources res-dash needs:[^\n]*\bcbi:/, 'the namespace must come from the served set');
+      assert.ok(urls.includes('/res/icon-pack.js'), 'the pack that uses cbi: icons must be kept');
+      assert.ok(urls.includes('/res/provider.js'), 'the pack that PROVIDES the cbi namespace must be kept');
+      assert.ok(!urls.includes('/res/unrelated-widget.js'), 'and the trim still trims');
+    } finally { px.kill(); await m2.close(); }
   });
 
   it('an unattributed connection still gets every resource', async () => {

@@ -76,7 +76,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.16.4';
+const VERSION = '2026.09.16.5';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -817,14 +817,22 @@ async function buildAllow(rpc, renderTemplate) {
   // Tuya sensor's state strings live under `component.tuya_local`, while its entity_id says
   // `sensor.`. Filtering translations on entity domains alone would drop exactly the tree that
   // names its states, and the dashboard would render raw keys instead.
-  THEMES_USED = new Set();
   PLATFORM_BY_ENTITY = new Map();
   for (const e of (registries?.entities || [])) {
     if (e?.entity_id && e?.platform) PLATFORM_BY_ENTITY.set(e.entity_id, e.platform);
   }
+  // Built into locals and swapped in at the end. This used to reset THEMES_USED first and refill
+  // it across the dashboard loop — which awaits between dashboards — so a get_themes reply that
+  // landed mid-rebuild was trimmed against a half-filled set and a panel lost its theme until it
+  // reloaded. The resource maps already swap atomically for the same reason.
+  const themesUsed = new Set();
   const union = new Set();
   const perDash = new Map();
   const keysByDash = new Map();
+  // Dashboard configs and the themes each names, kept for the resource-key pass below, which
+  // has to run AFTER the overrides are applied.
+  const cfgByDash = new Map();
+  const themesByDash = new Map();
   // Theme definitions, once, so a font set BY A THEME is not invisible to the resource trim.
   // Each theme collapses to a lowercase blob of its own values; matching a font family against
   // that is enough, and avoids caring which of the dozen font-related theme variables was used.
@@ -852,29 +860,21 @@ async function buildAllow(rpc, renderTemplate) {
       const set = allowlistFor(cfg, states, registries, tpls);
       log(`  ${p}: ${set.size} entities`);
       perDash.set(p, set);
-      // Resource keys come from the dashboard config AND from the icons of the entities
-      // this dashboard shows. The second half matters: an entity's icon usually lives in
-      // the entity registry, not in any dashboard's YAML, so a config-only scan misses it
-      // and drops the icon pack that renders it. Measured here: 20 entities carry `phu:`
-      // icons set in the registry, and the string "phu" appears in no dashboard config.
-      const keys = resourceKeys(cfg, set, byId);
+      cfgByDash.set(p, cfg);
       // Theme names this dashboard asks for. A `theme:` can sit on the dashboard, on a view or
       // on a card, so the whole config tree is walked rather than a fixed set of places.
       const dashThemes = new Set();
       (function collectThemes(n) {
         if (!n || typeof n !== 'object') return;
         if (Array.isArray(n)) { n.forEach(collectThemes); return; }
-        if (typeof n.theme === 'string' && n.theme) { THEMES_USED.add(n.theme); dashThemes.add(n.theme); }
+        if (typeof n.theme === 'string' && n.theme) { themesUsed.add(n.theme); dashThemes.add(n.theme); }
         for (const v of Object.values(n)) collectThemes(v);
       })(cfg);
-      // Where this dashboard could name a font: its own config, the themes it asks for, and the
-      // instance defaults, which apply wherever a dashboard names none. Empty when themes could
-      // not be read, which the keep rule reads as "do not drop a font stylesheet".
-      keys.fontText = themeBlobs.size ? fontTextFor(cfg, dashThemes, themeBlobs) : null;
-      keysByDash.set(p, keys);
+      themesByDash.set(p, dashThemes);
       set.forEach((e) => union.add(e));
     } catch (e) { failed++; log(`  ${p}: FAILED ${e.message}`); }
   }
+  THEMES_USED = themesUsed;
   // Any failure at all is worth naming the alternatives for: `config_not_found` means the
   // url_path simply isn't a dashboard on this instance, and the fix is always "look at what
   // is actually there". Cheap, and it turns a repeating FAILED line into a self-answering one.
@@ -889,6 +889,25 @@ async function buildAllow(rpc, renderTemplate) {
   }
   const baseN = union.size;
   for (const [p, set] of perDash) perDash.set(p, applyOverrides(set, realIds, p));
+  // Resource keys come from the dashboard config AND from the icons of the entities this
+  // dashboard is served. The second half matters: an entity's icon usually lives in the entity
+  // registry, not in any dashboard's YAML, so a config-only scan misses it and drops the icon
+  // pack that renders it. Measured here: 20 entities carry `phu:` icons set in the registry, and
+  // the string "phu" appears in no dashboard config.
+  //
+  // Computed AFTER the overrides, against the set the dashboard is actually served. It used to
+  // run inside the loop above, on the pre-override set, so an entity that reached a dashboard
+  // only through always_forward contributed no icon namespace — and the icon pack it needed was
+  // dropped for that dashboard while the entity itself was sent.
+  for (const [p, set] of perDash) {
+    const cfg = cfgByDash.get(p);
+    const keys = resourceKeys(cfg, set, byId);
+    // Where this dashboard could name a font: its own config, the themes it asks for, and the
+    // instance defaults, which apply wherever a dashboard names none. Empty when themes could
+    // not be read, which the keep rule reads as "do not drop a font stylesheet".
+    keys.fontText = themeBlobs.size ? fontTextFor(cfg, themesByDash.get(p) || new Set(), themeBlobs) : null;
+    keysByDash.set(p, keys);
+  }
   // The union takes every per-dashboard set after ITS own overrides, so an unattributed
   // connection is never served less than the dashboard it might actually be showing.
   for (const set of perDash.values()) set.forEach((e) => union.add(e));
@@ -2331,36 +2350,41 @@ async function resolveConnRules(registries) {
   }
   const entsFor = buildRegistryCtx({ devices, entities }).byDevice;
 
-  for (const r of CONN_RULES) {
+  // Addresses first, for every rule AT ONCE. These were resolved one rule at a time, so a
+  // hostname that did not answer — a panel that is powered off — held the rules after it for
+  // the length of its DNS timeout, on every rebuild. They are independent lookups.
+  await Promise.all(CONN_RULES.map(async (r) => {
     // A rule may match on something other than an address; there is nothing to resolve then.
     r.cidr = r.client ? parseCidr(r.client) : null;
     r.ips = new Set();
-    if (r.client && !r.cidr) {
-      if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(r.client) || r.client.includes(':')) {
-        r.ips.add(normalizeIp(r.client));
-      } else {
-        // mDNS first for a `.local` name: the OS resolver inside the container has none, so
-        // node:dns cannot answer those at all. Falls through to DNS for everything else.
-        const viaMdns = discovery.resolve(r.client);
-        if (viaMdns) {
-          r.ips.add(normalizeIp(viaMdns));
-          log(`  client rule ${r.client} -> ${viaMdns} (via mDNS)`);
-        }
-        // A hostname. Resolving it is best-effort by design: a panel that is powered off has no
-        // lease, and that must not stop the other rules — or the whole allowlist — from building.
-        else try {
-          const { lookup } = await import('node:dns/promises');
-          const hits = await lookup(r.client, { all: true });
-          hits.forEach((h) => r.ips.add(normalizeIp(h.address)));
-          log(`  client rule ${r.client} -> ${[...r.ips].join(', ')}`);
-        } catch (e) {
-          logThrottled(`client-dns:${r.client}`,
-            `  client rule ${r.client}: DNS lookup failed (${e.code || e.message}) — rule inactive until it resolves. `
-            + 'mDNS/.local names usually do not resolve from a container; a real DNS record does.');
-        }
-      }
+    if (!r.client || r.cidr) return;
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(r.client) || r.client.includes(':')) {
+      r.ips.add(normalizeIp(r.client));
+      return;
     }
+    // mDNS first for a `.local` name: the OS resolver inside the container has none, so
+    // node:dns cannot answer those at all. Falls through to DNS for everything else.
+    const viaMdns = discovery.resolve(r.client);
+    if (viaMdns) {
+      r.ips.add(normalizeIp(viaMdns));
+      log(`  client rule ${r.client} -> ${viaMdns} (via mDNS)`);
+      return;
+    }
+    // A hostname. Resolving it is best-effort by design: a panel that is powered off has no
+    // lease, and that must not stop the other rules — or the whole allowlist — from building.
+    try {
+      const { lookup } = await import('node:dns/promises');
+      const hits = await lookup(r.client, { all: true });
+      hits.forEach((h) => r.ips.add(normalizeIp(h.address)));
+      log(`  client rule ${r.client} -> ${[...r.ips].join(', ')}`);
+    } catch (e) {
+      logThrottled(`client-dns:${r.client}`,
+        `  client rule ${r.client}: DNS lookup failed (${e.code || e.message}) — rule inactive until it resolves. `
+        + 'mDNS/.local names usually do not resolve from a container; a real DNS record does.');
+    }
+  }));
 
+  for (const r of CONN_RULES) {
     r.deviceEntities = [];
     for (const want of r.devices) {
       const ids = byId.has(want) ? [want] : (idsByName.get(want.trim().toLowerCase()) || []);
@@ -2544,11 +2568,7 @@ function learnClientEntity(ip, entityId) {
   if (!rows || !rows.length) return null;
   let hit = clientLearned.get(ip);
   if (!hit) {
-    if (clientLearned.size >= CLIENT_LEARNED_MAX) {
-      // Oldest-first prune, same shape as clientDash's.
-      const cutoff = Date.now() - 86400000;
-      for (const [k, v] of clientLearned) if (v.at < cutoff) clientLearned.delete(k);
-    }
+    if (clientLearned.size >= CLIENT_LEARNED_MAX) boundByAge(clientLearned, 86400000, CLIENT_LEARNED_MAX);
     hit = { ids: new Set(), at: Date.now() };
     clientLearned.set(ip, hit);
   }
@@ -2664,10 +2684,19 @@ function noteClientDash(req) {
   saveClientDashSoon();
   if (prev?.path !== path) log(`client ${ip} -> dashboard ${path}`);
   // Bounded: a busy instance must not accumulate an entry per client forever.
-  if (clientDash.size > 500) {
-    const cutoff = Date.now() - CLIENT_DASH_TTL_MS;
-    for (const [k, v] of clientDash) if (v.at < cutoff) clientDash.delete(k);
-  }
+  if (clientDash.size > 500) boundByAge(clientDash, CLIENT_DASH_TTL_MS, 500);
+}
+
+// Keep a per-address map under `max` entries. Expired entries go first; if that is not enough —
+// more live clients than the cap — the oldest go next, so the map is genuinely bounded rather
+// than bounded only while fewer than `max` clients are active. Both maps this serves record
+// `at` on every touch, so "oldest" is "least recently seen".
+function boundByAge(map, ttlMs, max) {
+  const cutoff = Date.now() - ttlMs;
+  for (const [k, v] of map) if (v.at < cutoff) map.delete(k);
+  if (map.size <= max) return;
+  const byAge = [...map].sort((a, b) => a[1].at - b[1].at);
+  for (const [k] of byAge.slice(0, map.size - max)) map.delete(k);
 }
 
 // The allowlist this connection should get: its own dashboard's if we know it and it is
