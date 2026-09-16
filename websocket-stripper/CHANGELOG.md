@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026.09.16.2 — 2026-09-16
+
+**The panel, after a UX review.** No proxy behaviour changes; everything here is in the console
+and its request log.
+
+- **Pin feedback told the truth's opposite.** The Entities tab says a pin applies immediately, and
+  the confirmation under it always said "Restart the app to apply it." The server has returned
+  `restartRequired` since `.16`; the page now reads it, so an applied pin says so.
+- **Favicon 404s no longer lead the error ring.** Every browser asks for `/favicon.ico`, Home
+  Assistant answers 404, and the HTTP card opened with those ahead of anything that had actually
+  failed. Only that 404 is skipped — a 500 on the same path is kept, and the totals still count it.
+- **Sparkline peak labels were stretched.** The charts are drawn with `preserveAspectRatio="none"`
+  and the SVG `<text>` stretched with them. The label is HTML beside the chart title now.
+- **Tabs no longer wrap on a phone;** the bar scrolls sideways like Home Assistant's own.
+- **Dashboard sizes are formatted** — "12.7 MB", not "13032" under a "KB" header — and resource
+  counts read "21 of 43".
+- **The Clients table has an Essentials / All columns toggle.** Six diagnostic columns are hidden
+  by default on screens under 900px and the choice is remembered. It sorts by client from the
+  start, and repeated Client/Device cells are dimmed so a panel's several connections read as one
+  group.
+- **Empty states explain themselves after a restart:** "collecting — needs a minute of traffic
+  first" and "nothing asked for yet" instead of a dash and "0 B HA never rebuilt".
+- **The paragraphs of caveats under the tables fold** behind a one-line summary.
+- The trimming pill in the header shows it expands; node and OS versions moved to the footer.
+
+---
+
 ## 2026.09.16.1 — 2026-09-16
 
 **Four behaviours from the same review, all around a connection that stops behaving.**

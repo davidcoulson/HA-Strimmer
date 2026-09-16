@@ -190,10 +190,15 @@
   th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   /* Tab bar. Sticky, because the panel is long and losing the tabs on scroll is the one thing
      that makes tabs worse than a single page. */
-  .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; flex-wrap: wrap;
+  /* Never wraps: on a phone the last tab dropped onto its own line. Scrolls sideways instead, the
+     way Home Assistant's own tab bars do. */
+  .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; flex-wrap: nowrap;
+    overflow-x: auto; scrollbar-width: none;
     background: var(--bg); padding: 8px 0 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .tabs::-webkit-scrollbar { display: none; }
   .tabs button { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0;
-    border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer; }
+    border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer;
+    white-space: nowrap; flex: 0 0 auto; }
   .tabs button:hover { color: var(--fg); }
   .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
   .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -202,6 +207,19 @@
   a { color: var(--accent); }
   .chart { margin-bottom: 14px; }
   .chart svg { width: 100%; height: 110px; display: block; margin-top: 4px; }
+  /* The peak value lives in HTML, not inside the SVG: the chart is stretched to the card width
+     with preserveAspectRatio="none", and text inside it stretches with it. */
+  .chart .peak { float: right; text-transform: none; letter-spacing: 0; }
+  /* The paragraph of caveats under a table, folded. One sentence stays visible; the rest is
+     there for the reader who wants it rather than in the way of the one who does not. */
+  details.more { margin-top: 6px; }
+  details.more summary { color: var(--accent); font-size: 12px; cursor: pointer; }
+  details.more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* A pill that does something says so. */
+  .pill.btn { cursor: pointer; }
+  .pill.btn:hover { color: var(--accent); border-color: var(--accent); }
+  /* A cell repeating the one above it, so several connections from one client read as a group. */
+  td.dim { color: var(--muted); opacity: .55; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; vertical-align: middle; }
 </style>
 </head>
@@ -221,7 +239,7 @@
     <div class="grid">
       <div><div class="label">Saved on page loads</div><div class="big good" id="savedPct">—</div><div class="label" id="savedAbs">&nbsp;</div></div>
       <div><div class="label">Clients connected</div><div class="big" id="clients">—</div><div class="label" id="clientsTotal">&nbsp;</div></div>
-      <div><div class="label">Live update traffic</div><div class="big" id="evRate">—</div><div class="label">per client, per minute</div></div>
+      <div><div class="label">Live update traffic</div><div class="big" id="evRate">—</div><div class="label" id="evRateSub">per client, per minute</div></div>
       <div><div class="label">Served from cache</div><div class="big" id="cacheHits">—</div><div class="label" id="cacheBytes">&nbsp;</div></div>
     </div>
   </div>
@@ -246,9 +264,9 @@
         <div><div class="label">Update traffic</div><div class="big" id="hEvents">—</div><div class="label">total, this window</div></div>
         <div><div class="label">Peak clients</div><div class="big" id="hPeak">—</div><div class="label" id="hNow">&nbsp;</div></div>
       </div>
-      <div class="chart"><div class="label">Data not sent, per 5 min</div><svg id="cSaved" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
-      <div class="chart"><div class="label">Clients connected</div><svg id="cClients" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
-      <div class="chart"><div class="label">Update traffic, per 5 min</div><svg id="cEvents" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="label">Data not sent, per 5 min <span class="peak" id="cSaved-peak"></span></div><svg id="cSaved" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="label">Clients connected <span class="peak" id="cClients-peak"></span></div><svg id="cClients" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="label">Update traffic, per 5 min <span class="peak" id="cEvents-peak"></span></div><svg id="cEvents" viewBox="0 0 600 120" preserveAspectRatio="none"></svg></div>
     </div>
     <div class="note">Sampled every five minutes and kept on the app's own storage, so a
       restart costs one bucket rather than the whole day. Gaps are periods the app was not
@@ -269,7 +287,7 @@
   <div class="card" data-tab="clients">
     <h2>Dashboards</h2>
     <div class="scroll"><table id="dash"><thead>
-      <tr><th>Dashboard</th><th>Entities</th><th>of instance</th><th>Resources kept</th><th>Resource KB kept</th><th>KB dropped</th></tr>
+      <tr><th>Dashboard</th><th>Entities</th><th>of instance</th><th>Resources kept</th><th>Size kept</th><th>Size dropped</th></tr>
     </thead><tbody></tbody></table></div>
   </div>
 
@@ -300,7 +318,11 @@
     <div class="scroll"><table id="extramod"><thead>
       <tr><th>Dashboard</th><th>Removed</th><th>Still loaded</th></tr>
     </thead><tbody></tbody></table></div>
-    <div class="note">Some integrations add JavaScript to every page through Home Assistant's
+    <div class="note">JavaScript that integrations inject into every page. With
+      <code>trim_extra_modules</code> on, a module is removed only when the resource trim already
+      dropped it for that dashboard; <b>Still loaded</b> is what this app deliberately leaves alone.
+      <details class="more"><summary>How this is decided</summary>
+      Some integrations add JavaScript to every page through Home Assistant's
       <code>extra_module_url</code> rather than registering a Lovelace resource, so
       <code>trim_resources</code> never sees them. With <code>trim_extra_modules</code> on, one is
       removed only when it is <b>also</b> a registered resource that this dashboard already
@@ -308,7 +330,7 @@
       through. <b>Still loaded</b> is the half worth reading: those are modules this app
       deliberately will not judge, because nothing here knows what an icon pack or a frontend
       patcher does. If a panel has quietly lost a behaviour, it is either in <b>Removed</b> or it
-      is not this app's doing.</div>
+      is not this app's doing.</details></div>
   </div>
 
   <div class="card" data-tab="clients">
@@ -317,6 +339,10 @@
         <button type="button" data-range="live" class="on">Connected now</button><button
           type="button" data-range="day">Seen in 24h</button>
       </span>
+      <span class="seg" id="cl-cols" role="group" aria-label="Columns" style="margin-right:8px">
+        <button type="button" data-cols="core">Essentials</button><button
+          type="button" data-cols="all">All columns</button>
+      </span>
     </h2>
     <input id="cl-filter" class="filter" type="search" autocomplete="off"
       placeholder="Filter — type any part of a row (10.2.4, office, cloudflare…)">
@@ -324,7 +350,11 @@
       <tr><th>Client</th><th>Device</th><th>From</th><th>Entry point</th><th>User</th><th>Dashboard</th><th>Matched by</th><th>Entities</th><th>Payload</th><th>Ready in</th><th>On the wire</th><th>Connected</th><th>Msgs</th><th>Updates/min</th></tr>
     </thead><tbody></tbody></table></div>
     <div id="cl-msg" class="note" style="display:none"></div>
-    <div class="note"><b>Payload</b> is the first entity block this connection received, with the
+    <div class="note">Several rows from one address are one client with several connections — a
+      reload overlaps briefly, and some panels hold more than one. <b>Payload</b> is the first
+      entity block each connection received; the timing columns are diagnostics, not a benchmark.
+      <details class="more"><summary>What each column means</summary>
+      <b>Payload</b> is the first entity block this connection received, with the
       number of entities in it — the dump a dashboard cannot render without, and the part this
       app shrinks. The entity count is shown so the byte figure can be checked: a small
       payload against a large <b>Entities</b> allowlist means a partial first block, not a tiny
@@ -337,16 +367,18 @@
       while a phone on 5G took 207&nbsp;ms for 215&nbsp;KB. <i>On the wire</i> means handed to
       the kernel socket buffer, not received by the device: a 215&nbsp;KB payload "drained" in
       6&nbsp;ms over cellular, which is far faster than any real transfer. Neither number is a
-      round trip, and neither should be quoted as a speed.</div>
+      round trip, and neither should be quoted as a speed.</details></div>
   </div>
 
   <div class="card" data-tab="traffic">
     <h2 id="http-h">HTTP requests</h2>
-    <div class="note">Kept apart from the app log on purpose. A busy panel makes hundreds of
+    <div class="note">Errors are kept in their own ring, so a failure this morning is still here
+      this evening. Full detail at <code>access.json</code>.
+      <details class="more"><summary>Why this is separate from the log</summary>
+      Kept apart from the app log on purpose. A busy panel makes hundreds of
       requests a minute, and mixing those into the service log buries the one line that explains
-      why a dashboard is behaving oddly. <b>Errors are held in their own ring</b>, so a failure
-      this morning is still here this evening rather than having scrolled away behind a thousand
-      successful asset fetches. Full detail at <code>access.json</code>.</div>
+      why a dashboard is behaving oddly. Errors are held in their own ring so they do not scroll
+      away behind a thousand successful asset fetches.</details></div>
     <div id="http-sum" class="note" style="display:none"></div>
     <div id="http-wrap" class="tblwrap"><table id="httptbl"><thead>
       <tr><th>When</th><th>Status</th><th>Method</th><th>Path</th><th>Time</th><th>Client</th></tr>
@@ -391,7 +423,10 @@
       </thead><tbody></tbody></table></div>
     </details>
     <div class="note">Each band is one connection path, read left to right: where the client was,
-      how the request arrived, and which name it dialled. Band thickness is the number of
+      how the request arrived, and which name it dialled. Reporting only — none of it is used to
+      decide access.<span id="paths-span"></span>
+      <details class="more"><summary>How to read it</summary>
+      Band thickness is the number of
       connections. Counted for every connection, including ones that have since
       closed — unlike the live list above. <b>Origin</b> is whether the client's address is
       inside RFC1918 or outside it; a device on your own LAN that connects through an external
@@ -400,9 +435,8 @@
       <code>direct</code> to the port, through a reverse <code>proxy</code>, through
       <code>cloudflare</code>, or over Supervisor <code>ingress</code>. <b>Hostname</b> is the
       name the client dialled, which is usually the clearest statement of which entry point it
-      used. This is reporting only: every signal except the peer address is a request header,
-      so none of it is trustworthy enough to make access decisions with.
-      <span id="paths-span"></span></div>
+      used. Every signal except the peer address is a request header,
+      so none of it is trustworthy enough to make access decisions with.</details></div>
   </div>
 
   <div class="card" data-tab="config">
@@ -418,7 +452,7 @@
   </div>
 
   <div class="sub">Raw JSON: <a href="./stats.json" target="_blank">stats.json</a> — point a Home
-    Assistant <code>rest</code> sensor at it to graph any of this over time.</div>
+    Assistant <code>rest</code> sensor at it to graph any of this over time.<span id="runtime"></span></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -495,7 +529,7 @@ const rows = (tbl, data, cells) => {
     const tr = tb.insertRow();
     const td = tr.insertCell();
     td.colSpan = $(tbl).querySelectorAll('thead th').length;
-    td.textContent = 'nothing yet';
+    td.textContent = 'No data yet';
     td.style.color = 'var(--muted)';
     return;
   }
@@ -513,8 +547,21 @@ const rows = (tbl, data, cells) => {
 let liveClients = [];
 let dayClients = [];
 let clRange = 'live';
-let clSort = { col: null, dir: 1 };
+// Sorted by client from the start, so the several connections one panel holds sit together and
+// read as a group rather than being scattered by arrival order. Keyed by the column's label
+// rather than its index, because the visible column set changes (see clAllCols).
+let clSort = { id: 'Client', dir: 1 };
 let clFilter = '';
+// Fourteen columns is a spreadsheet, and on a phone the two that matter — dashboard and entities
+// — were off the right edge. The diagnostic columns are marked `detail` and hidden by default on
+// a narrow screen; the toggle in the heading shows them, and the choice is remembered.
+let clAllCols = (() => {
+  try {
+    const v = localStorage.getItem('stripper-clcols');
+    if (v === 'all' || v === 'core') return v === 'all';
+  } catch { /* private mode */ }
+  return matchMedia('(min-width: 900px)').matches;
+})();
 
 // Each column: its label, the display value, and the value to SORT on. Sorting on the displayed
 // string would order "2 min" before "9 s" and 1,024 before 512 — the sort key has to be the
@@ -523,24 +570,24 @@ const CL_COLS = [
   { th: 'Client', get: (c) => c.ip || '?', key: (c) => ipKey(c.ip) },
   { th: 'Device', get: (c) => (c.device ? (c.device.name || c.device.kind)
       + (c.device.kind && c.device.name ? ` (${c.device.kind})` : '') : '—') },
-  { th: 'From', get: (c) => (c.origin && c.route ? c.origin + ' · ' + prettyRoute(c.route)
+  { th: 'From', detail: true, get: (c) => (c.origin && c.route ? c.origin + ' · ' + prettyRoute(c.route)
       : c.origin || (c.route && prettyRoute(c.route)) || '—') },
-  { th: 'Entry point', get: (c) => c.host || '—' },
+  { th: 'Entry point', detail: true, get: (c) => c.host || '—' },
   { th: 'User', get: (c) => c.user || '—' },
   { th: 'Dashboard', get: (c) => c.dashboard || '(union — not attributed)' },
-  { th: 'Matched by', get: (c) => c.attributedVia || '—' },
+  { th: 'Matched by', detail: true, get: (c) => c.attributedVia || '—' },
   { th: 'Entities', get: (c) => c.allowSize, key: (c) => c.allowSize || 0 },
   { th: 'Payload', get: (c) => (c.initialPayloadBytes != null
       ? kb(c.initialPayloadBytes) + (c.initialEntityCount != null ? ` / ${c.initialEntityCount}` : '') : '—'),
     key: (c) => c.initialPayloadBytes ?? -1 },
-  { th: 'Ready in', get: (c) => (c.msToEntityData != null ? ms(c.msToEntityData) : '—'),
+  { th: 'Ready in', detail: true, get: (c) => (c.msToEntityData != null ? ms(c.msToEntityData) : '—'),
     key: (c) => c.msToEntityData ?? -1 },
-  { th: 'On the wire', get: (c) => (c.initialDrainMs != null ? ms(c.initialDrainMs) : '—'),
+  { th: 'On the wire', detail: true, get: (c) => (c.initialDrainMs != null ? ms(c.initialDrainMs) : '—'),
     key: (c) => c.initialDrainMs ?? -1 },
   // "Connected" is time still connected for a live row and total time connected for a closed
   // one; both are durations, so the column keeps one meaning.
   { th: 'Connected', get: (c) => dur(c.connectedSec), key: (c) => c.connectedSec || 0 },
-  { th: 'Msgs', get: (c) => c.messages, key: (c) => c.messages || 0 },
+  { th: 'Msgs', detail: true, get: (c) => c.messages, key: (c) => c.messages || 0 },
   // The last column is the one genuinely different between the two ranges: a live connection has
   // a current rate, a closed one has a last-seen time and a session count.
   { th: 'Updates/min', dayTh: 'Last seen',
@@ -560,28 +607,35 @@ function ipKey(ip) {
 
 function renderClients() {
   const src = clRange === 'day' ? dayClients : liveClients;
+  const cols = CL_COLS.filter((col) => clAllCols || !col.detail);
   const head = $('cl').querySelector('thead tr');
   head.textContent = '';
-  CL_COLS.forEach((col, i) => {
+  cols.forEach((col, i) => {
     const th = document.createElement('th');
     th.textContent = (clRange === 'day' && col.dayTh) ? col.dayTh : col.th;
     th.tabIndex = 0;
     th.dataset.col = i;
-    th.className = 'sortable' + (clSort.col === i ? (clSort.dir > 0 ? ' up' : ' down') : '');
+    th.className = 'sortable' + (clSort.id === col.th ? (clSort.dir > 0 ? ' up' : ' down') : '');
     head.appendChild(th);
   });
+  for (const b of $('cl-cols').querySelectorAll('button')) {
+    b.classList.toggle('on', (b.dataset.cols === 'all') === clAllCols);
+  }
 
   // Filter on what the row SHOWS, not on the raw object: the user is typing what they can see,
   // and matching hidden fields would select rows for reasons nothing on screen explains.
-  const cells = (c) => CL_COLS.map((col) => String(col.get(c) ?? ''));
+  const cells = (c) => cols.map((col) => String(col.get(c) ?? ''));
   let list = src.map((c) => ({ c, txt: cells(c) }));
   if (clFilter) {
     const q = clFilter.toLowerCase();
     list = list.filter((r) => r.txt.join(' ').toLowerCase().includes(q));
   }
-  if (clSort.col != null) {
-    const col = CL_COLS[clSort.col];
-    const keyOf = (r) => (col.key ? col.key(r.c) : r.txt[clSort.col].toLowerCase());
+  // A sort on a column that is currently hidden is simply not applied, rather than sorting by
+  // something the reader cannot see.
+  const sortAt = cols.findIndex((col) => col.th === clSort.id);
+  if (sortAt >= 0) {
+    const col = cols[sortAt];
+    const keyOf = (r) => (col.key ? col.key(r.c) : r.txt[sortAt].toLowerCase());
     list.sort((a, b) => {
       const x = keyOf(a), y = keyOf(b);
       if (typeof x === 'number' && typeof y === 'number') return (x - y) * clSort.dir;
@@ -590,6 +644,15 @@ function renderClients() {
   }
 
   rows('cl', list, (r) => r.txt);
+  // Several connections from one client: dim the repeated Client and Device cells so the rows
+  // read as one group with several lines, not as several unrelated clients.
+  if (list.length > 1) {
+    const trs = [...$('cl').tBodies[0].rows];
+    for (let i = 1; i < trs.length; i++) {
+      const same = list[i].txt[0] === list[i - 1].txt[0] && list[i].txt[1] === list[i - 1].txt[1];
+      if (same) { trs[i].cells[0].classList.add('dim'); trs[i].cells[1].classList.add('dim'); }
+    }
+  }
   const msg = $('cl-msg');
   if (!src.length) {
     msg.style.display = '';
@@ -612,12 +675,20 @@ $('cl-range').addEventListener('click', (e) => {
   renderClients();
 });
 $('cl-filter').addEventListener('input', (e) => { clFilter = e.target.value.trim(); renderClients(); });
+$('cl-cols').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-cols]');
+  if (!btn) return;
+  clAllCols = btn.dataset.cols === 'all';
+  try { localStorage.setItem('stripper-clcols', clAllCols ? 'all' : 'core'); } catch { /* ignore */ }
+  renderClients();
+});
 // Delegated, because the header cells are rebuilt on every render.
 $('cl').querySelector('thead').addEventListener('click', (e) => {
   const th = e.target.closest('th[data-col]');
   if (!th) return;
-  const i = Number(th.dataset.col);
-  clSort = clSort.col === i ? { col: i, dir: -clSort.dir } : { col: i, dir: 1 };
+  const cols = CL_COLS.filter((col) => clAllCols || !col.detail);
+  const id = cols[Number(th.dataset.col)].th;
+  clSort = clSort.id === id ? { id, dir: -clSort.dir } : { id, dir: 1 };
   renderClients();
 });
 $('cl').querySelector('thead').addEventListener('keydown', (e) => {
@@ -921,8 +992,11 @@ async function pinEntity(id, btn) {
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     btn.textContent = j.already ? 'already pinned' : 'pinned';
     msg.style.display = '';
+    // The server says whether it could apply this live; the note used to say "restart" whatever
+    // the answer, which contradicted the explanation two lines above the search box.
     setMsg(msg, id, j.already ? ' was already in always_forward.'
-      : ' added to always_forward. Restart the app to apply it.');
+      : j.restartRequired ? ' added to always_forward. Restart the app to apply it.'
+      : ' added to always_forward and applied — panels pick it up on their next reconnect.');
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Always send';
     msg.style.display = '';
@@ -943,7 +1017,8 @@ async function pinResource(fragment, btn) {
     btn.textContent = j.already ? 'already pinned' : 'pinned';
     msg.style.display = '';
     setMsg(msg, fragment, j.already ? ' was already in resources_always_forward.'
-      : ' added to resources_always_forward. Restart the app to apply it.');
+      : j.restartRequired ? ' added to resources_always_forward. Restart the app to apply it.'
+      : ' added to resources_always_forward and applied — the resource scan is re-running now.');
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Always send';
     msg.style.display = '';
@@ -1058,10 +1133,10 @@ async function tick() {
   // Node version alongside the add-on version: after a base-image change it is the only way to
   // confirm from outside the container that the rebuild actually took.
   const sub = $('sub');
-  sub.textContent = 'v' + (s.version || '?')
-    + (s.node ? ' · node ' + s.node : '')
-    + (s.os ? ' · ' + s.os : '')
-    + ' · up ' + dur(s.uptimeSec) + ' · ';
+  sub.textContent = 'v' + (s.version || '?') + ' · up ' + dur(s.uptimeSec) + ' · ';
+  // Runtime facts belong with the raw-data footer, not in the headline next to what is
+  // happening now. They are still on the page for the "did the rebuild take" check.
+  $('runtime').textContent = (s.node ? ' · node ' + s.node : '') + (s.os ? ' · ' + s.os : '');
   // Almost every boolean here is a trim_*, so the prefix is the same on nearly every pill and
   // carries no information — it just made the row twice as wide. The state word went the same
   // way: green vs muted already says it, and the full name and state stay on hover.
@@ -1093,13 +1168,16 @@ async function tick() {
     const offTrims = trims.filter(([, v]) => !v);
     const all = offTrims.length === 0;
     const count = document.createElement('span');
-    count.className = all ? 'pill on' : 'pill';
-    count.style.cursor = 'pointer';
+    count.className = (all ? 'pill on' : 'pill') + ' btn';
+    count.setAttribute('role', 'button');
+    count.tabIndex = 0;
     // "6 of 7" rather than "6": the missing one is the interesting part, and a bare count gives
-    // no way to tell a fully-trimming instance from one with something switched off.
-    count.textContent = all ? `trimming ${trims.length}` : `trimming ${onTrims.length} of ${trims.length}`;
+    // no way to tell a fully-trimming instance from one with something switched off. The arrow
+    // is the affordance: without it nothing said this pill expands.
+    count.textContent = (all ? `trimming ${trims.length}` : `trimming ${onTrims.length} of ${trims.length}`) + ' ▾';
     count.title = (all ? 'all on: ' + trims.map(([k]) => k).join(', ')
       : 'off: ' + offTrims.map(([k]) => k).join(', ')) + '\n(click to list)';
+    count.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); count.click(); } };
     count.onclick = () => {
       count.replaceWith(...trims.flatMap(([k, v]) => [pillFor(k, v), document.createTextNode(' ')]));
     };
@@ -1111,13 +1189,19 @@ async function tick() {
   $('savedAbs').textContent = kb(s.savings.saved) + ' of ' + kb(s.savings.before) + ' not sent';
   $('clients').textContent = s.clients.open;
   $('clientsTotal').textContent = s.clients.total + ' since start';
-  // Only clients old enough to have a real rate; the rest report null on purpose.
+  // Only clients old enough to have a real rate; the rest report null on purpose. Right after a
+  // restart nothing qualifies yet, and a bare dash read as broken — say what is happening.
   const rated = s.clients.list.filter((c) => c.eventBytesPerMin != null);
+  const collecting = !rated.length && s.clients.open > 0;
   $('evRate').textContent = rated.length
     ? kb(Math.round(rated.reduce((t, c) => t + c.eventBytesPerMin, 0) / rated.length))
-    : '—';
-  $('cacheHits').textContent = s.registryCache.hits;
-  $('cacheBytes').textContent = kb(s.registryCache.bytesServed) + ' HA never rebuilt';
+    : collecting ? 'collecting' : '—';
+  $('evRateSub').textContent = collecting ? 'needs a minute of traffic first' : 'per client, per minute';
+  const rc = s.registryCache;
+  $('cacheHits').textContent = rc.hits;
+  $('cacheBytes').textContent = (rc.hits + rc.misses) === 0 ? 'nothing asked for yet'
+    : rc.hits === 0 ? `warming up — ${rc.misses} miss${rc.misses === 1 ? '' : 'es'} so far`
+    : kb(rc.bytesServed) + ' HA did not have to rebuild';
 
   const msgs = Object.entries(s.byMessage || {});
   const msgTotal = msgs.reduce((t, [, v]) => t + v.bytes, 0) || 1;
@@ -1130,11 +1214,13 @@ async function tick() {
   const total = s.allowlist.instanceEntities || 0;
   rows('dash', Object.entries(s.allowlist.byDashboard || {}), ([name, n]) => {
     const res = (s.resources.byDashboard || {})[name] || {};
+    // Sizes through the same formatter as every other card: "13032" under a "KB" header was the
+    // one number on the page a reader had to convert by hand.
     return [
-      name, n, total ? ((n / total) * 100).toFixed(1) + '%' : '—',
-      res.kept != null ? res.kept + '/' + (res.kept + res.dropped) : '—',
-      res.keptKB != null ? res.keptKB : '—',
-      res.droppedKB != null ? res.droppedKB : '—',
+      name, n.toLocaleString(), total ? ((n / total) * 100).toFixed(1) + '%' : '—',
+      res.kept != null ? `${res.kept} of ${res.kept + res.dropped}` : '—',
+      res.keptKB != null ? kb(res.keptKB * 1024) : '—',
+      res.droppedKB != null ? kb(res.droppedKB * 1024) : '—',
     ];
   });
 
@@ -1184,15 +1270,18 @@ function drawChart(id, vals, times, colour, fmt, stepped) {
   });
   const area = n ? `${d} L ${W} ${H - PAD} L 0 ${H - PAD} Z` : '';
 
-  // A baseline, the series, and one label for the peak — enough to read a shape without
-  // pretending to be a full chart with axes.
+  // A baseline and the series — enough to read a shape without pretending to be a full chart
+  // with axes. The peak label is HTML beside the chart title, NOT an SVG <text>: the SVG is
+  // stretched to the card width with preserveAspectRatio="none", and text inside it stretched
+  // with it, so the one number on the chart was the one thing rendered wrong.
   // safe-html: every interpolation below is a number this function computed or a CSS variable
   // name from a fixed set — no value from the wire reaches it.
   el.innerHTML = `
     <line x1="0" y1="${H - PAD}" x2="${W}" y2="${H - PAD}" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>
     <path d="${area}" fill="${colour}" fill-opacity="0.16"/>
-    <path d="${d}" fill="none" stroke="${colour}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
-    <text x="4" y="14" font-size="11" fill="var(--muted)">${fmt(max)}</text>`;
+    <path d="${d}" fill="none" stroke="${colour}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+  const peak = $(id + '-peak');
+  if (peak) peak.textContent = 'peak ' + fmt(max);
   el.setAttribute('aria-label', `peak ${fmt(max)}`);
   if (times.length) el.setAttribute('title', `${new Date(times[0]).toLocaleString()} to ${new Date(times[times.length - 1]).toLocaleString()}`);
 }

@@ -54,6 +54,19 @@ test('a 4xx on a polled path is still kept as an error', () => {
   assert.equal(log.snapshot().errors.length, 1);
 });
 
+test('a browser asking for a favicon is not an error', () => {
+  // Every browser requests /favicon.ico unprompted and Home Assistant answers 404. The error ring
+  // was leading with those, ahead of anything that had actually failed. Only that 404 is skipped:
+  // a 500 on the same path is a real failure and stays.
+  hit({ path: '/favicon.ico', status: 404 });
+  hit({ path: '/apple-touch-icon.png', status: 404 });
+  hit({ path: '/favicon.ico', status: 500 });
+  const s = log.snapshot();
+  assert.equal(s.errors.length, 1);
+  assert.equal(s.errors[0].status, 500);
+  assert.equal(s.byStatusClass['4xx'], 2, 'they still count — they did happen');
+});
+
 test('the slowest requests are kept for the whole uptime', () => {
   // A p99 from an hour ago is exactly what a rolling window loses and a person wants.
   hit({ path: '/slow', ms: 9000 });

@@ -25,6 +25,11 @@ const ERROR_MAX = 200;
 // Paths that would otherwise dominate the ring without ever being interesting. The panel polls
 // its own JSON every few seconds; logging that is self-inflicted noise.
 const BORING = /\/(stats|history|access)\.json$|\/pin-resource$/;
+// 404s that are not failures of anything. Every browser asks for /favicon.ico on its own, Home
+// Assistant does not serve one at that path, and the error ring was leading with those — the one
+// place meant to surface a real failure opened with a request nobody made. Only a 404 on these
+// paths is skipped: a 500 on the same path would still be worth seeing.
+const EXPECTED_404 = /\/favicon\.ico$|\/apple-touch-icon(?:-precomposed)?\.png$/;
 
 const access = [];
 const errors = [];
@@ -53,7 +58,7 @@ export function record({ method, path, status, ms, bytes, ip, ua }) {
   };
 
   if (!BORING.test(path)) push(access, row, ACCESS_MAX);
-  if (status >= 400) push(errors, row, ERROR_MAX);
+  if (status >= 400 && !(status === 404 && EXPECTED_404.test(path))) push(errors, row, ERROR_MAX);
 
   // Keep the slowest requests for the whole uptime. A p99 that happened an hour ago is exactly
   // the thing a rolling window loses and a person actually wants.
