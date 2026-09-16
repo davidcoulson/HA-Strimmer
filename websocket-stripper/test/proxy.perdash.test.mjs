@@ -653,6 +653,43 @@ describe('resource trimming', () => {
     assert.ok(!urls.includes('/res/unrelated-widget.js'), 'a card no view references must be dropped');
   });
 
+  // A rule can pin a resource to ONE client. The case: a browser voice satellite's engine is
+  // registered as a resource and injected into every page, no dashboard places the card, so the
+  // trim rightly drops it everywhere — and the one panel that IS the satellite goes silent. The
+  // global list fixes that panel by handing the bundle to every other panel as well.
+  //
+  // Every loopback client is 127.0.0.1, so the negative case is a rule naming a client that is
+  // not this one: it must change nothing.
+  const ruleFor = (client, effect) => JSON.stringify([{ client, ...effect }]);
+  it('a client rule keeps a resource for that client, and for nobody else', async () => {
+    const p2 = await getFreePort(), p3 = await getFreePort();
+    const mine = spawnProxy({ mock, dashPaths: 'res-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1',
+      OVERRIDES: ruleFor('127.0.0.1', { resources_always_forward: ['unrelated-widget'] }) } });
+    const other = spawnProxy({ mock, dashPaths: 'res-dash', port: p3, extraEnv: { TRIM_RESOURCES: '1',
+      OVERRIDES: ruleFor('10.9.9.9', { resources_always_forward: ['unrelated-widget'] }) } });
+    try {
+      await mine.waitForLog(READY);
+      await other.waitForLog(READY);
+      const a = await resourcesFor(p2, '/res-dash');
+      assert.ok(a.includes('/res/unrelated-widget.js'), 'the client the rule names must be sent it');
+      assert.ok(a.includes('/res/my-fancy-card.js'), 'on top of what its dashboard already keeps');
+      assert.ok(!a.includes('/res/global-patcher.js'), 'and the trim still trims everything else');
+      const b = await resourcesFor(p3, '/res-dash');
+      assert.ok(!b.includes('/res/unrelated-widget.js'), 'a client the rule does not name gets nothing extra');
+    } finally { mine.kill(); other.kill(); }
+  });
+
+  it('a client rule can withhold a resource its dashboard keeps', async () => {
+    const p2 = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: 'res-dash', port: p2, extraEnv: { TRIM_RESOURCES: '1',
+      OVERRIDES: ruleFor('127.0.0.1', { resources_never_forward: ['my-fancy-card'] }) } });
+    try {
+      await px.waitForLog(READY);
+      const urls = await resourcesFor(p2, '/res-dash');
+      assert.ok(!urls.includes('/res/my-fancy-card.js'), 'the rule\'s never list wins over the dashboard');
+    } finally { px.kill(); }
+  });
+
   // Regression: a loose icon-prefix pattern turns `16:9` and `06:00` into the keys "16" and
 // "06", and a 2-char string appears in every minified bundle — so everything matches and
   // nothing is dropped. That silently disabled the whole feature (39/45 kept, 97KB saved).
@@ -1703,6 +1740,24 @@ describe('trim_extra_modules', () => {
       const html = await pageOf(port);
       assert.ok(html.includes('/res/icon-pack-x.js'), 'always must win over never');
     } finally { px.kill(); await mock.close(); }
+  });
+
+  // The same rule reaches the page. A module the resource trim dropped is removed from the page
+  // for everyone else and left in place for the one client whose rule names it — so the panel
+  // that needs an injected engine gets it at page load, and no other panel pays for it.
+  it('keeps an injected module for the client whose rule names it, and for nobody else', async () => {
+    const rule = (client) => JSON.stringify([{ client, resources_always_forward: ['unrelated-widget'] }]);
+    const mine = await boot({ TRIM_EXTRA_MODULES: '1', OVERRIDES: rule('127.0.0.1') });
+    const other = await boot({ TRIM_EXTRA_MODULES: '1', OVERRIDES: rule('10.9.9.9') });
+    try {
+      assert.ok((await pageOf(mine.port)).includes('/res/unrelated-widget.js'),
+        'the client the rule names keeps the module on its page');
+      assert.ok(!(await pageOf(other.port)).includes('/res/unrelated-widget.js'),
+        'a client the rule does not name still has it removed');
+    } finally {
+      mine.px.kill(); await mine.mock.close();
+      other.px.kill(); await other.mock.close();
+    }
   });
 });
 

@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026.09.16.9 — 2026-09-16
+
+**An override rule can now send a resource to one client.** Two new effects on `overrides`
+rules, `resources_always_forward` and `resources_never_forward`, take the same URL fragments as
+the global lists and apply them to the connections the rule matches.
+
+The case that needed it. The Voice Satellite integration registers its 669KB bundle twice: as a
+Lovelace resource, so `custom:voice-satellite-card` can be placed on a dashboard, and injected
+into every page through `frontend.add_extra_js_url`. On a kiosk it runs in the second mode — the
+bundle's own startup code reads the panel's stored config and starts the engine — and no dashboard
+places the card. So the resource trim dropped it for every dashboard, correctly, and from `.15.37`
+`trim_extra_modules` applied that same verdict to the injected import. Every browser satellite went
+silent, with the dashboard rendering perfectly. The global `resources_always_forward` brings it
+back by handing the bundle to every other panel as well, which is most of what the trim saved on
+a small dashboard. A rule keyed to the panel's address sends it to that panel alone:
+
+```yaml
+overrides:
+  - client: 10.2.4.129
+    devices: ["Test Panel"]
+    resources_always_forward: ["voice-satellite-card"]
+```
+
+- Reaches both places a resource is decided: the `lovelace/resources` reply, and the page's
+  injected-module list when `trim_extra_modules` is on. A rule's own lists come first — never,
+  then always — then the dashboard's decision.
+- A rule keyed to a user, role or sign-in method applies to the resource list only: a page load
+  carries no token to evaluate it against. The frontend imports every resource in that list, so
+  the bundle still loads.
+- The console's rule wizard offers both fields, suggesting the resources the trim has dropped
+  somewhere, and lists them on a saved rule.
+- Tests cover the resource list and the page, positive and negative: the named client gets the
+  resource, a client the rule does not name does not, and a never rule withholds one the dashboard
+  keeps.
+
+---
+
 ## 2026.09.16.8 — 2026-09-16
 
 **The last of the housekeeping.**

@@ -80,6 +80,8 @@ matchers as you like and they must all hold, then the effects apply.
 | `always_forward` | Entities to send, literal or `/regex/`. |
 | `never_forward` | Entities to withhold. The global `never_forward` still wins last. |
 | `devices` | Whole **devices** by registry name or id, pulling in every entity that device owns — which keeps working when an integration adds entities in a later release. |
+| `resources_always_forward` | Lovelace resources to send this connection whatever its dashboard references — URL fragments, literal or `/regex/`, like the global list. This is how one panel gets a bundle that runs on load without a card: a browser voice satellite's engine is injected into every page *and* registered as a resource, no dashboard places the card, so the trim rightly drops it everywhere, and the one panel that *is* the satellite needs it back. The global list would hand that bundle to every other panel too. Reaches both the resource list and, with `trim_extra_modules`, the page. |
+| `resources_never_forward` | Resources to withhold from this connection. Wins over the rule's own always list. |
 
 ```yaml
 overrides:
@@ -91,9 +93,11 @@ overrides:
   - role: admin
     always_forward: ["/^update\\./"]
 
-  # "this panel IS a voice satellite, wherever it navigates"
+  # "this panel IS a voice satellite, wherever it navigates" — its entities, and the engine
+  # that runs it, which no dashboard names and no other panel needs
   - client: 10.2.4.109
     devices: ["Basement Stairs Panel"]
+    resources_always_forward: ["voice-satellite-card"]
 
   # "every Kiosk Satellite panel arriving through the IoT entry point"
   - mdns_kind: Kiosk Satellite
@@ -105,7 +109,9 @@ overrides:
 known. `dashboard`, `client`, `entrypoint`, `mdns_kind` and `user_agent` are known when the socket
 opens. `user`, `role` and `auth_provider` are **identity**, which only resolves once the browser's
 auth token has been checked — so a rule naming any of them holds the connection's messages until
-that lookup returns. Connections whose dashboard no such rule is scoped to skip the lookup
+that lookup returns. One consequence for the resource effects: a page load carries no token, so an
+identity-keyed rule cannot be applied to the page's injected-module list. It still applies to the
+resource list, and the frontend imports every resource in that list, so the bundle loads either way. Connections whose dashboard no such rule is scoped to skip the lookup
 entirely, so scoping your rules is also a speed optimisation.
 
 **A rule with no matcher is ignored** and logged. That is what the global `always_forward` /

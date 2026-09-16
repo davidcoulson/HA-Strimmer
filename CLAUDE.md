@@ -214,6 +214,14 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   headers; **httpxy sets each only when absent**. Both satisfy HA. A test asserting "the chain
   has exactly 2 entries" pins the library instead of the requirement and fails on a swap that
   broke nothing — which is exactly what happened during the httpxy migration.
+- **A resource can be sent to ONE client (`resources_always_forward` on an `overrides` rule).**
+  The Voice Satellite bundle is registered as a resource AND injected into every page, runs
+  headless from the panel's stored config, and is placed on no dashboard — so the resource trim
+  drops it everywhere and `trim_extra_modules` then strips the injected import too. Every browser
+  satellite goes silent with the dashboard rendering perfectly. The global list fixes it by giving
+  the bundle to every panel; a client rule gives it to the one that is the satellite. The rule's
+  lists are consulted in `keepResourceFor` (ws reply) and `stripExtraModules` (page); identity-keyed
+  rules reach only the former, since a page load has no token.
 - **The proxy library is `httpxy`, not `http-proxy`.** Three API differences bite:
   `createProxyServer` is a **named** export; **`ws()` is `(req, socket, options, head)`** where
   node-http-proxy was `(req, socket, head)` — passing `head` third spreads a Buffer into the

@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.16.8';
+const VERSION = '2026.09.16.9';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -394,6 +394,15 @@ function compileOverride(o) {
     devices: toList(o.devices),
     always: parseRules(o.always_forward),
     never: parseRules(o.never_forward),
+    // Lovelace resources this connection is sent regardless of what its dashboard references,
+    // and resources withheld from it. URL fragments matched as substrings, exactly like the
+    // global `resources_always_forward` / `resources_never_forward` lists — but scoped to the
+    // rule. The case that needed it: a browser voice satellite's engine is injected into every
+    // page AND registered as a resource, no dashboard places the card, so the trim rightly drops
+    // it everywhere — and the one panel that IS the satellite stops working. The global list
+    // would hand that 669KB bundle to every other panel too.
+    resAlways: parseRules(o.resources_always_forward),
+    resNever: parseRules(o.resources_never_forward),
     // Filled in by resolveConnRules once DNS and the device registry are available.
     ips: new Set(), cidr: null, deviceEntities: [],
   };
@@ -1821,6 +1830,17 @@ function pathProviders(type, rows, pathFragDf, sharedFrags, sharedMax) {
   return hits.length ? new Set(hits.map((r) => resourcePath(r.url))) : null;
 }
 
+// The per-CONNECTION answer, layered on the per-dashboard one. A rule that names this client (or
+// this user) is the most specific statement available about what it needs, so its own lists come
+// first: never, then always, then whatever its dashboard decided. `keep` is null for a connection
+// that could not be attributed, which is sent everything, as before.
+function keepResourceFor(url, keep, rr) {
+  const u = String(url ?? '');
+  if (rr && matchesUrl(rr.never, u)) return false;
+  if (rr && matchesUrl(rr.always, u)) return true;
+  return !keep?.size || keep.has(resourcePath(u));
+}
+
 function keepResource(url, keys, providers = null) {
   if (matchesUrl(RES_NEVER, url)) return false;
   if (matchesUrl(RES_ALWAYS, url)) return true;
@@ -1884,12 +1904,18 @@ const EXTRA_MODULE_RE = /\bimport\("([^"]+)"\)\.catch\(function \(err\) \{\s*con
 // catch a log line at the moment it happened.
 const EXTRA_MODULES_BY_DASH = new Map();   // dash -> { removed: [...], kept: [...] }
 
-function stripExtraModules(html, dash) {
+function stripExtraModules(html, dash, rr = null) {
   const keep = RESOURCES_BY_DASH.get(dash);
   const dropped = [];
   const survived = [];
   const out = html.replace(EXTRA_MODULE_RE, (block, url) => {
     const path = resourcePath(url);
+    // The requesting client's own rules first, same order as keepResourceFor. Only rules decided
+    // at connection time can reach here — a page load carries no auth token, so a rule keyed to a
+    // user cannot be evaluated for it. That rule still keeps the resource in lovelace/resources,
+    // and the frontend imports every resource in that list, so the bundle loads either way.
+    if (rr && matchesUrl(rr.never, url)) { dropped.push(path); return ''; }
+    if (rr && matchesUrl(rr.always, url)) { survived.push(path); return block; }
     if (matchesUrl(RES_ALWAYS, url)) return block;
     const isDroppedResource = RESOURCE_ALL_PATHS.has(path) && keep?.size && !keep.has(path);
     if (!isDroppedResource && !matchesUrl(RES_NEVER, url)) { survived.push(path); return block; }
@@ -2421,8 +2447,13 @@ function rulesForConnection(ctx) {
     always: hits.flatMap((r) => r.always),
     never: hits.flatMap((r) => r.never),
     entities: hits.flatMap((r) => r.deviceEntities),
+    resAlways: hits.flatMap((r) => r.resAlways ?? []),
+    resNever: hits.flatMap((r) => r.resNever ?? []),
   };
 }
+
+// The resource half of a rule hit, in the shape the bridge and the page rewrite both consume.
+const resRulesOf = (hit) => ({ always: hit?.resAlways ?? [], never: hit?.resNever ?? [] });
 
 // Widen/narrow one connection's allowlist by its client rules. Returns the SAME set when nothing
 // changed, so the common case allocates nothing and the caller can tell whether a rule applied.
@@ -2488,6 +2519,8 @@ function rulesForUser(user, ctx) {
     always: hits.flatMap((r) => r.always),
     never: hits.flatMap((r) => r.never),
     entities: hits.flatMap((r) => r.deviceEntities),
+    resAlways: hits.flatMap((r) => r.resAlways ?? []),
+    resNever: hits.flatMap((r) => r.resNever ?? []),
   };
 }
 
@@ -2792,7 +2825,9 @@ async function serveDashboardPage(req, res, dash) {
   const type = r.headers.get('content-type') || '';
   if (!r.ok || !/text\/html/i.test(type)) return false;   // not ours to touch
   const body = await r.text();
-  const { html, dropped } = stripExtraModules(body, dash);
+  const rt = classify(req);
+  const rr = resRulesOf(rulesForConnection({ ip: rt.ip, ua: req.headers['user-agent'] || null, dash, host: rt.host }));
+  const { html, dropped } = stripExtraModules(body, dash, rr);
   if (!dropped.length) return false;                      // nothing to do; let the proxy serve it
 
   const out = Buffer.from(html, 'utf8');
@@ -3050,7 +3085,8 @@ server.on('upgrade', (req, socket, head) => {
     // whether the dashboard could be attributed at all — the point of pinning to a device is
     // that it holds even when the page changes.
     const ruleCtx = { ip: rt.ip, ua: req.headers?.['user-agent'] || null, dash, host: rt.host };
-    let set = applyClientRules(dashSet, rulesForConnection(ruleCtx));
+    const connRules = rulesForConnection(ruleCtx);
+    let set = applyClientRules(dashSet, connRules);
     const pinned = set !== dashSet;
     const afterRules = set.size;
     // Entities this client previously told us it needs, by naming itself (see learnClientEntity).
@@ -3074,6 +3110,7 @@ server.on('upgrade', (req, socket, head) => {
     const device = discovery.lookup(rt.ip);
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
       ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned, fwd: forwardHeadersFor(req),
+      resRules: resRulesOf(connRules),
       device: device ? { kind: device[0].kind, name: device[0].name, version: device[0].version } : null,
       origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
     }));
@@ -3135,6 +3172,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   });
   let userChecked = false;
   let learnedKick = false;   // only ever drop a connection once for a newly-learned identity
+  // Resource rules for THIS connection: the client-matched ones from the upgrade, joined by the
+  // user-matched ones once identity resolves. Consulted when its lovelace/resources reply is
+  // trimmed, which the frontend asks for after auth — so both halves are known by then.
+  const resRules = { always: [...(meta.resRules?.always ?? [])], never: [...(meta.resRules?.never ?? [])] };
   // This connection's cache identity: a signature of the allowlist it actually ended up with.
   //
   // Computed lazily and memoised, because `allow` is still moving when the connection opens —
@@ -3268,6 +3309,8 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         }
         if (extra) {
           allow = applyUserRules(allow, extra);
+          resRules.always.push(...(extra.resAlways ?? []));
+          resRules.never.push(...(extra.resNever ?? []));
           // The set changed, so any signature taken before now is stale. The gate holds every
           // message until this resolves, and the cache lookups run inside the held thunks
           // (cachedOrForward), so none should have been taken — but that was once untrue, and
@@ -3760,13 +3803,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (STRIP && TRIM_RESOURCES && msg && msg.type === 'result' && resourceIds.has(msg.id) && Array.isArray(msg.result)) {
       resourceIds.delete(msg.id);
       const keep = dash ? RESOURCES_BY_DASH.get(dash) : null;
-      if (keep?.size) {
+      if (keep?.size || resRules.always.length || resRules.never.length) {
         const beforeB = sized(msg.result);
         const before = msg.result.length;
-        msg.result = msg.result.filter((r) => keep.has(resourcePath(r?.url)));
+        msg.result = msg.result.filter((r) => keepResourceFor(r?.url, keep, resRules));
         if (msg.result.length !== before) {
           changed = true;
-          logThrottled('resources', `lovelace resources trimmed ${before} -> ${msg.result.length} (${dash})`);
+          logThrottled('resources', `lovelace resources trimmed ${before} -> ${msg.result.length} (${dash ?? 'unattributed'})`);
         }
         cat = 'resources';
         frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });

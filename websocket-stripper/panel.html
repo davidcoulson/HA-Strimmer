@@ -1192,7 +1192,20 @@ function pinFragmentFor(url) {
   return dir && dir !== 'local' && dir !== 'hacsfiles' ? dir : file.replace(/\.js$/, '');
 }
 
+// Every resource the trim has dropped for at least one dashboard, as the fragment the panel's
+// pin button would use. Kept from the last stats poll for the override wizard's resource fields,
+// so a rule can be built by picking rather than by typing a path from memory.
+let RESOURCE_SUGGESTIONS = [];
+const resourceSuggestions = () => RESOURCE_SUGGESTIONS;
+function noteResourceSuggestions(s) {
+  const r = s.resources || {};
+  const urls = new Set((r.droppedByAll || []).map((x) => x.url));
+  for (const rows of Object.values(r.droppedByDashboard || {})) rows.forEach((x) => urls.add(x.url));
+  RESOURCE_SUGGESTIONS = [...new Set([...urls].map(pinFragmentFor))].sort();
+}
+
 function renderTuning(s) {
+  noteResourceSuggestions(s);
   const rows = (s.resources && s.resources.droppedByAll) || [];
   const pinned = new Set((s.resources && s.resources.alwaysForward) || []);
   const tb = document.querySelector('#tuning tbody');
@@ -1490,6 +1503,8 @@ function overrideEffect(kind, r) {
     if (r.always_forward?.length) bits.push(['forward', r.always_forward]);
     if (r.never_forward?.length) bits.push(['never forward', r.never_forward]);
     if (r.devices?.length) bits.push(['devices', r.devices]);
+    if (r.resources_always_forward?.length) bits.push(['send resources', r.resources_always_forward]);
+    if (r.resources_never_forward?.length) bits.push(['never send resources', r.resources_never_forward]);
   }
   return bits;
 }
@@ -1672,9 +1687,13 @@ function buildRule(key, values, effects) {
   const always = list(effects.always_forward || '');
   const never = list(effects.never_forward || '');
   const devices = list(effects.devices || '');
+  const resAlways = list(effects.resources_always_forward || '');
+  const resNever = list(effects.resources_never_forward || '');
   if (always.length) rule.always_forward = always;
   if (never.length) rule.never_forward = never;
   if (devices.length) rule.devices = devices;
+  if (resAlways.length) rule.resources_always_forward = resAlways;
+  if (resNever.length) rule.resources_never_forward = resNever;
   return rule;
 }
 
@@ -2000,6 +2019,11 @@ function overrideWizard(d, save, say, addBtn) {
     // Whole devices are offered on every rule, not just device-matched ones: naming a device is
     // about what to SEND, which is independent of how the connection was identified.
     pick('Whole devices', 'device', 'search devices by name', 'devices');
+    // Resources are offered on every rule too, for the same reason as devices: which bundle a
+    // connection needs is about what to SEND. The suggestions are the resources the trim has
+    // dropped somewhere, since a resource kept everywhere needs no rule.
+    pick('Send resources', 'resource', 'a URL fragment, e.g. voice-satellite-card', 'resources_always_forward', resourceSuggestions());
+    pick('Never send resources', 'resource', 'a URL fragment or /regex/', 'resources_never_forward', resourceSuggestions());
 
     actions.append(button('Add override', () => {
       // A value typed but not committed with Enter is still what the person meant.
@@ -2011,7 +2035,7 @@ function overrideWizard(d, save, say, addBtn) {
       // A rule that matches something and changes nothing is a half-finished edit, and it is
       // invisible once saved — it just sits in the list doing nothing.
       const doesSomething = Boolean(rule.always_forward || rule.never_forward || rule.devices
-        || rule.assume_dashboard);
+        || rule.assume_dashboard || rule.resources_always_forward || rule.resources_never_forward);
       if (!doesSomething) return fail('This rule would not change anything — fill in at least one effect.');
 
       const option = d.options.find((o) => o.key === key);
