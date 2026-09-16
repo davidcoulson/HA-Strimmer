@@ -83,6 +83,8 @@ describe('what the network may read', () => {
     const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
     await c.authed;
     c.send({ type: 'subscribe_entities' });
+    // So the translations diagnostic has something to report.
+    await c.rpc({ type: 'frontend/get_translations', language: 'en', category: 'entity_component' });
     await new Promise((r) => setTimeout(r, 250));
     try {
       const lan = await req(sp, '/stats.json');
@@ -121,10 +123,15 @@ describe('what the network may read', () => {
       // a dashboard already sees both. Redacting them cost the health sensor detail and bought
       // nothing, so the line is drawn at identity rather than at "anything descriptive".
       assert.ok(d.allowlist.byDashboard, 'configuration aggregates are kept');
+      // The translations breakdown is keyed by integration name — an inventory of what is
+      // installed. The counts stay; the keys do not.
+      assert.ok(d.translations && typeof d.translations.keys === 'number', 'the size stays');
+      assert.ok(!('byPrefix' in d.translations), 'the per-integration keys do not');
 
       // And through Ingress the console still sees everything.
       const ing = JSON.parse((await req(sp, '/stats.json', { headers: ING })).body);
       assert.ok(ing.clients.list.length >= 1, 'the console still gets the detail');
+      assert.ok(ing.translations.byPrefix['component.tuya_local'], 'including the breakdown');
       assert.ok(!ing.redacted);
     } finally { c.close(); }
   });

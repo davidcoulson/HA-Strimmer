@@ -284,7 +284,7 @@ test('a renamed option shows the value its old spelling carries', async () => {
   }
 
   const src = read('ha_ws_trim_proxy.mjs');
-  assert.match(src, /value: eff\[k\] !== undefined \? eff\[k\] : eff\[legacyNameFor\(k\)\]/,
+  assert.match(src, /value: eff\[k\] !== undefined \? eff\[k\]\s*: eff\[legacyNameFor\(k\)\] !== undefined \? eff\[legacyNameFor\(k\)\]/,
     'the config endpoint must fall back to the old spelling for a value');
 });
 

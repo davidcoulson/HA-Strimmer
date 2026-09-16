@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.16.7';
+const VERSION = '2026.09.16.8';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -4018,11 +4018,53 @@ function redactForNetwork(snap) {
   // internal names rather than by reasoning about the field list — which is the only way this
   // kind of miss gets caught, and why the test does the same.
   if (out.paths) delete out.paths;
+  // The translations breakdown is keyed by integration — `component.tuya_local`, `component.hue`
+  // — which is a list of what is installed in the house. The counts and size stay, since that is
+  // what the diagnostic is for; the per-integration keys do not.
+  if (out.translations && typeof out.translations === 'object') {
+    const { byPrefix, ...rest } = out.translations;
+    out.translations = rest;
+  }
   // Dashboard names and installed-card paths are deliberately KEPT. They are configuration, not
   // identity: no person, machine or credential is named by them, and anyone who can load a
   // dashboard already sees both. Stripping them bought nothing and cost the health sensor the
   // detail it reports.
   return out;
+}
+
+// What each option RESOLVED to, for the console to show when no source has set it.
+//
+// The console reported the raw option value, which is undefined for anything unset — so on a
+// standalone container, where everything comes from the environment, every switch rendered off
+// while `trim_entities` was plainly on. Add-on installs are only partly spared: Supervisor fills
+// in defaults for required keys but omits the optional ones (`bool?` in the schema), so
+// `mqtt_sensors` and `mdns_discovery` showed off on every install that had never touched them.
+// These are the same constants the proxy runs on, so what the console shows is what is true.
+function effectiveFallback() {
+  const envJson = (name) => { try { return process.env[name] ? JSON.parse(process.env[name]) : []; } catch { return []; } };
+  return {
+    trim_entities: STRIP, by_dashboard: PER_DASH, trim_registries: TRIM_REGISTRIES,
+    compress_websocket: COMPRESS_WS, trim_resources: TRIM_RESOURCES,
+    trim_extra_modules: TRIM_EXTRA_MODULES, trim_services: TRIM_SERVICES, trim_repairs: TRIM_REPAIRS,
+    trim_themes: TRIM_THEMES, trim_translations: TRIM_TRANSLATIONS,
+    mqtt_sensors: MQTT_SENSORS, mdns_discovery: MDNS_ENABLED, client_api_access: CLIENT_API_ACCESS,
+    dashboards: DASH_PATHS,
+    always_forward: toList(process.env.ALWAYS_FORWARD),
+    never_forward: toList(process.env.NEVER_FORWARD),
+    exclude_device_categories: EXCLUDE_DEVICE_CATEGORIES,
+    resources_always_forward: toList(process.env.RESOURCES_ALWAYS_FORWARD),
+    resources_never_forward: toList(process.env.RESOURCES_NEVER_FORWARD),
+    // Raw, not the resolved default set: an empty list here means "the built-in set", which is
+    // what the row's emptyMeans text explains.
+    mdns_services: toList(process.env.MDNS_SERVICES),
+    cert_monitor_host: CERT_HOST,
+    client_api_allow: toList(process.env.CLIENT_API_ALLOW),
+    overrides: envJson('OVERRIDES'),
+    dashboard_overrides: envJson('DASHBOARD_OVERRIDES'),
+    user_overrides: envJson('USER_OVERRIDES'),
+    client_overrides: envJson('CLIENT_OVERRIDES'),
+    user_agent_dashboards: envJson('UA_DASHBOARDS'),
+  };
 }
 
 function requireIngress(req, res, what) {
@@ -4204,6 +4246,7 @@ const statsServer = http.createServer((req, res) => {
         if (ib === -1) return -1;
         return ia - ib;
       });
+    const fallback = effectiveFallback();
     const body = JSON.stringify({
       // Writable only when the store has somewhere to live. Without /data every save would be
       // lost on restart, and a console that silently forgets is worse than one that says it is
@@ -4222,8 +4265,11 @@ const statsServer = http.createServer((req, res) => {
       options: keys.map((k) => ({
         key: k,
         // Read through the old spelling too, or a config that predates a rename leaves the
-        // canonical row blank while the setting is plainly in effect.
-        value: eff[k] !== undefined ? eff[k] : eff[legacyNameFor(k)],
+        // canonical row blank while the setting is plainly in effect — and when neither source
+        // has set it, what the proxy actually resolved it to (see effectiveFallback).
+        value: eff[k] !== undefined ? eff[k]
+          : eff[legacyNameFor(k)] !== undefined ? eff[legacyNameFor(k)]
+          : fallback[k],
         type: EDITABLE_KEYS[k] || null,
         section: OPTIONS[k]?.section || null,
         // What an empty value means, when that is not simply "empty".

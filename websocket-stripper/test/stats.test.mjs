@@ -927,6 +927,42 @@ describe('config endpoints', () => {
 // The panel is served on its own port as well as through Ingress, and writes are Ingress-only.
 // Without this flag every control renders as editable on the direct port and then fails with a
 // 403 on click — a console that offers an edit it cannot accept.
+// A standalone container is configured from the environment, so nothing is in the options file
+// and every option is "unset" as far as the store is concerned. The console reported that raw
+// value — undefined — and rendered every switch off while trim_entities was plainly on.
+describe('config values fall back to what the proxy resolved', () => {
+  it('reports defaults and env-driven settings as what is actually in effect', async () => {
+    const mock = await startMockHa();
+    const port = await getFreePort(); const sp = await getFreePort();
+    const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash,auto-dash',
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1',
+        TRIM_THEMES: '1', ALWAYS_FORWARD: 'light.kitchen,/^sensor\\./', MQTT_SENSORS: '0' } });
+    try {
+      let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+      const deadline = Date.now() + 15000;
+      while (!/for live allowlist updates/.test(out)) {
+        if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const d = await new Promise((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port: sp, path: '/config.json',
+          headers: { 'x-ingress-path': '/api/hassio_ingress/test' } }, (res) => {
+          let b = ''; res.on('data', (c) => b += c); res.on('end', () => resolve(JSON.parse(b)));
+        }).on('error', reject);
+      });
+      const val = (k) => d.options.find((o) => o.key === k)?.value;
+      assert.equal(val('trim_entities'), true, 'on by default, and must say so');
+      assert.equal(val('trim_themes'), true, 'set through the environment');
+      assert.equal(val('mqtt_sensors'), false, 'switched off through the environment');
+      assert.equal(val('mdns_discovery'), true, 'an optional key Supervisor would omit, at its default');
+      assert.deepEqual(val('dashboards'), ['test-dash', 'auto-dash']);
+      assert.deepEqual(val('always_forward'), ['light.kitchen', '/^sensor\\./'], 'lists keep their written form');
+      assert.deepEqual(val('overrides'), [], 'an unset list is an empty list, not undefined');
+    } finally { proxy.kill(); await mock.close(); }
+  });
+});
+
 describe('config editability is reported per request', () => {
   it('says a direct request cannot edit, even though the add-on can write', async () => {
     const mock = await startMockHa();

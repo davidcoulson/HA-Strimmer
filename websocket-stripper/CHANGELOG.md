@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.09.16.8 — 2026-09-16
+
+**The last of the housekeeping.**
+
+- **The console shows what every option resolved to.** It reported the raw option value, which
+  is undefined for anything unset — so on a standalone container, where everything comes from the
+  environment, every switch rendered off while `trim_entities` was plainly on. Add-on installs were
+  only partly spared: Supervisor fills in defaults for required keys but omits the optional ones,
+  so `mqtt_sensors` and `mdns_discovery` showed off on any install that had never touched them.
+  `/config.json` now falls back to the constants the proxy actually runs on. A test pins it.
+- **`stats.json` off Ingress no longer lists installed integrations.** The translations
+  diagnostic is broken down by `component.<integration>`, which on the open port was an inventory
+  of what is in the house. The counts and size stay for the health sensor; the keys are only
+  served through Ingress.
+- **DOCS.md** describes the console's theme control, the Clients column toggle, the flow diagram
+  and the snackbar, and no longer calls the switches checkboxes.
+
+---
+
 ## 2026.09.16.7 — 2026-09-16
 
 **Housekeeping.** Every stats snapshot also took a snapshot of the request log, sorted its

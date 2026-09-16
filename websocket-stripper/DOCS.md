@@ -206,7 +206,16 @@ It shows:
   received, and the difference;
 - **per-dashboard** entity counts against the size of the instance, and resource kept/dropped
   figures when `trim_resources` is on;
-- **the last 24 hours** — data not sent, clients connected, and update traffic, as charts.
+- **the last 24 hours** — data not sent, clients connected, and update traffic, as charts;
+- **how clients reach this** — a flow diagram from where each client was, through how it
+  arrived (direct, a reverse proxy, Cloudflare, Ingress), to the hostname it dialled.
+
+It is drawn in Home Assistant's own colours and type. Ingress passes none of HA's theme into the
+frame, so the page can only follow the operating system — a dark HA on a light desktop would get
+a light panel in a dark frame. The **Auto / Light / Dark** control in the header pins it, per
+browser. The Clients table hides its six diagnostic columns on a narrow screen; **All columns**
+in the card heading shows them, and the choice is remembered. Anything the console changes
+reports the outcome in a snackbar at the bottom of the screen.
 
 Two JSON endpoints back it, both read-only:
 
@@ -231,9 +240,10 @@ sensor:
 
 Options can be changed from the console instead of the add-on's Configuration tab, grouped into
 sections — Trimming, Dashboards and entities, Custom cards, Overrides, Device discovery,
-Monitoring, Websocket, Panel status API. Booleans are checkboxes, lists are their items with a
+Monitoring, Websocket, Panel status API. Booleans are switches, lists are their items with a
 remove button and an add box, and the override rules get a list and a wizard rather than a YAML
-block.
+block. Every row shows what the option is actually resolved to, so an option nothing has set
+still reads as its default rather than as blank.
 
 This exists because the add-on's options have outgrown what a Supervisor schema can express:
 nested groups do not render in the Configuration tab at all, sub-options cannot carry
