@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.09.16.10 — 2026-09-16
+
+**Binary frames cross the bridge uncompressed, in both directions.** Both websocket legs
+negotiate permessage-deflate for the JSON traffic, and until now every frame went through it —
+including a browser voice satellite's PCM audio chunks on the way to Home Assistant and camera or
+media frames on the way back. Those bytes are incompressible or already compressed, so deflate
+only added CPU on both ends and a little latency to every audio chunk between the wake word and
+the reply. Found while breaking down voice-assist latency end to end: the proxy adds no parsing to
+the audio path, and this was the one thing it still did to it. `compress: false` on binary sends,
+text frames unchanged.
+
+---
+
 ## 2026.09.16.9 — 2026-09-16
 
 **An override rule can now send a resource to one client.** Two new effects on `overrides`

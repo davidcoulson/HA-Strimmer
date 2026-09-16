@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.16.9';
+const VERSION = '2026.09.16.10';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3208,7 +3208,17 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // Bounded: a client that never gets answers must not grow this without limit.
   const pendingTypes = new Map();
   const queue = []; let haOpen = false;
-  const toHA = (s) => { if (haOpen) haWs.send(s); else queue.push(s); };
+  // Binary frames go out uncompressed, in both directions. The HA-side socket negotiates
+  // permessage-deflate for the JSON traffic, but a binary frame here is a voice satellite's PCM
+  // audio chunk on the way up or a camera/media frame on the way down — already-compressed or
+  // incompressible bytes that deflate can only make later and warmer. Measured in the voice
+  // path, where every 20-100ms audio chunk crossing this hop is one more thing between the
+  // wake word and the reply.
+  const BIN = { binary: true, compress: false };
+  const toHA = (s) => {
+    if (!haOpen) return queue.push(s);
+    if (Buffer.isBuffer(s)) haWs.send(s, BIN); else haWs.send(s);
+  };
 
   // ---- backpressure (see BP_HIGH_BYTES) ----
   // `bufferedAmount` is what `ws` has accepted for this browser and not yet handed to the
@@ -3280,7 +3290,11 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     held.forEach(flush);
   };
 
-  haWs.on('open', () => { haOpen = true; queue.forEach((s) => haWs.send(s)); queue.length = 0; });
+  haWs.on('open', () => {
+    haOpen = true;
+    queue.forEach((s) => (Buffer.isBuffer(s) ? haWs.send(s, BIN) : haWs.send(s)));
+    queue.length = 0;
+  });
 
   browserWs.on('message', (raw, isBinary) => {
     // Binary frames are forwarded byte-for-byte. They are not JSON, and running toString()
@@ -3874,7 +3888,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // handed to the socket, so the gap between calling send() and the callback firing IS the
   // time the payload spent going out. On a LAN that is ~0; on a phone over cellular it is the
   // link, which is exactly the number worth reporting.
-  function safeSend(s, cb) { try { if (browserWs.readyState === 1) { browserWs.send(s, cb); bpCheck(); } } catch {} }
+  function safeSend(s, cb) {
+    try {
+      if (browserWs.readyState !== 1) return;
+      if (Buffer.isBuffer(s)) browserWs.send(s, BIN, cb); else browserWs.send(s, cb);
+      bpCheck();
+    } catch {}
+  }
   const close = () => {
     openBridges.delete(close); stats.connClose(connId);
     if (bpTimer) { clearInterval(bpTimer); bpTimer = null; }
