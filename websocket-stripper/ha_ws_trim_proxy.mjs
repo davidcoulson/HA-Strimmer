@@ -40,6 +40,7 @@ import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
 import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
+import { resourceInvariantProblems } from './resource_invariants.mjs';
 
 // Compiled bytecode is cached between runs, which is worth having because this add-on restarts
 // far more often than a typical service — every config change, every rebuild — and each restart
@@ -75,7 +76,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.15.35';
+const VERSION = '2026.09.15.36';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2054,6 +2055,23 @@ async function buildResources(rpc, keysByDash) {
       return row;
     })
     .sort((a, b) => b.kb - a.kb);
+
+  // Check the report against itself before printing it. See resource_invariants.mjs for why:
+  // this list is the one diagnostic a reader cannot verify by looking at a dashboard, and acting
+  // on a wrong one means undoing the trim. The warning goes ABOVE the list deliberately, so a
+  // reader meets "these numbers are inconsistent" before they meet the numbers.
+  const invariantProblems = resourceInvariantProblems({
+    total: rows.length,
+    keptByDash: new Map([...byDash].map(([d, keep]) => [d, keep.size])),
+    droppedByAll: RESOURCE_DROPPED_ALL.map((r) => r.url),
+    droppedByDash: new Map([...RESOURCE_DROPPED_BY_DASH]
+      .map(([d, list]) => [d, new Set(list.map((r) => r.url))])),
+  });
+  for (const p of invariantProblems) {
+    warn(`  resources: DIAGNOSTIC BUG — ${p}. Trimming itself is unaffected; this is the report `
+      + `being wrong, so do not act on the list below.`);
+  }
+
   if (droppedByAll.length) {
     const kb = droppedByAll.reduce((t, r) => t + (RESOURCE_CACHE.get(r.url)?.bytes || 0), 0) / 1024;
     log(`  resources: ${droppedByAll.length} dropped by ALL dashboards (no dashboard references them), ${kb.toFixed(0)}KB.`);

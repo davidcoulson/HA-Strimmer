@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026.09.15.36 — 2026-09-15
+
+**The resource diagnostics now check themselves.**
+
+The previous release fixed a report that was lying — "dropped by ALL dashboards" named 42 of 42
+resources on an install where one dashboard alone kept 21. What's notable is how it was caught: not
+by a test, but by **arithmetic**. A resource dropped by every dashboard cannot be one some
+dashboard keeps, so that set is bounded by what the most generous dashboard leaves out. 42 was
+impossible against a ceiling of 21.
+
+That reasoning now runs at startup, in [`resource_invariants.mjs`](resource_invariants.mjs). Two
+checks, each derived **differently** from the values it checks, so a bug in one path cannot hide in
+the other:
+
+1. **Counting** — the dropped-by-all set cannot exceed `total − (largest keep set)`.
+2. **Set membership** — computed from the per-dashboard drop lists rather than the union used to
+   build the report: if a resource really is dropped everywhere, every dashboard's own list has it.
+
+A violation logs `DIAGNOSTIC BUG` **above** the suspect list, saying the trim is unaffected and not
+to act on what follows — because the remedy that report recommends is `resources_always_forward`,
+and acting on a wrong one un-trims the resource list one bundle at a time.
+
+Deliberately **not** checked: `kept + dropped == total`. That relation is true by construction
+(`dropped` is defined as `total − kept`), so it can never fail — a check like that is decoration,
+and there is a test asserting it is not what trips the checker.
+
+Proven end to end rather than asserted: reintroducing the original bug makes both checks fire at
+boot; restoring the fix silences them. 418 tests.
+
+---
+
 ## 2026.09.15.35 — 2026-09-15
 
 **The "dropped by ALL dashboards" warning was naming every resource you have.** Trimming itself
