@@ -134,6 +134,40 @@ describe('proxy integration (strip on)', () => {
   // The intercepted websocket is the one connection the proxy opens itself, so httpxy's xfwd
   // never touched it and Home Assistant saw every trimmed panel as the proxy's own address —
   // which is what HA's ip_ban keys on, so one panel with a stale token could have banned them all.
+  // Binary frames are the audio path: a browser voice satellite streams PCM chunks up through
+  // this bridge and camera/media frames come down it. Nothing here may parse, re-encode or
+  // re-frame them, and since 2026.09.16.10 they are sent uncompressed on both legs — so this
+  // pins the only property that matters: every byte arrives, in order, unchanged.
+  it('relays binary frames byte-for-byte in both directions', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/websocket`);
+    const down = [];
+    ws.on('message', (raw, isBinary) => { if (isBinary) down.push(Buffer.from(raw)); });
+    await new Promise((res) => ws.on('open', res));
+    await new Promise((res) => ws.once('message', res));            // auth_required
+    ws.send(JSON.stringify({ type: 'auth', access_token: 'test-token' }));
+    await new Promise((res) => ws.once('message', res));            // auth_ok
+    await new Promise((r) => setTimeout(r, 200));
+    const received = [];
+    for (const sv of new Set([...mock.state.mainSockets, mock.state.lastSocket].filter(Boolean))) {
+      sv.on('message', (raw, isBinary) => { if (isBinary) received.push(Buffer.from(raw)); });
+    }
+    // Forty audio-sized chunks (a handler-id byte plus 4KB of noise) and one large frame.
+    const up = [];
+    for (let i = 0; i < 40; i++) up.push(Buffer.concat([Buffer.from([1]), crypto.randomBytes(4096)]));
+    up.push(Buffer.concat([Buffer.from([1]), crypto.randomBytes(300000)]));
+    for (const b of up) ws.send(b, { binary: true });
+    await new Promise((r) => setTimeout(r, 800));
+    assert.equal(received.length, up.length, 'every browser frame must reach HA');
+    up.forEach((b, i) => assert.ok(b.equals(received[i]), `frame ${i} must arrive unchanged and in order`));
+
+    const media = Buffer.concat([Buffer.from([7]), crypto.randomBytes(250000)]);
+    mock.sendBinaryToLastClient(media);
+    await new Promise((r) => setTimeout(r, 800));
+    assert.equal(down.length, 1, 'the HA frame must reach the browser');
+    assert.ok(down[0].equals(media), 'and arrive unchanged');
+    ws.close();
+  });
+
   it('the HA-side bridge socket carries the browser behind it, with For and Proto in step', async () => {
     let at = mock.state.wsUpgradeHeaders.length;
     const direct = haClient(`ws://127.0.0.1:${port}/api/websocket`);
