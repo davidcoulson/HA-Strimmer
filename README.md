@@ -218,6 +218,12 @@ Set `STRIP_ENTITIES=0` to passthrough untrimmed for an A/B load comparison.
 - See `CLAUDE.md` for architecture/decisions and `websocket-stripper/DOCS.md` for option
   details.
 
+## Support
+
+If this saved you an evening of debugging, a coffee is appreciated.
+
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/gabrielgoldstein)
+
 ## What's new in 0.2.4
 
 Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG.md).
