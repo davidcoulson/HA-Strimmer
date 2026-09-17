@@ -175,6 +175,11 @@ http:
 > **Note:** versions before 0.2.3 flattened that chain, which made HA reject every proxied
 > request with **400 Bad Request** (`Incorrect number of elements in X-Forward-Proto`) while
 > a direct connection to `:8123` worked fine. If you hit that, update.
+>
+> **Also fixed in 0.2.4:** an infinite redirect loop behind an HTTPS terminator (the page
+> URL growing `:8123./:8123./…`), and login sending the browser — or the companion app — to
+> HA's LAN address. Redirects and the auth flow's `redirect_uri` are now rewritten to the
+> origin the browser actually used.
 
 ## Run locally (dev, no add-on)
 
@@ -213,9 +218,19 @@ Set `STRIP_ENTITIES=0` to passthrough untrimmed for an A/B load comparison.
 - See `CLAUDE.md` for architecture/decisions and `websocket-stripper/DOCS.md` for option
   details.
 
-## What's new in 0.2.3
+## What's new in 0.2.4
 
 Full history in [`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG.md).
+
+- **Fixed the redirect loop behind an HTTPS reverse proxy** (Caddy / NPM / DuckDNS) — the
+  proxy now rewrites a redirect's scheme as well as its host, so `https://` pages no longer
+  bounce to `http://` and back forever.
+- **Login through the proxy works from outside the LAN**, and **the companion app works** —
+  the auth flow's `redirect_uri` is rewritten to the origin you connected through instead of
+  HA's internal address.
+
+### 0.2.3
+
 
 - **auto-entities globs and regexes work on every filter key** — `/^sensor\.pv_.*_power$/`
   and friends resolve instead of matching nothing, on `domain` / `area` / `label` / `device`

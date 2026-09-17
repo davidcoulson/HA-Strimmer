@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.4 — 2026-09-17
+
+Redirects behind an HTTPS terminator, and the companion app. Both from #9's second report.
+
+**Redirect loop behind a TLS-terminating reverse proxy** (#9). `changeOrigin` makes HA see
+every request as arriving at `ha_base`, so its absolute redirects (`/lovelace/0`, the auth
+flow) come back naming HA's own address. `http-proxy`'s `autoRewrite` fixed the *host* of a
+redirect but never its *scheme*, so behind Caddy/NPM/DuckDNS the browser was sent from
+`https://host/...` to `http://host/...`, the edge proxy bounced it back to HTTPS, HA reissued
+the same redirect, and the page never loaded — a URL that grew by `:8123./` on every bounce.
+`autoRewrite` is now off and the proxy rewrites `Location` itself in a `proxyRes` handler:
+scheme and host from `X-Forwarded-Proto`/`X-Forwarded-Host` (first entry, so the browser's
+own origin wins over our hop), and only when the redirect points at HA or at the browser's
+host on the wrong scheme. Third-party and relative redirects are left alone. Every rewrite
+is logged (`rewrote redirect for https://host: ... -> ...`, throttled).
+
+**`redirect_uri` / `hass_url` query parameters are rewritten too** (#9, #8). HA's login flow
+carries an absolute URL in `redirect_uri`, which `autoRewrite` never touched, so login pointed
+the browser at HA's LAN address — unreachable from outside, and for the companion app
+(`homeassistant://` custom-scheme redirect) exactly the "can't resolve the Home Assistant
+URL" failure in #8. Custom-scheme `redirect_uri` values survive the rewrite untouched.
+
+Setting `url.host` in JS keeps the existing port when the new value has none, so the first
+cut turned `http://10.0.0.5:8123/` into `https://example.org:8123/`; hostname and port are
+set separately. Caught by the tests before it shipped.
+
 ## 0.2.3 — 2026-08-23
 
 Filter resolution and reverse-proxy fixes, all from reported issues.
