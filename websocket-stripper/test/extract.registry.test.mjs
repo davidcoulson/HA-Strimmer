@@ -72,6 +72,8 @@ const DEV_REGS = {
     { entity_id: 'sensor.printer_print_progress', device_id: DEV, platform: 'bambu_lab' },
     { entity_id: 'camera.printer_camera', device_id: DEV, platform: 'bambu_lab' },
     { entity_id: 'light.unrelated', device_id: 'a'.repeat(32), platform: 'hue' },
+    // Disabled in the registry: HA never streams it, so a device expansion must skip it.
+    { entity_id: 'sensor.printer_disabled_diag', device_id: DEV, platform: 'bambu_lab', disabled_by: 'user' },
   ],
 };
 const devSetOf = (cards) => new Set(
@@ -102,6 +104,12 @@ test('a list of device ids resolves too', () => {
 test('a device id nested in a stack resolves via the normal walk', () => {
   const got = devSetOf([{ type: 'vertical-stack', cards: [{ type: 'custom:x', printer: DEV }] }]);
   assert.ok(got.has('sensor.printer_print_status'));
+});
+
+test('a disabled entity is not pulled in through its device', () => {
+  const got = devSetOf([{ type: 'custom:ha-bambulab-print_status-card', printer: DEV }]);
+  assert.ok(!got.has('sensor.printer_disabled_diag'), 'disabled entities can never be streamed');
+  assert.ok(got.has('sensor.printer_print_status'), 'the enabled ones still are');
 });
 
 test('a 32-hex string that is NOT a registered device adds nothing', () => {

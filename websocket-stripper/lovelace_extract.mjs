@@ -105,6 +105,9 @@ export function buildRegistryCtx(registries = {}) {
   const byDevice = new Map();
   for (const e of entities) {
     if (!e.device_id || !e.entity_id) continue;
+    // A disabled entity is never streamed, so pulling it in through its device would only
+    // re-inflate the allowlist count that the group-member check (#12) keeps honest.
+    if (e.disabled_by) continue;
     if (!byDevice.has(e.device_id)) byDevice.set(e.device_id, []);
     byDevice.get(e.device_id).push(e.entity_id);
   }
