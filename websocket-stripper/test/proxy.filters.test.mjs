@@ -211,6 +211,23 @@ describe('#9 the X-Forwarded-For chain survives an upstream proxy', () => {
       `HA would 400: ${fors.length} For entries vs ${protos.length} Proto entries`);
   });
 
+  // The other half of #9, and the one that matters for security: OUR PEER IS THE RIGHTMOST
+  // ENTRY whenever the client supplied a chain. HA walks the chain from the right and takes the
+  // first address not in trusted_proxies as the client; DOCS trust 127.0.0.1. If a supplied
+  // header were merely preserved, any LAN host could send `X-Forwarded-For: <kiosk ip>` and
+  // log in password-less through trusted_networks. node-http-proxy appended by default; httpxy
+  // sets the header only when absent, so the swap lost this until review caught it.
+  it('appends our peer to the right of a chain the client supplied', async () => {
+    const forged = await get({ 'x-forwarded-for': '192.168.5.10' });
+    assert.equal(forged.xff, '192.168.5.10, 127.0.0.1', 'a forged entry must not reach HA alone');
+    assert.equal(chain(forged.proto).length, 1, 'one scheme stays one scheme');
+
+    // A two-entry chain with a two-entry Proto: both grow by one, or HA 400s.
+    const two = await get({ 'x-forwarded-for': '203.0.113.9, ::ffff:10.0.0.2', 'x-forwarded-proto': 'https, http' });
+    assert.equal(two.xff, '203.0.113.9, 10.0.0.2, 127.0.0.1');
+    assert.equal(two.proto, 'https, http, http', 'For and Proto agree in length once our hop is on both');
+  });
+
   it('still normalizes IPv4-mapped IPv6 to bare IPv4', async () => {
     const { xff } = await get({ 'x-forwarded-for': '::ffff:192.168.5.247' });
     assert.match(xff, /(^|[\s,])192\.168\.5\.247([\s,]|$)/, `mapped prefix stripped, got "${xff}"`);

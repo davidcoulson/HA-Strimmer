@@ -530,7 +530,46 @@ proxy.on('proxyRes', (proxyRes, req) => {
 // edge proxy set, so HA sees exactly Caddy's chain rather than an extra hop it may not have
 // listed in `trusted_proxies`.
 const normalizeXff = (v) => String(v).split(',').map((s) => s.trim().replace(/^::ffff:/, '')).filter(Boolean).join(', ');
+// What the CLIENT sent, captured at the front door. httpxy's HTTP path sets each
+// x-forwarded-* header only when absent, so by the time `proxyReq` fires the header is
+// always present and nothing says who wrote it. (Its ws() path appends our hop itself.)
+const XFF_IN = Symbol('x-forwarded-for as received');
+const XFP_IN = Symbol('x-forwarded-proto as received');
+const captureForwarded = (req) => {
+  req[XFF_IN] = req.headers['x-forwarded-for'] ?? null;
+  req[XFP_IN] = req.headers['x-forwarded-proto'] ?? null;
+};
+const normalizeIp = (ip) => String(ip || '').replace(/^::ffff:/, '');
+
+// Our peer goes on the RIGHT of any chain the client supplied. This is the half of #9 that
+// protects trusted_networks, and it is not the same as keeping the chain intact: HA walks
+// X-Forwarded-For from the right and takes the first address not in `trusted_proxies` as the
+// client. DOCS tell people to trust 127.0.0.1 (host networking). A LAN host that can reach the
+// proxy port and sends `X-Forwarded-For: <kiosk ip>` would, with the header merely preserved,
+// reach HA as that kiosk and log in password-less. With our peer appended HA meets the forger's
+// real address first. node-http-proxy appended by default; httpxy does not.
+//
+// Proto stays in step, or HA answers 400 (`len(proto) not in (1, len(for))`): a single scheme
+// describes the whole chain and stays single; a chain grows by one, matching For.
+function forwardedChain(req, incomingFor, incomingProto, scheme) {
+  const peer = normalizeIp(req.socket?.remoteAddress);
+  const out = {};
+  if (!incomingFor) return out;
+  const chain = normalizeXff(incomingFor);
+  out.for = peer && chain ? `${chain}, ${peer}` : (chain || peer);
+  const protos = String(incomingProto || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (protos.length > 1) out.proto = `${protos.join(', ')}, ${scheme}`;
+  return out;
+}
+
 proxy.on('proxyReq', (proxyReq, req) => {
+  const chain = forwardedChain(req, req[XFF_IN], req[XFP_IN], req.socket?.encrypted ? 'https' : 'http');
+  if (chain.for) {
+    proxyReq.setHeader('x-forwarded-for', chain.for);
+    if (chain.proto) proxyReq.setHeader('x-forwarded-proto', chain.proto);
+    return;
+  }
+  // No chain from the client: httpxy filled in our peer, which only needs normalising.
   const xff = proxyReq.getHeader('x-forwarded-for') ?? req.headers['x-forwarded-for'];
   if (xff) proxyReq.setHeader('x-forwarded-for', normalizeXff(xff));
 });
@@ -551,7 +590,7 @@ proxy.on('error', (e, req, res) => {
 // httpxy's web()/ws() return promises. The 'error' handler above already deals with the
 // failure; without a catch here the same failure ALSO surfaces as an unhandled rejection,
 // which is a process-level crash — exactly the class of bug the socket guard exists to stop.
-const server = http.createServer((req, res) => { proxy.web(req, res).catch(() => {}); });
+const server = http.createServer((req, res) => { captureForwarded(req); proxy.web(req, res).catch(() => {}); });
 
 // ---- websocket upgrades ----
 // We intercept ONLY /api/websocket (the entity firehose) to trim it. EVERY other ws
