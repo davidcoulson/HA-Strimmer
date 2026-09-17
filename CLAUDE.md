@@ -173,6 +173,18 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   (issue #9). Normalize each entry **in place**; never rebuild the header from a single IP.
   Also note `proxy.ws()` does NOT fire `proxyReq` — the ws path needs its own `proxyReqWs`
   handler or upgrades silently keep the `::ffff:` form.
+- **Redirects are rewritten by hand; `autoRewrite` is OFF — 0.2.4 (#9, #8).** `changeOrigin`
+  makes HA emit absolute redirects naming `ha_base`; http-proxy's `autoRewrite` fixed the host
+  but never the scheme, so behind a TLS terminator (Caddy/NPM/DuckDNS) the browser looped
+  `https://host` -> `http://host` -> Caddy -> HA -> same redirect (`:8123./:8123./…`). A
+  `proxyRes` handler (`rewriteLocation`) now rewrites scheme+host from the *first* entry of
+  `X-Forwarded-Proto`/`X-Forwarded-Host` (xfwd appends our hop to Proto, so first wins), and
+  also rewrites the absolute URL inside `redirect_uri` / `hass_url` query params — that one is
+  what broke the companion app (#8), whose `homeassistant://` custom-scheme `redirect_uri` must
+  pass through untouched. Only redirects pointing at HA or at the browser's host on the wrong
+  scheme are touched; relative and third-party ones are left alone. Gotcha: `url.host = x`
+  keeps the old port when `x` has none — set `hostname` and `port` separately (`setOrigin`).
+  Tests: `test/proxy.redirect.test.mjs`.
 
 ## Security
 
