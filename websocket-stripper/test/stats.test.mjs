@@ -100,6 +100,20 @@ describe('stats counters', () => {
   });
 });
 
+describe('stats peer gate', () => {
+  it('admits Supervisor (the hassio network) and loopback, and nothing else by default', () => {
+    for (const ok of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '172.30.32.2', '172.30.33.11']) {
+      assert.ok(stats.statsPeerAllowed(ok, false), `${ok} should be admitted`);
+    }
+    for (const no of ['192.168.5.10', '::ffff:10.2.4.129', '172.31.0.1', '172.30.34.1', '']) {
+      assert.ok(!stats.statsPeerAllowed(no, false), `${no} should be refused`);
+    }
+  });
+  it('stats_lan opens it to everyone', () => {
+    assert.ok(stats.statsPeerAllowed('192.168.5.10', true));
+  });
+});
+
 describe('stats API over HTTP', () => {
   let mock, proxy, port, statsPort, out = '';
 

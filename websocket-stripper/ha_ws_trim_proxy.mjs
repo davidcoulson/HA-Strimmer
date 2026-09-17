@@ -70,6 +70,10 @@ const PORT = parseInt(process.env.PORT || OPT.port || '8099', 10);
 // config.yaml to `ingress_port: 0` — dynamic allocation from Supervisor's reserved range,
 // which cannot collide with a fixed port already in use — without touching this code.
 const STATS_PORT_FALLBACK = parseInt(process.env.STATS_PORT || '8100', 10);
+// Off by default: the stats port answers Ingress (Supervisor) and loopback only. See
+// statsPeerAllowed() in stats.mjs for why the LAN is refused unless asked for.
+const STATS_LAN = OPT.stats_lan !== undefined ? !!OPT.stats_lan
+  : (process.env.STATS_LAN ?? '0') !== '0';
 
 async function resolveStatsPort() {
   // Dev / non-add-on: nothing to ask, use the fallback.
@@ -743,6 +747,14 @@ function statsExtras() {
 }
 
 const statsServer = http.createServer((req, res) => {
+  // Source address, not headers: with host_network this port is on the LAN, and it serves
+  // client addresses, entity counts and uptime with no authentication of its own.
+  const peer = String(req.socket?.remoteAddress || '');
+  if (!stats.statsPeerAllowed(peer, STATS_LAN)) {
+    logThrottled('stats-denied', `stats: refused ${peer.replace(/^::ffff:/, '')} — served to Ingress and loopback only; set stats_lan: true to serve the LAN`);
+    res.writeHead(403, { 'content-type': 'text/plain' });
+    return res.end('stats are served through Home Assistant Ingress; set stats_lan: true to read them from the LAN');
+  }
   // Ingress rewrites the path prefix, so match on the tail rather than the whole URL.
   const path = String(req.url || '/').split('?')[0].replace(/\/+$/, '') || '/';
   if (path.endsWith('/stats.json')) {

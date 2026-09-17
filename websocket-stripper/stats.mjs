@@ -25,7 +25,6 @@ const trims = new Map();
 // Event stream, throughput only — see the note above about why this is not a saving.
 const events = { count: 0, bytes: 0 };
 // Registry answers served from the local cache without asking HA at all.
-const cache = { hits: 0, bytes: 0 };
 // Live connections, keyed by a monotonic id.
 const conns = new Map();
 let nextConnId = 1;
@@ -44,7 +43,6 @@ export function recordTrim(category, before, after) {
 
 export function recordEvent(bytes) { events.count += 1; events.bytes += bytes; }
 
-export function recordCacheHit(bytes) { cache.hits += 1; cache.bytes += bytes; }
 
 export function connOpen({ ip, dash, via, allowSize }) {
   const id = nextConnId++;
@@ -111,7 +109,6 @@ export function snapshot(extra = {}) {
       bytes: events.bytes,
       bytesPerMin: Math.round(events.bytes / Math.max((now - startedAt) / 60000, 1 / 60)),
     },
-    registryCache: { hits: cache.hits, bytesServed: cache.bytes },
     clients: { open: conns.size, total: connTotal, list: clients },
   };
 }
@@ -120,7 +117,17 @@ export function snapshot(extra = {}) {
 export function reset() {
   trims.clear();
   events.count = 0; events.bytes = 0;
-  cache.hits = 0; cache.bytes = 0;
   conns.clear();
   nextConnId = 1; connTotal = 0;
+}
+
+// Who may read the stats port. Ingress requests reach the add-on from Supervisor on the hassio
+// network (172.30.32.0/23) and local tools from loopback; with host_network the port is bound
+// on the host itself, so anything else is the LAN, which sees client addresses, entity counts
+// and uptime unauthenticated. Judged by source address, never by headers: X-Ingress-Path is
+// whatever the caller chose to send. `stats_lan: true` opens it for a `rest` sensor.
+export function statsPeerAllowed(ip, lan = false) {
+  if (lan) return true;
+  const a = String(ip || '').replace(/^::ffff:/, '');
+  return a === '::1' || /^127\./.test(a) || /^172\.30\.3[23]\./.test(a);
 }

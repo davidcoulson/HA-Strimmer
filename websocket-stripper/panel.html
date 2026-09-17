@@ -51,7 +51,6 @@
       <div><div class="label">Saved on page loads</div><div class="big good" id="savedPct">—</div><div class="label" id="savedAbs">&nbsp;</div></div>
       <div><div class="label">Clients connected</div><div class="big" id="clients">—</div><div class="label" id="clientsTotal">&nbsp;</div></div>
       <div><div class="label">Live update traffic</div><div class="big" id="evRate">—</div><div class="label">per client, per minute</div></div>
-      <div><div class="label">Served from cache</div><div class="big" id="cacheHits">—</div><div class="label" id="cacheBytes">&nbsp;</div></div>
     </div>
   </div>
 
@@ -148,8 +147,6 @@ async function tick() {
   $('evRate').textContent = rated.length
     ? kb(Math.round(rated.reduce((t, c) => t + c.eventBytesPerMin, 0) / rated.length))
     : '—';
-  $('cacheHits').textContent = s.registryCache.hits;
-  $('cacheBytes').textContent = kb(s.registryCache.bytesServed) + ' HA never rebuilt';
 
   rows('cats', Object.entries(s.savings.byCategory), ([k, v]) => [
     NICE[k] || k, v.count, kb(v.before), kb(v.after), kb(v.saved), v.savedPct + '%',

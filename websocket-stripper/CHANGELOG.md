@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The stats port answers Ingress and loopback only, by source address.** With host networking
+  the port is bound on the host, and it served client addresses, entity counts and uptime to the
+  whole LAN unauthenticated. Supervisor (the hassio network) and loopback are accepted; anything
+  else gets a 403 and one throttled log line. `stats_lan: true` opens it for a `rest` sensor.
+- The "Served from cache" tile is gone: nothing produced cache hits yet, so it read `0 / 0 B`
+  forever. It returns with whatever lands registry caching.
+
 **A statistics panel in the Home Assistant sidebar, and a JSON API behind it.**
 
 Until now the only evidence the add-on was doing anything was the log, which you read once

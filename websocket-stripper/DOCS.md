@@ -118,8 +118,11 @@ The panel shows:
   sent, the size the browser received, and the difference;
 - **allowlist size against instance size**, so "391 of 9,751" is visible at a glance.
 
-The same data is JSON at `http://<host>:8100/stats.json`. It is read-only and unauthenticated
-on the local port, so treat it as you would the add-on's own port.
+The same data is JSON at `http://<host>:8100/stats.json`. It is read-only, and by default the
+port answers only Home Assistant Ingress (Supervisor) and loopback, judged by source address:
+with host networking the port is bound on the host itself, and it serves client addresses,
+entity counts and uptime with no authentication of its own. Set `stats_lan: true` to read it
+from the LAN — for the `rest` sensor below, or a scrape.
 
 The port is not an add-on option, on purpose. Supervisor proxies ingress to the `ingress_port`
 declared in `config.yaml`, and that field cannot be changed through the add-on options API — so
