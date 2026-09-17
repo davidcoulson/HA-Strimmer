@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026.09.17.1 — 2026-09-17
+
+**Security: the proxy's own address is now appended to any `X-Forwarded-For` chain a client
+supplies.** Found by the upstream maintainer reviewing the httpxy migration (upstream PR #21),
+and it applied here unchanged.
+
+Home Assistant walks `X-Forwarded-For` from the right and takes the first address not in
+`trusted_proxies` as the client. With host networking, the documented `trusted_proxies` is
+`127.0.0.1`. node-http-proxy appended our peer to the chain; httpxy's HTTP path sets the header
+only when it is absent, and the migration kept a client-supplied chain intact without adding our
+hop. So any host on the LAN that could reach the proxy port could send
+`X-Forwarded-For: <kiosk address>` and arrive at HA as that kiosk — a password-less login
+through `trusted_networks`, which is the exact mechanism `host_network: true` exists to serve.
+
+- What the client sent is captured at the front door, before httpxy fills the header in, and
+  our peer is appended on the right. HA now meets a forger's real address first.
+- Proto stays in step, or HA answers 400: one scheme stays one (it describes the whole chain);
+  a chain grows by one, matching For.
+- The HA-side bridge socket, which is opened without httpxy, follows the same rule.
+- A reverse proxy in front of the app must now be in `trusted_proxies` for HA to resolve the
+  client behind it, which is the standard configuration anyway. Documented in DOCS and INSTALL.
+- Tests: a forged single entry arrives as `forged, peer`; a two-entry For with a two-entry Proto
+  becomes three and three; no header becomes exactly the peer, once. The old assertion that only
+  pinned chain length is gone, and CLAUDE.md's note claiming the append did not matter is
+  corrected.
+
+---
+
 ## 2026.09.16.10 — 2026-09-16
 
 **Binary frames cross the bridge uncompressed, in both directions.** Both websocket legs

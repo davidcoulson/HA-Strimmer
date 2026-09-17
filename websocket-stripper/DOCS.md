@@ -188,6 +188,11 @@ real IP never reaches HA and `trusted_networks` can't match it.
   `allow_ws_url` options (e.g. `ha_base: http://192.168.4.2:8123`).
 - **HA sees the request from the host itself**, so `trusted_proxies` must list
   `127.0.0.1`/`::1` (and optionally the host LAN IP) — not the Docker gateway subnet.
+- **A reverse proxy in front of the app must be in `trusted_proxies` too.** The app appends
+  its own peer to any `X-Forwarded-For` chain it receives, so HA sees `client, <your proxy>`
+  and only reaches the client if it trusts the proxy. That append is deliberate: without it,
+  any LAN host could send a forged `X-Forwarded-For` naming a kiosk address and log in
+  password-less through `trusted_networks`.
 
 **If you don't need password-less-by-IP login**, none of the above helps you and bridged
 mode is simpler (free port remapping, working DNS). Some users run a locally-modified copy

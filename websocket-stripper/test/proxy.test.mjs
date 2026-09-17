@@ -185,9 +185,34 @@ describe('proxy integration (strip on)', () => {
     await behind.authed;
     const seenBehind = mock.state.wsUpgradeHeaders[at];
     behind.close();
-    assert.equal(seenBehind['x-forwarded-for'], '10.9.9.9, 192.168.1.1',
-      'the chain survives intact, with the IPv4-mapped form normalised in place');
-    assert.equal(seenBehind['x-forwarded-proto'], 'https', 'the browser\'s real scheme is kept');
+    assert.equal(seenBehind['x-forwarded-for'], '10.9.9.9, 192.168.1.1, 127.0.0.1',
+      'the chain survives with the IPv4-mapped form normalised, and OUR peer appended on the right');
+    assert.equal(seenBehind['x-forwarded-proto'], 'https',
+      'a single scheme describes the whole chain and stays single');
+  });
+
+  // The property that protects trusted_networks. HA walks X-Forwarded-For from the right and
+  // takes the first address not in trusted_proxies as the client. If a chain the client supplied
+  // were merely preserved, any LAN host could send `X-Forwarded-For: <kiosk ip>` and arrive at HA
+  // as that kiosk — a password-less login. Our peer on the right is what stops it: HA meets the
+  // forger's real address first. node-http-proxy appended by default; httpxy sets the header only
+  // when absent, and the migration lost this until the upstream review caught it.
+  it('appends our peer to the right of any X-Forwarded-For the client supplied', async () => {
+    const forged = await httpGet(`http://127.0.0.1:${port}/some/path`, { 'x-forwarded-for': '192.168.5.10' });
+    assert.equal(forged.headers['x-echo-xff'], '192.168.5.10, 127.0.0.1',
+      'a forged single entry must not reach HA alone');
+    assert.equal(forged.headers['x-echo-xfproto'], 'http', 'one scheme stays one scheme');
+
+    // A real upstream proxy's two-entry chain: For grows by one, and so must Proto, or HA 400s.
+    const chained = await httpGet(`http://127.0.0.1:${port}/some/path`,
+      { 'x-forwarded-for': '203.0.113.9, ::ffff:10.0.0.2', 'x-forwarded-proto': 'https, http' });
+    assert.equal(chained.headers['x-echo-xff'], '203.0.113.9, 10.0.0.2, 127.0.0.1');
+    assert.equal(chained.headers['x-echo-xfproto'], 'https, http, http',
+      'For and Proto must agree in length once our hop is on both');
+
+    // Nothing supplied: exactly our peer, once — not appended to itself.
+    const bare = await httpGet(`http://127.0.0.1:${port}/some/path`);
+    assert.equal(bare.headers['x-echo-xff'], '127.0.0.1');
   });
 
   it('injects the allowlist into a no-filter subscribe_entities', async () => {

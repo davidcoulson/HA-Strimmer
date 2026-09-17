@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.16.10';
+const VERSION = '2026.09.17.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1350,6 +1350,41 @@ proxy.on('proxyRes', (proxyRes, req) => {
 // -> a hard 400 on every request. Keeping the chain intact keeps the counts in step, and
 // preserves the real client IP through the upstream proxy instead of hiding it behind Caddy.
 const normalizeXff = (v) => String(v).split(',').map((s) => s.trim().replace(/^::ffff:/, '')).filter(Boolean).join(', ');
+
+// What the CLIENT sent in X-Forwarded-For / -Proto, captured at the front door — before httpxy
+// fills the headers in. httpxy's HTTP path sets each x-forwarded-* header ONLY WHEN ABSENT, so by
+// the time `proxyReq` fires the header is always present and nothing says who wrote it.
+const XFF_IN = Symbol('x-forwarded-for as received');
+const XFP_IN = Symbol('x-forwarded-proto as received');
+const captureForwarded = (req) => {
+  req[XFF_IN] = req.headers['x-forwarded-for'] ?? null;
+  req[XFP_IN] = req.headers['x-forwarded-proto'] ?? null;
+};
+
+// Our peer goes on the RIGHT of any chain the client supplied. Not optional, and not the same
+// thing as keeping the chain intact:
+//
+// Home Assistant's forwarded middleware walks X-Forwarded-For from the right and takes the first
+// address that is NOT in `trusted_proxies` as the client. This add-on runs with host networking,
+// so DOCS tell people to trust 127.0.0.1. A LAN host that can reach the proxy port and sends
+// `X-Forwarded-For: <kiosk-subnet ip>` on its own would, with the header merely preserved,
+// arrive at HA as that kiosk — and `trusted_networks` would log it in without a password. With
+// our peer appended, HA walks right-to-left, meets the forger's real address first, and stops
+// there. node-http-proxy always appended; httpxy does not; this restores it on the one path
+// where it was lost. (httpxy's ws() path still appends on its own — see proxyReqWs.)
+//
+// Proto has to stay in step: HA raises 400 unless len(proto) is 1 or equals len(for). A single
+// scheme is left alone (it describes the whole chain); a chain gets our hop appended too.
+function forwardedChain(req, incomingFor, incomingProto, scheme) {
+  const peer = normalizeIp(req.socket?.remoteAddress);
+  const out = {};
+  if (!incomingFor) return out;
+  const chain = normalizeXff(incomingFor);
+  out.for = peer && chain ? `${chain}, ${peer}` : (chain || peer);
+  const protos = String(incomingProto || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (protos.length > 1) out.proto = `${protos.join(', ')}, ${scheme}`;
+  return out;
+}
 // Stamp the dashboard onto the browser itself.
 //
 // The IP hint below is coarse by construction: every device behind one NAT shares it, so a
@@ -1371,6 +1406,13 @@ proxy.on('proxyRes', (proxyRes, req) => {
 });
 
 proxy.on('proxyReq', (proxyReq, req) => {
+  const chain = forwardedChain(req, req[XFF_IN], req[XFP_IN], req.socket?.encrypted ? 'https' : 'http');
+  if (chain.for) {
+    proxyReq.setHeader('x-forwarded-for', chain.for);
+    if (chain.proto) proxyReq.setHeader('x-forwarded-proto', chain.proto);
+    return;
+  }
+  // No chain from the client: httpxy filled in our peer, which only needs normalising.
   const xff = proxyReq.getHeader('x-forwarded-for') ?? req.headers['x-forwarded-for'];
   if (xff) proxyReq.setHeader('x-forwarded-for', normalizeXff(xff));
 });
@@ -2937,6 +2979,7 @@ function clientReport(ip) {
 }
 
 const server = http.createServer((req, res) => {
+  captureForwarded(req);
   // Request logging goes to its own ring, not to stdout — see http_log.mjs on why a request log
   // and a service log do not belong in the same stream.
   httpLog.observe(req, res, clientIp);
@@ -3148,9 +3191,13 @@ server.on('upgrade', (req, socket, head) => {
 function forwardHeadersFor(req) {
   const h = req.headers || {};
   const out = {};
-  const xff = h['x-forwarded-for'] ? normalizeXff(h['x-forwarded-for']) : normalizeIp(req.socket?.remoteAddress);
+  // Same contract as the HTTP path: a supplied chain gets our peer appended on the right,
+  // an absent one becomes our peer. This socket is opened without httpxy, so it is done here.
+  const scheme = req.socket?.encrypted ? 'https' : 'http';
+  const chain = forwardedChain(req, h['x-forwarded-for'], h['x-forwarded-proto'], scheme);
+  const xff = chain.for || normalizeIp(req.socket?.remoteAddress);
   if (xff) out['x-forwarded-for'] = xff;
-  out['x-forwarded-proto'] = String(h['x-forwarded-proto'] || (req.socket?.encrypted ? 'https' : 'http'));
+  out['x-forwarded-proto'] = chain.proto || String(h['x-forwarded-proto'] || scheme);
   const host = h['x-forwarded-host'] || h.host;
   if (host) out['x-forwarded-host'] = String(host);
   if (h['user-agent']) out['user-agent'] = String(h['user-agent']);

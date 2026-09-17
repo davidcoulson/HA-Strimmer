@@ -209,19 +209,19 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   Also note `proxy.ws()` does NOT fire `proxyReq` — the ws path needs its own `proxyReqWs`
   handler or upgrades silently keep the `::ffff:` form.
 
-  **The invariant is that the For and Proto chains agree in LENGTH — not that our hop is
-  appended.** The two proxy libraries differ: node-http-proxy *appended* our hop to all three
-  headers; **httpxy sets each only when absent**. Both satisfy HA. A test asserting "the chain
-  has exactly 2 entries" pins the library instead of the requirement and fails on a swap that
-  broke nothing — which is exactly what happened during the httpxy migration.
-- **A resource can be sent to ONE client (`resources_always_forward` on an `overrides` rule).**
-  The Voice Satellite bundle is registered as a resource AND injected into every page, runs
-  headless from the panel's stored config, and is placed on no dashboard — so the resource trim
-  drops it everywhere and `trim_extra_modules` then strips the injected import too. Every browser
-  satellite goes silent with the dashboard rendering perfectly. The global list fixes it by giving
-  the bundle to every panel; a client rule gives it to the one that is the satellite. The rule's
-  lists are consulted in `keepResourceFor` (ws reply) and `stripExtraModules` (page); identity-keyed
-  rules reach only the former, since a page load has no token.
+  **Two invariants, and the second is the security one — CORRECTED 2026-09-17 after upstream
+  review.** (1) The For and Proto chains agree in LENGTH, or HA 400s. (2) **Our own peer is the
+  RIGHTMOST entry whenever the client supplied a chain.** HA walks For from the right and takes
+  the first address not in `trusted_proxies` as the client; DOCS tell people to trust 127.0.0.1.
+  If a client-supplied chain is merely preserved, any LAN host can send `X-Forwarded-For:
+  <kiosk ip>` and log in password-less through `trusted_networks`. node-http-proxy appended by
+  default; **httpxy's HTTP path sets each header only when absent** (its ws path appends), and the
+  migration lost the append until GabrielGoldsteinAnidea flagged it on upstream PR #21. Now:
+  `captureForwarded()` records what the client sent before httpxy fills the header in, and
+  `forwardedChain()` appends the peer (and keeps Proto in step: a single scheme stays single, a
+  chain grows by one) on both `proxyReq` and the HA-side bridge socket. A consequence for docs:
+  a reverse proxy in front of the app must itself be in `trusted_proxies`. The old note here said
+  "not that our hop is appended" — that was wrong, and the test that pinned it has been replaced.
 - **The proxy library is `httpxy`, not `http-proxy`.** Three API differences bite:
   `createProxyServer` is a **named** export; **`ws()` is `(req, socket, options, head)`** where
   node-http-proxy was `(req, socket, head)` — passing `head` third spreads a Buffer into the

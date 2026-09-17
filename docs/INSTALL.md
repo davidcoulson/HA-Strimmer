@@ -278,7 +278,11 @@ http:
 ```
 
 Use the container's actual subnet, and keep it as narrow as you can — anything in
-`trusted_proxies` is trusted to *claim* a client IP.
+`trusted_proxies` is trusted to *claim* a client IP. If another reverse proxy sits in front of
+the stripper, list its address as well: the stripper appends its own peer to any
+`X-Forwarded-For` chain it is handed, so HA sees `client, <front proxy>` and only resolves the
+client if the front proxy is trusted. The append is what stops a LAN host from forging a kiosk
+address and logging in password-less through `trusted_networks`.
 
 ### Which architectures
 
