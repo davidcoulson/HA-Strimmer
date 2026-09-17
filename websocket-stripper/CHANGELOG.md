@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+**Registry trimming, including `list_for_display`** (`trim_registries`, default on). The entity,
+device and area registries are instance-wide and asked for on every page load; the entity
+registry is one row per entity, the largest payload left once states are trimmed. Rows are cut
+to the entities the connection can see, and devices/areas to those a surviving entity still
+references, so names and area labels keep resolving. `config/entity_registry/list_for_display`
+answers with an object, not an array, and an `Array.isArray()` guard had been passing it through
+untouched: measured on a 9,553-entity instance it was 1.44MB, 58% of the whole websocket load.
+
+**The Configuration tab explains itself.** `translations/en.yaml` gives every option a name and
+description, with the warnings on the screen where the option is toggled. Two tests keep the
+file in step with the schema in both directions. README and DOCS no longer claim registries
+"pass through untouched".
+
 **Fix: the add-on was removing websocket compression.** Home Assistant's own websocket
 negotiates `permessage-deflate`, but the `ws` library does not enable it server-side by
 default — so putting this proxy in front of HA silently downgraded every kiosk from deflated
