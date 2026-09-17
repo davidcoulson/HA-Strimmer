@@ -66,6 +66,20 @@ const STRIP = OPT.strip_entities !== undefined ? !!OPT.strip_entities
 const COMPRESS_WS = OPT.compress_websocket !== undefined ? !!OPT.compress_websocket
   : (process.env.COMPRESS_WS ?? '1') !== '0';
 
+// Lovelace resources are instance-wide: HA has no per-dashboard scoping, so every kiosk
+// downloads, parses and compiles EVERY custom card in the install. Measured on the instance
+// this was built against: 45 resources, 21MB of JavaScript, for a wall panel that uses four
+// custom card types. With states and registries already trimmed, this is what the load time
+// actually consists of — ~73% of the main thread's busy time is module parse/compile, not
+// script execution, style or layout.
+//
+// Off by default. Unlike entity trimming, a wrongly dropped resource is *visible* — a card
+// renders as "Custom element doesn't exist" — so this is opt-in, and every drop is logged.
+const TRIM_RESOURCES = OPT.trim_resources !== undefined ? !!OPT.trim_resources
+  : (process.env.TRIM_RESOURCES ?? '0') !== '0';
+const RES_ALWAYS = parseRules(OPT.resources_always_forward ?? process.env.RESOURCES_ALWAYS_FORWARD);
+const RES_NEVER = parseRules(OPT.resources_never_forward ?? process.env.RESOURCES_NEVER_FORWARD);
+
 // allowlist-precompute connection (add-on: supervisor proxy + SUPERVISOR_TOKEN)
 const ALLOW_WS_URL = process.env.ALLOW_WS_URL || OPT.allow_ws_url || (inAddon ? 'ws://supervisor/core/websocket' : HA_WS);
 const ALLOW_TOKEN = process.env.ALLOW_TOKEN || process.env.SUPERVISOR_TOKEN || process.env.HA_TOKEN;
@@ -252,9 +266,11 @@ function applyOverrides(set, realIds) {
 async function buildAllow(rpc, renderTemplate) {
   const states = await rpc({ type: 'get_states' });
   const realIds = states.map((s) => s.entity_id);
+  const byId = new Map(states.map((st) => [st.entity_id, st]));
   const registries = await fetchRegistries(rpc);
   const union = new Set();
   const perDash = new Map();
+  const keysByDash = new Map();
   let failed = 0;
   for (const p of DASH_PATHS) {
     try {
@@ -263,6 +279,12 @@ async function buildAllow(rpc, renderTemplate) {
       const set = allowlistFor(cfg, states, registries, tpls);
       log(`  ${p}: ${set.size} entities`);
       perDash.set(p, set);
+      // Resource keys come from the dashboard config AND from the icons of the entities
+      // this dashboard shows. The second half matters: an entity's icon usually lives in
+      // the entity registry, not in any dashboard's YAML, so a config-only scan misses it
+      // and drops the icon pack that renders it. Measured here: 20 entities carry `phu:`
+      // icons set in the registry, and the string "phu" appears in no dashboard config.
+      keysByDash.set(p, resourceKeys(cfg, set, byId));
       set.forEach((e) => union.add(e));
     } catch (e) { failed++; log(`  ${p}: FAILED ${e.message}`); }
   }
@@ -288,6 +310,7 @@ async function buildAllow(rpc, renderTemplate) {
     rebuildRegCache(registries, withOverrides);
     log(`  registry reach: ${REG_CACHE.devices.size} device(s), ${REG_CACHE.areas.size} area(s)`);
   }
+  await buildResources(rpc, keysByDash);
   const afterAlways = new Set([...union, ...withOverrides]).size;
   log(`overrides: base ${baseN}, +always ${afterAlways - baseN}, -never ${afterAlways - withOverrides.size}`);
   return { union: withOverrides, perDash };
@@ -661,6 +684,253 @@ function rebuildRegCache(registries, allow) {
   REG_CACHE.areas = areas;
 }
 
+// ---- per-dashboard Lovelace resources ----
+// Namespaces the frontend resolves itself; an `mdi:` icon needs no custom resource.
+const BUILTIN_ICON_NS = new Set(['mdi', 'hass', 'hassio', 'homeassistant', 'custom']);
+
+const RESOURCE_CACHE = new Map();     // url -> { tested:Set, present:Set|null, bytes }
+let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
+// What a connection is actually served: the union of every configured dashboard's keep
+// set. Without per-connection scoping the proxy cannot know which dashboard a socket is
+// showing, and serving less than the union would break whichever one it turns out to be.
+// This still drops every resource NO dashboard references. It narrows to a single
+// dashboard's set once per-connection scoping (PR #13) lands.
+let RESOURCES_KEEP = new Set();
+
+// Every token a dashboard might need a resource FOR: `custom:x` card/row/badge/feature types,
+// and icon-pack prefixes (`foo:bar` where foo isn't built in).
+//
+// These are matched as plain substrings against each resource's body rather than by scanning
+// for `customElements.define(...)`. That looks like the rigorous approach and is in fact the
+// broken one: big bundles (mushroom, 639KB) construct element names at runtime, so a define()
+// scan finds almost nothing and would drop a resource the dashboard needs. The literal name
+// is still present in the bundle, so a substring test finds it. Errs toward keeping — a false
+// positive costs bytes, a false negative breaks a card.
+// Both halves of the icon pattern must START WITH A LETTER, and keys shorter than
+// MIN_KEY are discarded. That is not fussiness — a loose pattern here silently disables the
+// whole feature. `16:9` (a picture card's aspect_ratio) and `06:00` (any schedule) match a
+// digit-tolerant pattern and yield the keys "16" and "06", and a two-character string occurs
+// in every minified bundle ever written, so every resource "matches" and nothing is dropped.
+// Observed exactly that: 45 resources, 39 kept, 97KB saved instead of 18MB.
+const MIN_KEY = 3;
+function resourceKeys(cfg, allowed = null, byId = null) {
+  const cards = new Set();      // custom card/row/badge/feature types
+  const icons = new Set();      // non-builtin icon namespaces
+  const addIcon = (ns) => { if (ns.length >= MIN_KEY && !BUILTIN_ICON_NS.has(ns)) icons.add(ns); };
+  // Icons of the entities this dashboard actually shows, which are typically registry
+  // values rather than anything written in the config.
+  if (allowed && byId) {
+    for (const id of allowed) {
+      const ic = byId.get(id)?.attributes?.icon;
+      if (typeof ic !== 'string') continue;
+      const m = ic.match(/^([a-z][a-z0-9_]{2,15}):[a-z]/);
+      if (m) addIcon(m[1]);
+    }
+  }
+  (function walk(n) {
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (n && typeof n === 'object') return Object.values(n).forEach(walk);
+    if (typeof n !== 'string') return;
+    if (n.startsWith('custom:') && n.length > 7 + MIN_KEY) cards.add(n.slice(7));
+    const ic = n.match(/^([a-z][a-z0-9_]{2,15}):([a-z][a-z0-9-]*)$/);
+    if (ic) addIcon(ic[1]);
+  })(cfg);
+  return { cards, icons };
+}
+
+// A card type split into candidate identifying parts. Split on `-` only: an underscore
+// usually sits inside one meaningful word (`print_status`), and breaking it would leave
+// fragments generic enough to match anything.
+function cardFragments(type) {
+  return type.split('-').filter((p) => p.length >= 4);
+}
+
+// How many resources contain each fragment, and the cutoff above which a fragment is too
+// common to identify anything. MEASURED rather than a hand-maintained stop-word list: the
+// first attempt at this used one, and `grid`, `layout`, `entity` and `progress` all slipped
+// through it and matched nearly every bundle on the instance — which took one panel from
+// 2,998KB to 11,876KB. A fragment present in a quarter of all resources says nothing.
+let FRAG_DF = new Map();
+let FRAG_DF_MAX = 0;
+const isDistinctive = (f) => (FRAG_DF.get(f) || 0) <= FRAG_DF_MAX;
+// A fragment so rare it effectively names one bundle. Kept separate from "distinctive"
+// because the evidence is much stronger: `mushroom` appears in 2 files out of 48, so a bundle
+// containing it is almost certainly the Mushroom bundle, whereas `cover` tells you nothing.
+let FRAG_RARE_MAX = 2;
+const isRare = (f) => (FRAG_DF.get(f) || 0) <= FRAG_RARE_MAX;
+
+// Does this bundle look like it provides `type`?
+//
+// The literal name is the strong signal. The fragment fallback exists for bundles that BUILD
+// their element names at runtime: `ha-bambulab-cards.js` is 3.2MB, a dashboard renders
+// `ha-bambulab-print_status-card`, and that string appears nowhere in the file — only
+// `bambulab` and `print_status` separately.
+//
+// Two earlier rules made a very common case impossible, and both are gone:
+//
+//   - requiring EVERY fragment to be present. Mushroom registers its elements from template
+//     literals, so `mushroom-cover-card` appears nowhere in `mushroom.js` — and neither does
+//     the bare word `cover`. One missing generic word discarded the bundle even though the
+//     near-unique `mushroom` was sitting right there.
+//   - requiring TWO distinctive fragments, which no `<oneword>-<generic>-card` name can ever
+//     satisfy, because it only has one distinctive word to give.
+//
+// Together they silently dropped the entire Mushroom family — one of the most widely
+// installed card sets there is — with no error anywhere, just blank cards on the dashboard.
+//
+// Now: one RARE fragment carries a match on its own; otherwise fall back to two merely
+// distinctive ones. Erring toward keeping is the right bias here, because the two failure
+// modes are not symmetric — a resource kept needlessly costs some bytes, a resource wrongly
+// dropped breaks a card and says nothing about why.
+function cardMatchesBody(type, cached) {
+  if (cached.literal.has(type)) return true;
+  const present = cardFragments(type).filter((f) => cached.frags.has(f));
+  if (!present.length) return false;
+  if (present.some(isRare)) return true;
+  return present.filter(isDistinctive).length >= 2;
+}
+
+// An icon namespace is matched two ways, and it needs both.
+//
+// A *user* of the namespace writes `cbi:bulb`, so the colon form finds them. Matching the
+// bare namespace instead is how the 3-character `cbi` came to keep 4.8MB of bundles that
+// merely contained those letters in base64 blobs and minified identifiers — `cbi:` appeared
+// in none of them.
+//
+// But the *provider* never writes the colon form at all: it registers the namespace as a
+// key, `customIconsets["cil"]`. Matching only the colon form drops the very bundle that
+// serves the icons, which is what happened to custom-icons.js, the provider of `cil:`.
+const ICON_REG = (ns) => new RegExp('customIcons(?:ets)?\\s*\\[\\s*[\'"`]' + ns + '[\'"`]');
+const bodyHasIcon = (body, ns) => body.includes(ns + ':') || ICON_REG(ns).test(body);
+
+// never > always > content match > fail-open. A resource we could not read is always kept:
+// being unable to check is not evidence it is unused.
+// Resource rules match on a SUBSTRING of the URL, not the whole of it — unlike entity rules,
+// which compare entity_ids exactly. Nobody wants to write out
+// `/hacsfiles/kiosk-mode/kiosk-mode.js?hacstag=1234567890`; they want to write `kiosk-mode`.
+const matchesUrl = (rules, url) => rules.some((r) => (r.re ? r.re.test(url) : url.includes(r.literal)));
+
+function keepResource(url, keys) {
+  if (matchesUrl(RES_NEVER, url)) return false;
+  if (matchesUrl(RES_ALWAYS, url)) return true;
+  const c = RESOURCE_CACHE.get(url);
+  if (!c || c.unreadable) return true;            // cannot check, so keep
+  for (const k of keys.icons) if (c.icons.has(k)) return true;
+  for (const k of keys.cards) if (cardMatchesBody(k, c)) return true;
+  return false;
+}
+
+async function buildResources(rpc, keysByDash) {
+  if (!TRIM_RESOURCES) return;
+  let rows;
+  try { rows = await rpc({ type: 'lovelace/resources' }); }
+  catch (e) { log(`  resources: FAILED (${e.message}) — forwarding all resources`); RESOURCES_BY_DASH = new Map(); RESOURCES_KEEP = new Set(); return; }
+  if (!Array.isArray(rows)) { RESOURCES_BY_DASH = new Map(); RESOURCES_KEEP = new Set(); return; }
+
+  // Every token any dashboard could match on, tagged by kind so a card type and an icon
+  // namespace that happen to share a name can never be confused for one another.
+  const unionCards = new Set(), unionIcons = new Set();
+  for (const ks of keysByDash.values()) {
+    ks.cards.forEach((k) => unionCards.add(k));
+    ks.icons.forEach((k) => unionIcons.add(k));
+  }
+  const unionFrags = new Set();
+  for (const c of unionCards) for (const f of cardFragments(c)) unionFrags.add(f);
+  const unionKeys = new Set([...[...unionCards].map((k) => 'card:' + k),
+                             ...[...unionIcons].map((k) => 'icon:' + k),
+                             ...[...unionFrags].map((k) => 'frag:' + k)]);
+  // One fetch per resource, tested against every dashboard's keys at once. Bodies are read
+  // and discarded one at a time — the whole set is ~21MB on a large install and must not be
+  // held in memory. The cache is keyed by URL, which carries HACS's version tag, so an
+  // updated card re-fetches on its own.
+  for (const r of rows) {
+    const c = RESOURCE_CACHE.get(r.url);
+    if (c && [...unionKeys].every((k) => c.tested.has(k))) continue;
+    try {
+      const abs = /^https?:/i.test(r.url) ? r.url : HA_BASE + r.url;
+      const body = await (await fetch(abs, { signal: AbortSignal.timeout(20000) })).text();
+      RESOURCE_CACHE.set(r.url, {
+        tested: new Set(unionKeys),
+        literal: new Set([...unionCards].filter((k) => body.includes(k))),
+        icons: new Set([...unionIcons].filter((k) => bodyHasIcon(body, k))),
+        frags: new Set([...unionFrags].filter((f) => body.includes(f))),
+        unreadable: false,
+        bytes: body.length,
+      });
+    } catch (e) {
+      RESOURCE_CACHE.set(r.url, { tested: new Set(unionKeys), literal: new Set(), icons: new Set(), frags: new Set(), unreadable: true, bytes: 0 });
+      logThrottled(`res:${r.url}`, `  resources: could not read ${r.url} (${e.message}) — always forwarding it`);
+    }
+  }
+
+  // Document frequency across the resources we could actually read. A fragment in more than
+  // a quarter of them identifies nothing, so it cannot carry a fragment match on its own.
+  const readable = rows.filter((r) => !RESOURCE_CACHE.get(r.url)?.unreadable);
+  FRAG_DF = new Map();
+  for (const f of unionFrags) {
+    FRAG_DF.set(f, readable.filter((r) => RESOURCE_CACHE.get(r.url).frags.has(f)).length);
+  }
+  FRAG_DF_MAX = Math.max(1, Math.floor(readable.length * 0.25));
+  // Both cutoffs scale with how many resources the instance has, so a small install and a
+  // large one behave the same way. 5% is "this word appears in almost nothing", with a floor
+  // of 2 so a tiny instance still has a workable notion of rare.
+  FRAG_RARE_MAX = Math.max(2, Math.floor(readable.length * 0.05));
+  const common = [...unionFrags].filter((f) => !isDistinctive(f));
+  if (common.length) {
+    log(`  resources: ${common.length} fragment(s) too common to identify a card (>${FRAG_DF_MAX} of ${readable.length}): ${common.sort().join(', ')}`);
+  }
+
+  const byDash = new Map();
+  for (const [dash, keys] of keysByDash) {
+    const keep = new Set();
+    let keptB = 0, dropB = 0;
+    for (const r of rows) {
+      const bytes = RESOURCE_CACHE.get(r.url)?.bytes || 0;
+      if (keepResource(r.url, keys)) { keep.add(r.url); keptB += bytes; }
+      else dropB += bytes;
+    }
+    byDash.set(dash, keep);
+    const needs = [...[...keys.cards].sort(), ...[...keys.icons].sort().map((i) => i + ':')];
+    log(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
+    log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
+  }
+  RESOURCES_BY_DASH = byDash;
+  const servedUnion = new Set();
+  for (const keep of byDash.values()) for (const u of keep) servedUnion.add(u);
+  RESOURCES_KEEP = servedUnion;
+  log(`  resources served: ${servedUnion.size}/${rows.length} (union of all dashboards)`);
+
+  // Resources dropped by EVERY dashboard get their own warning, because this set is the
+  // exact signature of the one failure the tuning loop cannot catch.
+  //
+  // The documented way to tune this option is "load the dashboard and see what looks
+  // wrong". That works for a card that fails to render or an icon that goes blank. It does
+  // not work for a resource that registers no element and is named by no dashboard, but
+  // runs on load and subscribes to state — an idle timer, a camera pop-up, a heartbeat.
+  // Drop one of those and the dashboard is pixel-identical; only the behaviour stops, and
+  // nothing reports it on either side. (Reported by @ajguerre1 on upstream #15, who lost a
+  // doorbell pop-up on 28 panels for three days to the same failure one level down, via
+  // entities.)
+  //
+  // The proxy cannot tell that class apart from a genuinely unused resource — but the
+  // reader can, instantly. So say which ones they are rather than burying them in the
+  // per-dashboard drop lists.
+  const servedAnywhere = new Set();
+  for (const keep of byDash.values()) for (const u of keep) servedAnywhere.add(u);
+  const droppedByAll = rows.filter((r) => !servedAnywhere.has(r.url));
+  if (droppedByAll.length) {
+    const kb = droppedByAll.reduce((t, r) => t + (RESOURCE_CACHE.get(r.url)?.bytes || 0), 0) / 1024;
+    log(`  resources: ${droppedByAll.length} dropped by ALL dashboards (no dashboard references them), ${kb.toFixed(0)}KB.`);
+    log('    If any of these run on load rather than rendering a card — an idle timer, a');
+    log('    pop-up, a heartbeat — add them to resources_always_forward. Dropping one of');
+    log('    those is INVISIBLE: the dashboard renders normally and only the behaviour stops.');
+    for (const r of droppedByAll) {
+      const b = ((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024).toFixed(0);
+      log(`      drop ${String(b).padStart(6)}KB ${r.url.split('?')[0]}`);
+    }
+  }
+}
+
 // NOTE: there is deliberately NO per-connection dashboard attribution here.
 // An earlier version of this branch inferred it from the page GET preceding the
 // websocket, keyed by client IP. That is a heuristic — it breaks behind NAT, and a
@@ -728,6 +998,7 @@ function bridge(browserWs, allow = ALLOW) {
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
   const registryIds = new Map();    // request id -> which registry, to trim its result
+  const resourceIds = new Set();    // lovelace/resources requests, to trim their result
   const queue = []; let haOpen = false;
   const toHA = (s) => { if (haOpen) haWs.send(s); else queue.push(s); };
 
@@ -738,6 +1009,7 @@ function bridge(browserWs, allow = ALLOW) {
     try { m = JSON.parse(s); } catch { return toHA(s); }
     if (STRIP && m && m.type === 'get_states') getStatesIds.add(m.id);
     if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) registryIds.set(m.id, REGISTRY_TYPES.get(m.type));
+    if (STRIP && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
     if (STRIP && m && m.type === 'subscribe_entities' && !m.entity_ids) {
       // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
       // nothing", it's "no filter" (HA: `set(msg["entity_ids"]) or None`). Sending one would
@@ -798,6 +1070,22 @@ function bridge(browserWs, allow = ALLOW) {
         logThrottled(`reg:${kind}`, `${kind} registry trimmed ${before} -> ${after}`);
       }
     }
+    // Lovelace resources, trimmed to the ones this dashboard actually needs. Only ever for a
+    // connection we attributed to a dashboard: an unattributed connection gets the union of
+    // entities, and must likewise get every resource — guessing wrong here renders a card as
+    // "Custom element doesn't exist", which is far worse than sending bytes it won't use.
+    if (STRIP && TRIM_RESOURCES && m && m.type === 'result' && resourceIds.has(m.id) && Array.isArray(m.result)) {
+      resourceIds.delete(m.id);
+      const keep = RESOURCES_KEEP;
+      if (keep?.size) {
+        const before = m.result.length;
+        m.result = m.result.filter((r) => keep.has(r?.url));
+        if (m.result.length !== before) {
+          s = JSON.stringify(m);
+          logThrottled('resources', `lovelace resources trimmed ${before} -> ${m.result.length}`);
+        }
+      }
+    }
     // Defensive egress filter (belt-and-suspenders): HA already trims to the injected
     // entity_ids, so this is normally a no-op. But if a future HA ever ignored that
     // filter, re-filter the subscribe_entities event payload to the allowlist here so
@@ -832,7 +1120,7 @@ function bridge(browserWs, allow = ALLOW) {
 // ---- boot ----
 log(`ha-ws-trim-proxy v${VERSION} starting`);
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
-log(`options: trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS}`);
+log(`options: trim_registries=${TRIM_REGISTRIES} compress_websocket=${COMPRESS_WS} trim_resources=${TRIM_RESOURCES}`);
 // Listen FIRST, before HA is known to be reachable. The add-on and HA core restart together
 // (host boot, a core update), and core can take minutes to answer — the proxy's job is to
 // wait for it, not to exit. HTTP proxies through immediately (502 while HA is down, like any

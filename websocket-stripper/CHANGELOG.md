@@ -15,6 +15,18 @@ description, with the warnings on the screen where the option is toggled. Two te
 file in step with the schema in both directions. README and DOCS no longer claim registries
 "pass through untouched".
 
+**Resource trimming** (`trim_resources`, off by default). Lovelace resources are instance-wide,
+so every kiosk parses every custom card installed — 21MB of JavaScript for a four-card wall
+panel on the instance this was built against, and ~73% of the main thread's busy time. Each
+dashboard's card types and icon namespaces are matched against each resource's body (literal
+name, then rare or distinctive fragments, since bundles like Mushroom build their element names
+at runtime and never write them down); the union across dashboards is served, and resources no
+dashboard references are dropped. Off by default because one class of drop is silent: a module
+that registers no element and runs on load — an idle timer, a pop-up, a heartbeat. The log names
+every resource dropped by ALL dashboards for exactly that reason; `resources_always_forward` and
+`resources_never_forward` override the match. Measured: no load-time win on its own, stated
+plainly in DOCS; the saving is bytes and parse work.
+
 **Fix: the add-on was removing websocket compression.** Home Assistant's own websocket
 negotiates `permessage-deflate`, but the `ws` library does not enable it server-side by
 default — so putting this proxy in front of HA silently downgraded every kiosk from deflated
