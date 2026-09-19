@@ -11,9 +11,28 @@
      greys this used before stood out against HA's neutral surfaces. */
   :root {
     color-scheme: light;
-    --bg: #fafafa; --card: #ffffff; --fg: #212121; --muted: #727272;
-    --line: rgba(0, 0, 0, .12); --accent: #03a9f4;
-    --good: #43a047; --warn: #ffa600; --error: #db4437;
+    /* Home Assistant's own token names, with this panel's short names aliased onto them below.
+       Sextant is a NATIVE panel, so it reads --card-background-color and friends straight from
+       the user's theme; this panel is an Ingress iframe, which inherits nothing, so it has to
+       supply the same names itself. Using HA's spelling anyway is what lets a rule be copied
+       between the two unchanged — and if this ever becomes a native panel, deleting these
+       blocks is the whole migration. */
+    --primary-background-color: #fafafa;
+    --card-background-color: #ffffff;
+    --secondary-background-color: #eceff1;
+    --primary-text-color: #212121;
+    --secondary-text-color: #727272;
+    --divider-color: rgba(0, 0, 0, .12);
+    --primary-color: #03a9f4;
+    --success-color: #43a047; --warning-color: #ffa600; --error-color: #db4437;
+    --app-header-background-color: var(--primary-color);
+    --app-header-text-color: #fff;
+    --ha-card-border-radius: 12px;
+    --ha-card-box-shadow: 0 1px 4px rgba(0, 0, 0, .15);
+    --bg: var(--primary-background-color); --card: var(--card-background-color);
+    --fg: var(--primary-text-color); --muted: var(--secondary-text-color);
+    --line: var(--divider-color); --accent: var(--primary-color);
+    --good: var(--success-color); --warn: var(--warning-color); --error: var(--error-color);
     /* Route colours. The route is the question the diagram exists to answer — "which entry point
        did this come through" — so it is what carries the colour; origin and hostname nodes stay
        neutral rather than competing with it. Hues are separated enough to stay distinct for the
@@ -28,14 +47,26 @@
     --i-arrow-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11,4H13V16L18.5,10.5L19.92,11.92L12,19.84L4.08,11.92L5.5,10.5L11,16V4Z'/%3E%3C/svg%3E");
     --i-unfold: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z'/%3E%3C/svg%3E");
     --i-magnify: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23727272' d='M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z'/%3E%3C/svg%3E");
+    /* Tab glyphs, masked in the bar's own colour. A tab is icon AND label like Sextant's, so
+       hiding the label on a narrow screen still leaves something to aim at. */
+    --i-tab-overview: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M19%2C5V7H15V5H19M9%2C5V11H5V5H9M19%2C13V19H15V13H19M9%2C17V19H5V17H9M21%2C3H13V9H21V3M11%2C3H3V13H11V3M21%2C11H13V21H21V11M11%2C15H3V21H11V15Z%27%2F%3E%3C%2Fsvg%3E");
+    --i-tab-clients: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M3%206H21V4H3C1.9%204%201%204.9%201%206V18C1%2019.1%201.9%2020%203%2020H7V18H3V6M13%2012H9V13.78C8.39%2014.33%208%2015.11%208%2016C8%2016.89%208.39%2017.67%209%2018.22V20H13V18.22C13.61%2017.67%2014%2016.88%2014%2016S13.61%2014.33%2013%2013.78V12M11%2017.5C10.17%2017.5%209.5%2016.83%209.5%2016S10.17%2014.5%2011%2014.5%2012.5%2015.17%2012.5%2016%2011.83%2017.5%2011%2017.5M22%208H16C15.5%208%2015%208.5%2015%209V19C15%2019.5%2015.5%2020%2016%2020H22C22.5%2020%2023%2019.5%2023%2019V9C23%208.5%2022.5%208%2022%208M21%2018H17V10H21V18Z%27%2F%3E%3C%2Fsvg%3E");
+    --i-tab-traffic: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M9%2C3L5%2C7H8V14H10V7H13M16%2C17V10H14V17H11L15%2C21L19%2C17H16Z%27%2F%3E%3C%2Fsvg%3E");
+    --i-tab-entities: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M7%2C5H21V7H7V5M7%2C13V11H21V13H7M4%2C4.5A1.5%2C1.5%200%200%2C1%205.5%2C6A1.5%2C1.5%200%200%2C1%204%2C7.5A1.5%2C1.5%200%200%2C1%202.5%2C6A1.5%2C1.5%200%200%2C1%204%2C4.5M4%2C10.5A1.5%2C1.5%200%200%2C1%205.5%2C12A1.5%2C1.5%200%200%2C1%204%2C13.5A1.5%2C1.5%200%200%2C1%202.5%2C12A1.5%2C1.5%200%200%2C1%204%2C10.5M7%2C19V17H21V19H7M4%2C16.5A1.5%2C1.5%200%200%2C1%205.5%2C18A1.5%2C1.5%200%200%2C1%204%2C19.5A1.5%2C1.5%200%200%2C1%202.5%2C18A1.5%2C1.5%200%200%2C1%204%2C16.5Z%27%2F%3E%3C%2Fsvg%3E");
+    --i-tab-config: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M12%2C8A4%2C4%200%200%2C1%2016%2C12A4%2C4%200%200%2C1%2012%2C16A4%2C4%200%200%2C1%208%2C12A4%2C4%200%200%2C1%2012%2C8M12%2C10A2%2C2%200%200%2C0%2010%2C12A2%2C2%200%200%2C0%2012%2C14A2%2C2%200%200%2C0%2014%2C12A2%2C2%200%200%2C0%2012%2C10M10%2C22C9.75%2C22%209.54%2C21.82%209.5%2C21.58L9.13%2C18.93C8.5%2C18.68%207.96%2C18.34%207.44%2C17.94L4.95%2C18.95C4.73%2C19.03%204.46%2C18.95%204.34%2C18.73L2.34%2C15.27C2.21%2C15.05%202.27%2C14.78%202.46%2C14.63L4.57%2C12.97L4.5%2C12L4.57%2C11L2.46%2C9.37C2.27%2C9.22%202.21%2C8.95%202.34%2C8.73L4.34%2C5.27C4.46%2C5.05%204.73%2C4.96%204.95%2C5.05L7.44%2C6.05C7.96%2C5.66%208.5%2C5.32%209.13%2C5.07L9.5%2C2.42C9.54%2C2.18%209.75%2C2%2010%2C2H14C14.25%2C2%2014.46%2C2.18%2014.5%2C2.42L14.87%2C5.07C15.5%2C5.32%2016.04%2C5.66%2016.56%2C6.05L19.05%2C5.05C19.27%2C4.96%2019.54%2C5.05%2019.66%2C5.27L21.66%2C8.73C21.79%2C8.95%2021.73%2C9.22%2021.54%2C9.37L19.43%2C11L19.5%2C12L19.43%2C13L21.54%2C14.63C21.73%2C14.78%2021.79%2C15.05%2021.66%2C15.27L19.66%2C18.73C19.54%2C18.95%2019.27%2C19.04%2019.05%2C18.95L16.56%2C17.95C16.04%2C18.34%2015.5%2C18.68%2014.87%2C18.93L14.5%2C21.58C14.46%2C21.82%2014.25%2C22%2014%2C22H10M11.25%2C4L10.88%2C6.61C9.68%2C6.86%208.62%2C7.5%207.85%2C8.39L5.44%2C7.35L4.69%2C8.65L6.8%2C10.2C6.4%2C11.37%206.4%2C12.64%206.8%2C13.8L4.68%2C15.36L5.43%2C16.66L7.86%2C15.62C8.63%2C16.5%209.68%2C17.14%2010.87%2C17.38L11.24%2C20H12.76L13.13%2C17.39C14.32%2C17.14%2015.37%2C16.5%2016.14%2C15.62L18.57%2C16.66L19.32%2C15.36L17.2%2C13.81C17.6%2C12.64%2017.6%2C11.37%2017.2%2C10.2L19.31%2C8.65L18.56%2C7.35L16.15%2C8.39C15.38%2C7.5%2014.32%2C6.86%2013.12%2C6.62L12.75%2C4H11.25Z%27%2F%3E%3C%2Fsvg%3E");
   }
   /* Dark: HA's built-in dark theme. Two selectors carry the same values on purpose — the system
      preference applies unless the toggle says light, and the toggle saying dark wins outright. */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --bg: #111111; --card: #1c1c1c; --fg: #e1e1e1; --muted: #9b9b9b;
-      --line: rgba(255, 255, 255, .12);
+      --primary-background-color: #111111; --card-background-color: #1c1c1c;
+      --secondary-background-color: #282828;
+      --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b;
+      --divider-color: rgba(255, 255, 255, .12);
+      /* HA's own dark themes keep the header dark rather than painting it the accent. */
+      --app-header-background-color: #1c1c1c;
+      --ha-card-box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
       --r-direct: #81c784; --r-proxy: #4fc3f7; --r-cloudflare: #ffb74d;
       --r-ingress: #ce93d8; --r-unknown: #90a4ae;
       --i-magnify: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%239b9b9b' d='M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z'/%3E%3C/svg%3E");
@@ -43,36 +74,84 @@
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #111111; --card: #1c1c1c; --fg: #e1e1e1; --muted: #9b9b9b;
-    --line: rgba(255, 255, 255, .12);
+    --primary-background-color: #111111; --card-background-color: #1c1c1c;
+    --secondary-background-color: #282828;
+    --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b;
+    --divider-color: rgba(255, 255, 255, .12);
+    --app-header-background-color: #1c1c1c;
+    --ha-card-box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
     --r-direct: #81c784; --r-proxy: #4fc3f7; --r-cloudflare: #ffb74d;
     --r-ingress: #ce93d8; --r-unknown: #90a4ae;
     --i-magnify: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%239b9b9b' d='M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z'/%3E%3C/svg%3E");
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
+    margin: 0; padding: 0 16px 16px; background: var(--bg); color: var(--fg);
     font: 14px/1.5 Roboto, "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   /* Sentence case throughout. Home Assistant's card headers are 16px medium in the text colour,
      and its labels are plain secondary text — no small caps, no letter spacing. */
-  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  /* The shell follows Sextant's: one coloured 56px bar carrying the brand and the tabs, so the
+     two panels read as the same family of tool. Full-bleed via negative margins because the
+     cards are body children and keep the body's side padding. */
+  .topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
+    margin: 0 -16px; padding: 0 12px; height: 56px;
+    background: var(--app-header-background-color); color: var(--app-header-text-color, #fff); }
+  .brand { display: flex; align-items: center; gap: 8px; margin-right: 8px; color: inherit;
+    text-decoration: none; flex: 0 0 auto; }
+  .brand img { width: 28px; height: 28px; display: block; border-radius: 6px; }
+  .brand-text { display: flex; flex-direction: column; line-height: 1.05; }
+  .brand-name { font-weight: 600; font-size: 18px; }
+  .brand-sub { font-size: 9px; letter-spacing: .04em; opacity: .75; text-transform: uppercase; }
+  .spacer { flex: 1; }
+  .repo { color: inherit; opacity: .85; display: flex; align-items: center; flex: 0 0 auto; }
+  .repo:hover { opacity: 1; }
+  .repo svg { width: 20px; height: 20px; fill: currentColor; display: block; }
+  /* Version, uptime and the option pills: a slim strip under the bar rather than a line of body
+     text, so the first card starts at the top of the page the way Sextant's do. */
+  .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin: 0 -16px 12px; padding: 6px 16px; font-size: 12px; color: var(--muted);
+    background: var(--card); border-bottom: 1px solid var(--line); }
   h1 { font-size: 20px; font-weight: 400; margin: 0 0 2px; }
-  h2 { font-size: 16px; font-weight: 500; margin: 0 0 12px; color: var(--fg); }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted); }
+  .card { background: var(--card); border-radius: var(--ha-card-border-radius, 12px);
+    box-shadow: var(--ha-card-box-shadow); padding: 12px 14px; margin: 0 0 12px; }
   .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .big { font-size: 26px; font-weight: 500; }
   .big.good { color: var(--good); }
   .label { color: var(--muted); font-size: 12px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: right; padding: 8px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th:first-child, td:first-child { text-align: left; }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  /* Numbers line up column-wise; the first column is an identity, so it stays left and plain. */
+  td { font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
   tr:last-child td { border-bottom: none; }
   .scroll { overflow-x: auto; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
-  .pill.on { color: var(--good); border-color: var(--good); }
+  /* A wide table on a phone: the leading column — the row's identity — stays put while the rest
+     scrolls under it, and a fading edge says there is more to see. Sextant does this to every
+     .wrap; here every table already sits in a .scroll, so they all get it for free. */
+  @media (max-width: 720px) {
+    .scroll { position: relative;
+      background: linear-gradient(to right, var(--card) 30%, rgba(0,0,0,0)),
+                  linear-gradient(to right, rgba(0,0,0,0), var(--card) 70%) 100% 0;
+      background-repeat: no-repeat; background-size: 20px 100%, 20px 100%;
+      background-attachment: local, scroll; }
+    .scroll table { border-collapse: separate; border-spacing: 0; }
+    .scroll th:first-child, .scroll td:first-child { position: sticky; left: 0;
+      background: var(--card); box-shadow: 2px 0 4px -2px rgba(0, 0, 0, .2); }
+  }
+  /* Filled tints rather than outlines, as Sextant's are: at 11px an outline pill reads as an
+     empty box before it reads as a state. */
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; background: var(--secondary-background-color); color: var(--muted); }
+  .pill.on, .pill.ok { background: rgba(67, 160, 71, .18); color: var(--good); }
+  .pill.warn { background: rgba(255, 166, 0, .22); color: var(--warn); }
+  .pill.bad { background: rgba(219, 68, 55, .18); color: var(--error); }
+  .empty { padding: 24px; color: var(--muted); text-align: center; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px;
+    align-items: start; }
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
   /* Range toggle, in the card heading. */
   .seg { float: right; font-weight: 400; }
@@ -94,7 +173,7 @@
   #paths-detail { margin-top: 12px; }
   #paths-detail summary { color: var(--muted); font-size: 12px; cursor: pointer; }
   .cfgbtn { font: inherit; font-size: 13px; font-weight: 500; color: var(--accent); background: none;
-    border: 1px solid var(--line); border-radius: 4px; padding: 4px 12px; cursor: pointer; }
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
   .cfgbtn:hover { border-color: var(--accent); }
   .cfgbtn:disabled { opacity: .5; cursor: default; }
   /* A destructive action looks like one: Home Assistant's error red, so "Remove" and "Cancel"
@@ -226,9 +305,9 @@
   .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
   /* Search fields carry a leading magnifier, the way Home Assistant's do. */
-  .search { width: 100%; margin-bottom: 10px; padding: 8px 10px 8px 36px; font: inherit; font-size: 14px;
-    color: var(--fg); background: var(--bg) var(--i-magnify) 10px center / 18px no-repeat;
-    border: 1px solid var(--line); border-radius: 8px; }
+  .search { width: 100%; margin-bottom: 10px; padding: 6px 8px 6px 34px; font: inherit; font-size: 14px;
+    color: var(--fg); background: var(--bg) var(--i-magnify) 9px center / 18px no-repeat;
+    border: 1px solid var(--line); border-radius: 6px; }
   .search:focus { outline: none; border-color: var(--accent); }
   /* Sortable headers. The arrow is a ::after so it never shifts the column width when it
      appears — a header that reflows the table on click is worse than no indicator at all. MDI
@@ -247,30 +326,60 @@
      that makes tabs worse than a single page. */
   /* Never wraps: on a phone the last tab dropped onto its own line. Scrolls sideways instead, the
      way Home Assistant's own tab bars do. */
-  .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; flex-wrap: nowrap;
-    overflow-x: auto; scrollbar-width: none;
-    background: var(--bg); padding: 8px 0 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .tabs { display: flex; gap: 2px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    min-width: 0; }
   .tabs::-webkit-scrollbar { display: none; }
-  .tabs button { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0;
-    border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer;
-    white-space: nowrap; flex: 0 0 auto; }
-  .tabs button:hover { color: var(--fg); }
-  .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
-  .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .tabs button::before { content: ''; flex: 0 0 auto; width: 20px; height: 20px;
+    background: currentColor; -webkit-mask: var(--tab-icon) center / contain no-repeat;
+    mask: var(--tab-icon) center / contain no-repeat; }
+  .tabs button[data-tab="overview"] { --tab-icon: var(--i-tab-overview); }
+  .tabs button[data-tab="clients"]  { --tab-icon: var(--i-tab-clients); }
+  .tabs button[data-tab="traffic"]  { --tab-icon: var(--i-tab-traffic); }
+  .tabs button[data-tab="entities"] { --tab-icon: var(--i-tab-entities); }
+  .tabs button[data-tab="config"]   { --tab-icon: var(--i-tab-config); }
+  .tabs button { display: flex; align-items: center; gap: 6px; font: inherit; font-size: 14px;
+    color: inherit; background: transparent; border: 0; border-bottom: 3px solid transparent;
+    padding: 0 10px; height: 56px; cursor: pointer; white-space: nowrap; flex: 0 0 auto;
+    opacity: .8; }
+  .tabs button:hover { opacity: 1; }
+  .tabs button.on { opacity: 1; border-bottom-color: currentColor; }
+  .tabs button:focus-visible { outline: 2px solid currentColor; outline-offset: -4px; }
+  /* The theme switch sits in the bar, so it is drawn on the bar rather than on the page. `.seg`
+     is also a card-heading control (see the range toggle), where it floats — inside the topbar it
+     is a flex item instead, and one that never wraps: at 375px the three words broke onto a
+     second line and pushed themselves out of a bar that is exactly 56px tall. */
+  .topbar .seg { display: inline-flex; flex: 0 0 auto; float: none; white-space: nowrap; }
+  .topbar .seg button { color: inherit; background: rgba(255, 255, 255, .12);
+    border-color: rgba(255, 255, 255, .35); }
+  .topbar .seg button.on { color: var(--app-header-background-color); background: #fff;
+    border-color: #fff; }
+  @media (max-width: 860px) {
+    .tab-label { display: none; }
+    .tabs button { padding: 0 10px; }
+    .brand-text { display: none; }
+    .repo { display: none; }
+    .topbar { gap: 4px; padding: 0 8px; }
+    /* The tabs take the room the brand text and the repo link gave up; the spacer must not
+       take it back, or the strip scrolls sideways while the bar has space to spare. */
+    .spacer { flex: 0 1 auto; }
+    .topbar .seg button { padding: 3px 7px; }
+  }
   .card[hidden] { display: none; }
   .err { color: var(--error); }
   a { color: var(--accent); }
   /* Feedback as a snackbar at the bottom, where Home Assistant puts it. A note at the top of
      the Config card was off-screen for every edit made further down. */
-  .toast { position: fixed; left: 16px; bottom: 16px; z-index: 50;
+  .toast { position: fixed; left: 50%; bottom: 24px; z-index: 50; transform: translate(-50%, 8px);
     max-width: min(560px, calc(100% - 32px)); background: #323232; color: #fff;
     border-radius: 4px; padding: 12px 16px; font-size: 14px; line-height: 1.4;
     box-shadow: 0 3px 5px -1px rgba(0, 0, 0, .2), 0 6px 10px rgba(0, 0, 0, .14);
     opacity: 0; transform: translateY(8px); transition: opacity .15s, transform .15s;
     pointer-events: none; }
-  .toast.show { opacity: 1; transform: none; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
   .toast.err { background: var(--error); }
-  @media (max-width: 600px) { .toast { left: 0; right: 0; bottom: 0; max-width: none; border-radius: 0; } }
+  @media (max-width: 600px) { .toast { left: 0; right: 0; bottom: 0; max-width: none;
+    border-radius: 0; transform: translateY(8px); }
+    .toast.show { transform: none; } }
   .chart { margin-bottom: 14px; }
   .chart svg { width: 100%; height: 110px; display: block; margin-top: 4px; }
   /* The peak value lives in HTML, not inside the SVG: the chart is stretched to the card width
@@ -283,15 +392,29 @@
   details.more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* A pill that does something says so. */
   .pill.btn { cursor: pointer; }
-  .pill.btn:hover { color: var(--accent); border-color: var(--accent); }
+  .pill.btn:hover { color: var(--accent); }
   /* A cell repeating the one above it, so several connections from one client read as a group. */
   td.dim { color: var(--muted); opacity: .55; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; vertical-align: middle; }
 </style>
 </head>
 <body>
+  <!-- One bar carrying the brand and the tabs, as Sextant's panel does, so the two read as the
+       same family of tool. The icon is the app's own icon.svg inlined — the file itself, not a
+       copy of it, so it cannot drift. -->
   <div class="topbar">
-    <h1><span class="dot"></span>WebSocket Stripper</h1>
+    <a class="brand" href="#" title="Overview" data-tab="overview">
+      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4IiB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCI+CiAgPHRpdGxlPlN0cmltbWVyIC0gc2xpY2VkIGJsYWRlLCBza3kgZ3JhZGllbnQsIGRhcmsgYmxhZGVzLCB3aGl0ZSBsaW5lPC90aXRsZT4KICA8ZGVmcz4KICAgIDxjbGlwUGF0aCBpZD0idGlsZSI+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIyNCIvPjwvY2xpcFBhdGg+CiAgICA8Y2xpcFBhdGggaWQ9Imxvd2VyIj48cGF0aCBkPSJNMCAxMjggSDEyOCBWNTAgTDAgODIgWiIvPjwvY2xpcFBhdGg+CiAgICA8Y2xpcFBhdGggaWQ9InVwcGVyIj48cGF0aCBkPSJNMCAwIEgxMjggVjQyIEwwIDc0IFoiLz48L2NsaXBQYXRoPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJiZyIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzhlYzVlYSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2Q4ZWVmYSIvPjwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxnIGNsaXAtcGF0aD0idXJsKCN0aWxlKSI+CiAgICA8cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgZmlsbD0idXJsKCNiZykiLz4KICAgIDwhLS0gdHdvIHNob3J0ZXIgYmxhZGVzOiBiZWxvdyB0aGUgbGluZSwgc28gdGhlIHN0cmltbWVyIGxlYXZlcyB0aGVtIGFsb25lIC0tPgogICAgPHBhdGggZD0iTTM2IDEyOCBDMzQgMTEyIDI3IDEwMCAxMyA5MSBDMTcgMTA0IDE3IDExNiAxNiAxMjggWiIgZmlsbD0iIzQzYTA0NyIvPgogICAgPHBhdGggZD0iTTg4IDEyOCBDODkgMTA4IDk2IDkxIDExMSA3NyBDMTA1IDk1IDEwNSAxMTIgMTA3IDEyOCBaIiBmaWxsPSIjMzg4ZTNjIi8+CiAgICA8ZyBjbGlwLXBhdGg9InVybCgjbG93ZXIpIj4KICAgICAgPHBhdGggZD0iTTM4IDEyOCBDNDAgODYgNTQgNDIgOTIgMTAgQzgyIDUwIDgwIDg4IDgyIDEyOCBaIiBmaWxsPSIjMWI1ZTIwIi8+CiAgICAgIDxwYXRoIGQ9Ik0zOCAxMjggQzQwIDg2IDU0IDQyIDkyIDEwIEM3MiA0NiA2MiA4OCA2MCAxMjggWiIgZmlsbD0iIzJlN2QzMiIvPgogICAgPC9nPgogICAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQgLTIpIHJvdGF0ZSgxNiA3OCA1MCkiPgogICAgICA8ZyBjbGlwLXBhdGg9InVybCgjdXBwZXIpIj4KICAgICAgICA8cGF0aCBkPSJNMzggMTI4IEM0MCA4NiA1NCA0MiA5MiAxMCBDODIgNTAgODAgODggODIgMTI4IFoiIGZpbGw9IiMxYjVlMjAiLz4KICAgICAgICA8cGF0aCBkPSJNMzggMTI4IEM0MCA4NiA1NCA0MiA5MiAxMCBDNzIgNDYgNjIgODggNjAgMTI4IFoiIGZpbGw9IiMyZTdkMzIiLz4KICAgICAgPC9nPgogICAgPC9nPgogICAgPGxpbmUgeDE9IjIyIiB5MT0iODAiIHgyPSIxMTIiIHkyPSI1Ny41IiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPC9nPgo8L3N2Zz4K" alt="">
+      <span class="brand-text"><span class="brand-name">WebSocket Stripper</span><span
+        class="brand-sub">not the whole house</span></span>
+    </a>
+    <nav class="tabs" id="tabs" role="tablist">
+      <button type="button" data-tab="overview" class="on"><span class="tab-label">Overview</span></button><button
+        type="button" data-tab="clients"><span class="tab-label">Clients</span></button><button
+        type="button" data-tab="traffic"><span class="tab-label">Traffic</span></button><button
+        type="button" data-tab="entities"><span class="tab-label">Entities</span></button><button
+        type="button" data-tab="config"><span class="tab-label">Config</span></button>
+    </nav>
+    <div class="spacer"></div>
     <!-- Ingress never passes Home Assistant's theme into this frame, so the page can only follow
          the OS — a dark HA on a light desktop got a light panel inside a dark frame. This lets a
          person say which, and remembers it. -->
@@ -300,16 +423,12 @@
         type="button" data-theme="light">Light</button><button
         type="button" data-theme="dark">Dark</button>
     </span>
+    <a class="repo" href="https://github.com/davidcoulson/HA-Websocket-Stripper" target="_blank"
+       rel="noopener" title="This app on GitHub" aria-label="This app on GitHub">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2A10 10 0 0 0 8.84 21.5c.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.87 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85V21c0 .27.16.59.67.5A10 10 0 0 0 12 2Z"/></svg>
+    </a>
   </div>
   <div class="sub" id="sub">loading…</div>
-
-  <nav class="tabs" id="tabs" role="tablist">
-    <button type="button" data-tab="overview" class="on">Overview</button><button
-      type="button" data-tab="clients">Clients</button><button
-      type="button" data-tab="traffic">Traffic</button><button
-      type="button" data-tab="entities">Entities</button><button
-      type="button" data-tab="config">Config</button>
-  </nav>
 
   <div class="card" data-tab="overview">
     <div class="grid">
@@ -579,11 +698,16 @@ function toast(text, kind) {
 function showTab(name) {
   for (const c of document.querySelectorAll('.card[data-tab]')) c.hidden = c.dataset.tab !== name;
   for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.tab === name);
+  for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
   try { localStorage.setItem('stripper-tab', name); } catch { /* private mode */ }
 }
-$('tabs').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-tab]');
-  if (b) showTab(b.dataset.tab);
+document.querySelector('.topbar').addEventListener('click', (e) => {
+  // The brand mark is an anchor rather than a tab button, so it is matched on [data-tab] too —
+  // clicking the name goes back to Overview, the way Sextant's brand returns to its live map.
+  const b = e.target.closest('[data-tab]');
+  if (!b) return;
+  e.preventDefault();
+  showTab(b.dataset.tab);
 });
 // An unknown or missing stored value must land somewhere real, not on a blank page.
 {

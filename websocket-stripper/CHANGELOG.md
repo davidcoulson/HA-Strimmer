@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.09.19.2 — 2026-09-19
+
+**The console now looks like Sextant.** Two panels by the same person on the same Home Assistant
+should not look like two different products. Sextant is a NATIVE panel, so it reads
+`--card-background-color` and its siblings straight from the user's theme; this console is an
+Ingress iframe, which inherits nothing and has to supply those names itself. It now does — the
+token names are Home Assistant's own, with this panel's short spellings (`--fg`, `--line`, …)
+aliased onto them, so a rule can be copied between the two unchanged and turning this into a
+native panel later would mean deleting the token blocks and nothing else.
+
+- **One 56px bar** carries the app icon, the name, the tabs and the theme switch, coloured with
+  `--app-header-background-color` — the accent in light, `#1c1c1c` in dark, as HA's own themes do.
+  Tabs are icon + label with a 3px underline on the active one; the brand returns to Overview.
+  Below 860px the labels and the brand text go and the icons remain, which is why the tabs have
+  icons at all.
+- **Cards** carry a shadow instead of a border, at Sextant's radius, padding and spacing.
+  Section headings are small uppercase secondary text. Pills are filled tints rather than
+  outlines — at 11px an outline reads as an empty box before it reads as a state.
+- **Tables** are 13px with tabular figures, so columns of numbers line up.
+- **A wide table on a phone** keeps its first column — the row's identity — pinned while the rest
+  scrolls under it, with a fading edge to say there is more. Straight from Sextant's `.wrap`.
+- Buttons and inputs at Sextant's metrics; the toast is centred at the bottom as Sextant's is.
+- Version, uptime and the option pills move from a line of body text into a slim strip under the
+  bar, so the first card starts at the top of the page.
+
+---
 ## 2026.09.19.1 — 2026-09-19
 
 **A rebuild storm nobody could see, and nine other things a review of the code and the live logs
