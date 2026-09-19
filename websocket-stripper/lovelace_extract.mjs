@@ -18,6 +18,8 @@
 //                      Collect the templates with collectTemplates(), render them through
 //                      HA, and pass the results back in (this module can't render itself).
 
+import vm from 'node:vm';
+
 const ID_RE = /^[a-z_][a-z0-9_]*\.[a-z0-9_]+$/;
 export const isEntityId = (s) => typeof s === 'string' && ID_RE.test(s);
 
@@ -31,22 +33,131 @@ export const isEntityId = (s) => typeof s === 'string' && ID_RE.test(s);
 // Previously only the glob form existed, and a /regex/ was escaped as literal text — so
 // `/^sensor\.pv_.*_power$/` compiled to `^/\^sensor\\\.pv_.*_power\$/$` and matched nothing
 // (issue #10). Upstream ORs the regex against exact equality, so we do too.
-export function toMatcher(pattern) {
+//
+// The rest of upstream's matcher is ported too, in upstream's order, because a value that is not
+// understood does not fail loudly — it falls through to exact equality and matches NOTHING. That
+// is how `state: "< 20"` on a low-battery card resolved to zero entities: the string "< 20" was
+// compared with `===` against each state. Ported:
+//   "$$…"        match against JSON.stringify(value) — for attributes that are objects/lists
+//   "… m|h|d ago" the value is a timestamp; compare its age in minutes / hours / days
+//   <= >= == != < > ! =   numeric comparison via parseFloat, exactly as upstream spells them
+// Upstream quirks are kept rather than corrected — `"! on"` parses NaN and so matches everything —
+// because the card in the browser behaves that way, and the allowlist has to cover what the card
+// will actually show. Every one of those quirks errs toward including.
+//
+// `note(msg)` is optional and receives anything worth telling a person — see guardedTest.
+const AGO_SUFFIX_RE = /([mhd])\s+ago\s*$/i;
+const COMPARISONS = [
+  ['<=', (a, b) => a <= b], ['>=', (a, b) => a >= b], ['==', (a, b) => a == b],   // eslint-disable-line eqeqeq
+  ['!=', (a, b) => a != b], ['<', (a, b) => a < b], ['>', (a, b) => a > b],       // eslint-disable-line eqeqeq
+  ['!', (a, b) => a != b], ['=', (a, b) => a == b],                               // eslint-disable-line eqeqeq
+];
+
+export function toMatcher(pattern, note = null) {
   if (typeof pattern !== 'string') return (v) => v === pattern;
   const tests = [];
+  const transforms = [];
+  if (pattern.startsWith('$$')) {
+    pattern = pattern.substring(2);
+    transforms.push(JSON.stringify);
+  }
   if ((pattern.startsWith('/') && pattern.endsWith('/') && pattern.length > 1) || pattern.includes('*')) {
     let p = pattern;
+    const authored = p.startsWith('/');
     // Glob -> anchored regex. Escape regex metacharacters EXCEPT `*`, which becomes `.*`.
     // (Upstream's own glob branch forgets to escape `.`; we escape it, which is stricter but
     // only ever in the safe direction for an allowlist.)
-    if (!p.startsWith('/')) p = `/^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$/`;
+    if (!authored) p = `/^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$/`;
     try {
-      const re = new RegExp(p.slice(1, -1));
-      tests.push((v) => typeof v === 'string' && re.test(v));
+      const src = p.slice(1, -1);
+      const re = new RegExp(src);
+      // Only a regex somebody WROTE can backtrack catastrophically; a converted glob cannot nest
+      // a quantifier. Everything else keeps the plain, free `re.test`.
+      const test = authored && looksCatastrophic(src) ? guardedTest(re, src, note) : (v) => re.test(v);
+      tests.push((v) => typeof v === 'string' && test(v));
     } catch { /* an unparseable regex simply contributes no matches */ }
   }
-  tests.push((v) => v === pattern);
-  return (v) => tests.some((t) => t(v));
+  const ago = AGO_SUFFIX_RE.exec(pattern);
+  if (ago) {
+    pattern = pattern.replace(ago[0], '');
+    const now = Date.now();
+    const per = ago[1].toLowerCase() === 'h' ? 60 : ago[1].toLowerCase() === 'd' ? 60 * 24 : 1;
+    transforms.push((v) => (now - new Date(v).getTime()) / 60000 / per);
+  }
+  // Not else-if: upstream tests every prefix, so "<= 5" registers both `<=` and `<`. The second
+  // parses NaN and never matches, which is harmless — and keeping the shape keeps this a port.
+  for (const [op, cmp] of COMPARISONS) {
+    if (!pattern.startsWith(op)) continue;
+    const want = parseFloat(pattern.substring(op.length));
+    tests.push((v) => cmp(parseFloat(v), want));
+  }
+  const exact = pattern;
+  tests.push((v) => v === exact);
+  return (v) => {
+    const t = transforms.reduce((acc, f) => f(acc), v);
+    if (t === undefined) return false;
+    return tests.some((f) => f(t));
+  };
+}
+
+// ---- catastrophic-backtracking guard ----
+//
+// A `/regex/` in a dashboard is run here against every entity id and friendly name on the
+// instance, synchronously, on the one event loop that also relays every panel's websocket — and
+// again on every rebuild. Upstream runs the same pattern in the browser tab showing the card, so
+// a pathological one hangs that tab. Here it hangs EVERY panel: measured, `/^(a+)+$/` against one
+// 29-character string held the loop for 12.3 seconds.
+//
+// Rejecting suspicious patterns outright would be the wrong trade — a rejected filter matches
+// nothing, and under-including is the harmful direction — and most nested quantifiers are
+// harmless on real input. So a suspicious pattern is still RUN, just under a deadline: `vm` can
+// interrupt a regex mid-backtrack, which nothing else in JavaScript can (verified: cut off at
+// 51ms where the bare call took 12s). That costs ~40µs a call, which is why only patterns the
+// static check flags take this path, and why results are memoised — ids and names barely change
+// between rebuilds, so the second rebuild onwards pays nothing.
+//
+// A pattern that does hit the deadline is switched off for the life of the process and says so.
+// The stall is therefore bounded at one deadline per bad pattern, ever, instead of one per
+// entity per rebuild.
+const REGEX_DEADLINE_MS = 50;
+const REGEX_MEMO_MAX = 20000;
+const REGEX_KILLED = new Set();            // regex source
+const REGEX_MEMO = new Map();              // regex source -> Map(value -> boolean)
+let guardCtx = null, guardScript = null;
+
+// A quantified group whose body itself contains a quantifier: (a+)+, (\w+\s?)*, (x{2,})+.
+// Innermost groups only, escapes skipped. Deliberately loose — a false positive costs the guarded
+// path's microseconds, never a match.
+export function looksCatastrophic(src) {
+  return /\((?:[^()\\]|\\.)*(?:[+*]|\{\d+,\d*\})(?:[^()\\]|\\.)*\)(?:[+*]|\{\d+,\d*\})/.test(src);
+}
+
+function guardedTest(re, src, note) {
+  const killedMsg = `auto-entities regex /${src}/ disabled: it exceeded ${REGEX_DEADLINE_MS}ms on one value `
+    + '(catastrophic backtracking) and would stall every panel — rewrite it without a nested quantifier';
+  return (v) => {
+    if (REGEX_KILLED.has(src)) { note?.(killedMsg); return false; }
+    let memo = REGEX_MEMO.get(src);
+    if (!memo) { memo = new Map(); REGEX_MEMO.set(src, memo); }
+    const seen = memo.get(v);
+    if (seen !== undefined) return seen;
+    if (!guardScript) {
+      guardCtx = vm.createContext(Object.create(null));
+      guardScript = new vm.Script('re.test(v)');
+    }
+    guardCtx.re = re; guardCtx.v = v;
+    let out;
+    try { out = Boolean(guardScript.runInContext(guardCtx, { timeout: REGEX_DEADLINE_MS })); }
+    catch {
+      REGEX_KILLED.add(src);
+      REGEX_MEMO.delete(src);
+      note?.(killedMsg);
+      return false;
+    }
+    if (memo.size >= REGEX_MEMO_MAX) memo.clear();
+    memo.set(v, out);
+    return out;
+  };
 }
 
 const asArray = (v) => (Array.isArray(v) ? v : [v]);
@@ -69,14 +180,30 @@ function coerceVal(v, key) {
 
 // Build a predicate for filter key `key` from its (possibly editor-wrapped) value: the value
 // matches if ANY of its alternatives matches, via the auto-entities matcher.
-function valMatcher(v, key) {
-  const ms = coerceVal(v, key).map((x) => toMatcher(typeof x === 'string' ? x : String(x)));
+function valMatcher(v, key, note = null) {
+  const ms = coerceVal(v, key).map((x) => toMatcher(typeof x === 'string' ? x : String(x), note));
   return (s) => ms.some((m) => m(s));
 }
 
 // Build entity -> {area, labels, device, integration} lookups from the registries.
 // area is inherited from the entity's device when the entity has no explicit area.
+//
+// Memoised on the registries OBJECT. One allowlist rebuild asked for this 3 + one-per-dashboard
+// times over the same ~10MB of registry rows; the answer depends on nothing else, and the rebuild
+// fetches a fresh object each time, so identity is exactly the right cache key and a WeakMap lets
+// the old one go with its registries. The result is shared, so it is treated as read-only —
+// extractEntities copies before hanging its per-call state off it.
+const REGISTRY_CTX = new WeakMap();
 export function buildRegistryCtx(registries = {}) {
+  const cacheable = registries && typeof registries === 'object';
+  const hit = cacheable ? REGISTRY_CTX.get(registries) : null;
+  if (hit) return hit;
+  const built = computeRegistryCtx(registries);
+  if (cacheable) REGISTRY_CTX.set(registries, built);
+  return built;
+}
+
+function computeRegistryCtx(registries = {}) {
   const areas = registries.areas || [];
   const labels = registries.labels || [];
   const devices = registries.devices || [];
@@ -199,43 +326,53 @@ const DEVICE_ID_RE = /^[0-9a-f]{32}$/;
 // device/integration — stable identity) and volatile tests (state/attributes — change at
 // runtime). Callers decide which to apply. Registry-backed keys need `ctx`; without it
 // they simply match nothing (degrades to pre-#4 behavior).
+// Is this pattern a statement about a value RIGHT NOW — a numeric comparison or an "… ago" age —
+// rather than about what the entity is? `device_class: battery` describes the entity; `"< 20"`
+// describes this minute.
+const isLivePattern = (v) => typeof v === 'string'
+  && (/^(?:\$\$)?\s*[<>=!]/.test(v) || AGO_SUFFIX_RE.test(v));
+
 function condTests(cond, unsupported, ctx) {
   const structural = [];
   const volatile = [];
+  // The subset of `volatile` that describes what an entity IS rather than how it is doing: an
+  // attribute compared for equality or by pattern. See makeMatcher for what this buys.
+  const descriptive = [];
   const reg = (s) => ctx.ent && ctx.ent.get(s.entity_id);
+  const note = (msg) => unsupported.push(msg);
 
   // Each key matches via the auto-entities matcher, so globs and regexes work everywhere
   // (issue #10). Registry-backed keys match against BOTH the id and the human name, the way
   // upstream does — `area: Kitchen` and `area: kitchen_area_id` both resolve.
   if (cond.domain != null) {
-    const m = valMatcher(cond.domain, 'domain');
+    const m = valMatcher(cond.domain, 'domain', note);
     structural.push((s) => m(s.entity_id.split('.')[0]));
   }
   if (cond.entity_id != null) {
-    const m = valMatcher(cond.entity_id, 'entity_id');
+    const m = valMatcher(cond.entity_id, 'entity_id', note);
     structural.push((s) => m(s.entity_id));
   }
   if (cond.area != null) {
-    const m = valMatcher(cond.area, 'area');
+    const m = valMatcher(cond.area, 'area', note);
     structural.push((s) => { const r = reg(s); return !!r && (m(r.areaId) || m(r.areaName)); });
   }
   if (cond.label != null) {
-    const m = valMatcher(cond.label, 'label');
+    const m = valMatcher(cond.label, 'label', note);
     structural.push((s) => { const r = reg(s); return !!r && (r.labelIds.some(m) || r.labelNames.some(m)); });
   }
   if (cond.device != null) {
-    const m = valMatcher(cond.device, 'device');
+    const m = valMatcher(cond.device, 'device', note);
     structural.push((s) => { const r = reg(s); return !!r && (m(r.deviceId) || m(r.deviceName)); });
   }
   if (cond.integration != null) {
-    const m = valMatcher(cond.integration, 'integration');
+    const m = valMatcher(cond.integration, 'integration', note);
     structural.push((s) => { const r = reg(s); return !!r && m(r.platform); });
   }
   // Upstream matches `name` against friendly_name. Structural, not volatile: a friendly name
   // is stable identity, unlike state — treating it as volatile would forward the whole
   // instance for any card whose only filter is a name.
   if (cond.name != null) {
-    const m = valMatcher(cond.name, 'name');
+    const m = valMatcher(cond.name, 'name', note);
     structural.push((s) => m(s.attributes?.friendly_name));
   }
   // `group: group.foo` -> the members listed in that group's entity_id attribute.
@@ -248,11 +385,13 @@ function condTests(cond, unsupported, ctx) {
     }
     structural.push((s) => members.has(s.entity_id));
   }
-  if (cond.state != null) { const m = toMatcher(cond.state); volatile.push((s) => m(s.state)); }
+  if (cond.state != null) { const m = toMatcher(cond.state, note); volatile.push((s) => m(s.state)); }
   if (cond.attributes && typeof cond.attributes === 'object') {
     for (const [k, v] of Object.entries(cond.attributes)) {
-      const m = toMatcher(v);
-      volatile.push((s) => s.attributes && m(s.attributes[k]));
+      const m = toMatcher(v, note);
+      const t = (s) => s.attributes && m(s.attributes[k]);
+      volatile.push(t);
+      if (!isLivePattern(v)) descriptive.push(t);
     }
   }
 
@@ -262,24 +401,35 @@ function condTests(cond, unsupported, ctx) {
   for (const k of Object.keys(cond)) {
     if (!known.includes(k)) unsupported.push('auto-entities filter key: ' + k);
   }
-  return { structural, volatile };
+  return { structural, volatile, descriptive };
 }
 
 // Turn a condition into a predicate. `role` + `overInclude` decide how volatile tests are
 // treated (see extractEntities opts.overInclude):
-//   include, overInclude : structural only (fall back to volatile if there are no
-//                          structural tests, so a bare `state:` filter still matches).
+//   include, overInclude : structural only. With no structural test, fall back to the
+//                          DESCRIPTIVE attribute tests alone, and only then to everything.
+//
+//                          That middle step is the low-battery card: `attributes: {device_class:
+//                          battery}` + `state: "< 20"` has no structural key, so it used to be
+//                          evaluated against current state — and a battery that drops below 20
+//                          TOMORROW was never forwarded, because no state change rebuilds an
+//                          allowlist. Matching on `device_class` alone forwards every battery and
+//                          lets the card do the comparing, which is the whole over-include idea
+//                          applied to the one place it was missing. It is a strict superset of
+//                          the old result (fewer tests ANDed), so nothing a card had is lost.
+//                          A condition that is ONLY live (`state: on` and nothing else) is still
+//                          resolved against current state: ignoring it would match the instance.
 //   exclude, overInclude : structural only, and never exclude on a volatile-only condition
 //                          (dropping an entity we might need later is the harmful direction).
 //   otherwise            : all tests (exact, current-state semantics).
 function makeMatcher(cond, unsupported, ctx, role, overInclude) {
-  const { structural, volatile } = condTests(cond, unsupported, ctx);
+  const { structural, volatile, descriptive } = condTests(cond, unsupported, ctx);
   let tests;
   if (overInclude && role === 'exclude') {
     if (!structural.length) return () => false;
     tests = structural;
   } else if (overInclude) {
-    tests = structural.length ? structural : volatile;
+    tests = structural.length ? structural : descriptive.length ? descriptive : volatile;
   } else {
     tests = [...structural, ...volatile];
   }
@@ -337,10 +487,23 @@ function expandAutoEntities(node, allStates, add, unsupported, ctx, overInclude)
       if (ctx.byId.has(m[0])) add(m[0]);
     }
   }
+  // A condition must be a plain object. The YAML editor leaves a bare `-` behind as `null`, and
+  // condTests dereferenced it — so ONE empty list item threw out of extractEntities, the caller
+  // marked the whole dashboard FAILED, and with a single dashboard configured every rebuild then
+  // died with "HA not ready". An entry that says nothing is skipped and named instead.
+  const isCond = (c, role) => {
+    if (c && typeof c === 'object' && !Array.isArray(c)) return true;
+    unsupported.push(`auto-entities ${role} entry that is not a filter (${c === null ? 'empty' : typeof c}) — skipped`);
+    return false;
+  };
   const inc = Array.isArray(f.include) ? f.include : [];
-  const exc = Array.isArray(f.exclude) ? f.exclude : [];
+  const exc = (Array.isArray(f.exclude) ? f.exclude : []).filter((c) => isCond(c, 'exclude'));
   const excMatchers = exc.map((c) => makeMatcher(c, unsupported, ctx, 'exclude', overInclude));
   for (const cond of inc) {
+    // A bare entity id is not a filter upstream either, but if it names a real-looking entity
+    // then forwarding it is free and dropping it is not.
+    if (typeof cond === 'string' && isEntityId(cond)) add(cond);
+    if (!isCond(cond, 'include')) continue;
     // An include entry can be an explicit entity rather than a filter.
     if (cond && isEntityId(cond.entity_id) && !String(cond.entity_id).includes('*')) {
       if (!excMatchers.some((m) => m({ entity_id: cond.entity_id, state: '', attributes: {} }))) add(cond.entity_id);
@@ -383,7 +546,7 @@ export function extractEntities(config, allStates = [], opts = {}) {
   const found = new Set();
   const unsupported = [];
   const add = (id) => { if (isEntityId(id)) found.add(id); };
-  const ctx = buildRegistryCtx(opts.registries);
+  const ctx = { ...buildRegistryCtx(opts.registries) };
   // Live state by id: needed for `group:` membership and to validate ids scraped out of a
   // rendered template. Templates come pre-rendered from the caller (see collectTemplates).
   ctx.byId = new Map(allStates.map((s) => [s.entity_id, s]));

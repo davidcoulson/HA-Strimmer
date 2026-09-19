@@ -1,5 +1,91 @@
 # Changelog
 
+## 2026.09.19.1 — 2026-09-19
+
+**A rebuild storm nobody could see, and nine other things a review of the code and the live logs
+turned up.** Measured on the live instance: 33 full allowlist rebuilds in 8.5 minutes, 28 of them
+from `device_registry_updated`, every one reporting `+0 -0`. Each pulls `get_states` and all four
+registries from Home Assistant (~20MB), blocks the event loop every panel's websocket shares, and
+writes ~60 log lines — enough that the Supervisor's log buffer held ten minutes of history.
+
+- **`device_registry_updated` is filtered like `entity_registry_updated` already was.** A device
+  row reaches an allowlist through five fields (`id`, `area_id`, `name`, `name_by_user`,
+  `via_device_id`). An `update` touching only `sw_version`, `hw_version`, `configuration_url`,
+  `serial_number`, `connections`, `manufacturer`, `model` or `model_id` no longer rebuilds.
+  Anything unrecognised still does.
+- **The rebuild counter counts.** `REBUILD_COUNT` was declared, published as the
+  `rebuilds_total` MQTT sensor, and never incremented — so the sensor built to reveal a rebuild
+  storm read 0 straight through one. Also in `stats.json` as `allowlist.rebuilds`.
+- **A rebuild says what caused it**: `device_registry_updated: update <id> (name_by_user
+  changed)` instead of a bare event name. Changed fields were only ever printed for events that
+  were *ignored*.
+- **The identity probe carries `X-Forwarded-*`.** The bridge socket was fixed for this in
+  2026.09; the `auth/current_user` probe beside it was not, so Home Assistant attributed a
+  rejected token to the PROXY. With `ip_ban_enabled`, one panel retrying a stale token — or any
+  LAN host posting junk Bearer tokens at `/stripper/client.json` — could ban the proxy's own
+  address, and with it every panel.
+- **The dashboard page is fetched once, under the forwarded-header rule.** With
+  `trim_extra_modules` on and nothing to remove, the page was fetched from HA, discarded, and
+  fetched again through the proxy. It was also the one path to HA that relayed a client-supplied
+  `X-Forwarded-For` without our peer on the right. Multiple upstream `Set-Cookie`s now survive.
+- **An empty auto-entities list item no longer fails the dashboard.** A bare `-` in YAML arrives
+  as `null`, which threw out of the extractor; the whole dashboard was marked FAILED, and with one
+  dashboard configured every rebuild died as "HA not ready".
+- **Comparison filters work** — `"< 20"`, `">= 5"`, `"== 12"`, `"$$…"`, `"… h ago"` — ported from
+  the auto-entities card's own matcher. They used to fall through to string equality and match
+  nothing. And when a condition has a descriptive attribute beside a live test
+  (`device_class: battery` + `state: "< 20"`), the allowlist now takes every battery and lets the
+  card compare: evaluated against current state, a battery that dropped below 20 tomorrow was
+  never forwarded, because no state change rebuilds an allowlist.
+- **What the extractor could not resolve is logged** (`not resolved: …`). It always returned that
+  list; nothing read it, so `or:` / `not:` / `floor:` produced an empty card and silence.
+- **A regex cannot stall every panel.** A `/regex/` with a nested quantifier now runs under a
+  50ms deadline (`node:vm` can interrupt a regex mid-backtrack; measured 51ms against 12.3s). One
+  that hits it is switched off for the life of the process and reported. Ordinary patterns take
+  the plain path and pay nothing.
+- **mDNS forgets.** Goodbye records (TTL 0) are honoured, hosts and instances not re-heard in
+  three query rounds expire, the tables are capped and take `.local` names only, names join
+  case-insensitively, and a packet that only confirms what is known no longer rebuilds the index.
+  Held hosts are re-queried each round so a bare `<name>.local` a client rule depends on does not
+  age out while it is up.
+- Smaller: `client rule null:` log lines now name the rule's actual matcher; a rebuild debounced
+  just before the control socket dropped no longer fires against the dead socket and logs a
+  misleading "unanswered for 60000ms" a minute later.
+
+- **The log holds more than ten minutes again.** The satellite announce line (every 30s per
+  panel — ~8,600 lines a day for three) and "no user rule matched" (every 5 minutes) are said once
+  and then go to debug; the 10-second throttle could never collapse either. The resource report —
+  some sixty identical lines per rebuild — is printed only when it differs from the last one.
+- **Registry events rebuild at most once per 30s** (`REGISTRY_REBUILD_MIN_MS`, env-only, `0` =
+  off). The backstop behind the field filter, for a field that does matter being rewritten every
+  few seconds. A dashboard edit, a resource change and a pin are never held, including when a held
+  registry rebuild is already pending.
+- **Stats caps fold into `(other)` instead of dropping.** The flow map keys on the request's
+  `Host` header and is counted before anyone authenticates, so 64 junk upgrades froze the routing
+  view until restart, with the marginals no longer summing to the total. Same for the by-message
+  table, where a new large stream past 64 kinds simply never appeared. Keys are length-capped.
+- **One panel is one row in recent sessions.** The key included the mDNS name, which depends on
+  which announcement arrived first. At the cap, eviction now drops the least recently *seen*
+  client rather than the earliest first-seen — typically the wall panel up since boot.
+- **Config store**: options are recognised by own property (`constructor` and `__proto__` passed
+  the "known option" check); a persisted `__proto__` key can no longer replace the prototype of
+  `managed`; a `history` that is not a list no longer makes every later save fail.
+- **History**: a host containing `|` keeps its name and its own total; samples read back from
+  disk are coerced, so one damaged row cannot turn a day of totals into `"5x"` or NaN.
+- Hot path: six closures were allocated per HA->browser frame and are now per connection; a frame
+  that goes out unchanged is no longer measured twice. `buildRegistryCtx` is memoised on the
+  registries object (it ran 3 + one-per-dashboard times per rebuild).
+- Nits: the `config.yaml` comment that still said the panel serves on 8100; `package-lock.json`'s
+  root version, stale since 2026.09.13.29.
+- **New icon.** A blade of grass cut by a strimmer line, its tip falling away, with two shorter
+  blades beside it that sit below the line and are left alone — only what stands above the line
+  gets trimmed. It replaces the funnel in `icon.png` and on the README banner; `assets/icon.svg`
+  is the vector. The sidebar `panel_icon` is `mdi:grass` to match (was `mdi:filter-variant`).
+  Both are app metadata, so they need a Rebuild — and sometimes a browser refresh — to show.
+
+31 new tests; 472 pass.
+
+---
 ## 2026.09.17.1 — 2026-09-17
 
 **Security: the proxy's own address is now appended to any `X-Forwarded-For` chain a client

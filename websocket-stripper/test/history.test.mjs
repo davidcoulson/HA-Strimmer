@@ -169,3 +169,34 @@ describe('history flows', () => {
     assert.ok(!hosts.includes('old'), 'a bucket older than the window must not be counted');
   });
 });
+
+// From the 2026-09-19 review.
+describe('history does not trust a host name or a file', () => {
+  beforeEach(() => history.reset());
+
+  it('a host containing the separator keeps its whole name and its own total', () => {
+    const withFlows = (n) => ({ clients: { open: 1 }, savings: { saved: 0, before: 0 },
+      eventStream: { bytes: 0 }, registryCache: { hits: 0 },
+      paths: { flows: [{ origin: 'lan', route: 'direct', host: 'a|b', n }, { origin: 'lan', route: 'direct', host: 'a', n }] } });
+    history.push(withFlows(2), 1000);
+    history.push(withFlows(5), 61000);
+    const flows = history.history().totals.flows;
+    assert.deepEqual(flows.map((f) => f.host).sort(), ['a', 'a|b'],
+      'it used to come back as host "a" twice, merging two entry points');
+    for (const f of flows) assert.equal(f.origin, 'lan');
+  });
+
+  it('a damaged sample cannot turn the 24h totals into text or NaN', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hist-'));
+    const now = Date.now();
+    fs.writeFileSync(path.join(dir, 'history.json'), JSON.stringify({ samples: [
+      { t: now - 2000, saved: 'x', before: 10, flows: [] },
+      { t: now - 1000, saved: 5, flows: { 'lan|direct|h': 'many', 'lan|direct|ok': 3 } },
+    ] }));
+    history.load(dir, now);
+    const t = history.history().totals;
+    assert.equal(t.saved, 5);
+    assert.ok(Number.isFinite(t.before) && Number.isFinite(t.events));
+    assert.deepEqual(t.flows.map((f) => [f.host, f.n]), [['ok', 3]]);
+  });
+});

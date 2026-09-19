@@ -61,8 +61,14 @@ Then `+ always_forward`, then `- never_forward` (never wins), then **group membe
 
 ### auto-entities filter resolution (`condTests` / `toMatcher`)
 
-`toMatcher()` is a deliberate port of auto-entities' own `src/match.ts` — keep it that way
-rather than inventing semantics. A `/regex/` is used **unanchored** (the author supplies
+`toMatcher()` is a deliberate port of **the auto-entities CARD's** `src/match.ts`
+(thomasloven/lovelace-auto-entities — nothing to do with the upstream *stripper* repo, so forking
+away from that changes nothing here). The card in the panel's browser uses that matcher to decide
+what it shows, so what a pattern MEANS has to follow it, quirks included (`"! on"` parses NaN and
+matches everything). What is ours to decide is which tests an ALLOWLIST applies — see
+`makeMatcher`: structural keys first; else descriptive attribute tests alone (`device_class:
+battery` beside `state: "< 20"` forwards every battery, because no state change ever rebuilds an
+allowlist); only a purely live condition is resolved against current state. A `/regex/` is used **unanchored** (the author supplies
 `^`/`$`); a `*` glob is anchored; otherwise exact equality; regex is OR'd with exact match.
 It applies to **every** filter key, which is what upstream does — that was issue #10.
 
@@ -234,6 +240,27 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   camera streams for two reasons worth not re-deriving: it is an **inactivity** timer, so an
   MJPEG/HLS stream resets it as frames flow; and httpxy applies it in `webIncomingMiddleware`
   only, so `proxy.ws()` upgrades are untouched.
+- **Registry events are filtered by changed field, for devices as well as entities**
+  (`IGNORABLE_BY_EVENT`). Measured 2026-09-19: 33 rebuilds in 8.5 min, 28 from
+  `device_registry_updated`, all `+0 -0`. A device row reaches an allowlist only via `id`,
+  `area_id`, `name`, `name_by_user`, `via_device_id`. `manufacturer`/`model`/`model_id` are
+  ignorable ONLY while auto-entities' `device_manufacturer`/`device_model` stay unsupported — take
+  them out of the set if those filters are added. `allowlist.rebuilds` in stats.json (and the MQTT
+  `rebuilds_total`) is the storm detector; it was never incremented before 2026.09.19.1.
+- **Registry-triggered rebuilds also have a time floor** (`REGISTRY_REBUILD_MIN_MS`, 30s,
+  env-only). Tests that fire registry events seconds apart and COUNT rebuilds must set it to `0`.
+  `scheduleRecompute(why, floorMs)` takes the LOWEST floor among debounced requests, so an edit is
+  never held behind a registry event — keep that property if this is touched.
+- **Logging that recurs slower than the 10s throttle window uses `onceOnly(key)`**, not
+  `logThrottled` (satellite announces every 30s; "no user rule matched" every 5 min). The resource
+  report is buffered in `buildResources` and printed only when its text changed.
+- **Every socket the proxy opens to HA carries `X-Forwarded-*`** — bridge, identity probe
+  (`resolveUser(token, fwd)`), and the `serveDashboardPage` fetch. HA's failed-login ban keys on
+  the address it sees; a bare probe made a rejected token the PROXY's failed login.
+- **User-written regexes with nested quantifiers run under a 50ms `node:vm` deadline**
+  (`guardedTest` in lovelace_extract.mjs). Don't "simplify" to rejecting them statically — a
+  rejected filter matches nothing, which is the harmful direction — or to guarding every regex,
+  which costs ~40µs a call across ~10k ids.
 - **The control connection's commands are bounded too (`CONTROL_RPC_TIMEOUT_MS`, 60s).**
   `handshakeTimeout` covers only the upgrade; an HA that wedged on `get_states` left the rebuild
   awaiting forever and the `rebuilding` flag set, so no edit could ever trigger another. Expiry

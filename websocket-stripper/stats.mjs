@@ -80,10 +80,17 @@ const byFlow = new Map();       // "origin\0route\0host" -> count
 const hopsByRoute = new Map();
 const FLOW_SEP = '\u0000';      // a byte no hostname or route label can contain
 
-const bump = (map, key) => {
+// Past the cap a new key is folded into an overflow bucket rather than dropped. Dropping kept the
+// map bounded but broke the promise made just above: `connTotal` went on counting while the flows
+// stopped, so the marginals no longer summed to the total and the diagram and the table disagreed
+// with no way to tell which was right. And the key is not ours — `host` is the request's Host
+// header, counted at websocket open, BEFORE Home Assistant has authenticated anyone — so sixty-four
+// upgrades with junk Host values froze the routing view until the next restart.
+const OTHER = '(other)';
+const bump = (map, key, overflowKey = OTHER) => {
   if (!key) return;
-  if (!map.has(key) && map.size >= MAX_CATS) return;    // same unbounded-keys guard as above
-  map.set(key, (map.get(key) || 0) + 1);
+  const k = !map.has(key) && map.size >= MAX_CATS ? overflowKey : key;
+  map.set(k, (map.get(k) || 0) + 1);
 };
 
 export function recordTrim(category, before, after) {
@@ -117,11 +124,15 @@ const shapes = new Map();
 export function recordShape(kind, info) { shapes.set(kind, { ...info, at: new Date().toISOString() }); }
 
 export function recordTraffic(kind, bytes) {
-  let e = traffic.get(kind);
+  // `result:<type>` carries a string the CLIENT chose, so it is capped before it becomes a key.
+  let key = String(kind).slice(0, 80);
+  let e = traffic.get(key);
   if (!e) {
-    if (traffic.size >= MAX_CATS) return;       // same guard as categories
-    e = { count: 0, bytes: 0 };
-    traffic.set(kind, e);
+    // Folded, not dropped. This table exists to make sure nothing flows unexplained, and an admin
+    // session alone can pass 64 kinds — after which a new stream, however large, simply never
+    // appeared. "(other)" with a byte count is a row someone can notice and chase.
+    if (traffic.size >= MAX_CATS) { key = OTHER; e = traffic.get(key); }
+    if (!e) { e = { count: 0, bytes: 0 }; traffic.set(key, e); }
   }
   e.count += 1; e.bytes += bytes;
 }
@@ -139,7 +150,10 @@ export function recordBackpressure(kind) { if (kind === 'stall') backpressure.st
 export function connOpen({ ip, dash, via, allowSize, ua, origin, route, host, hop, hops, device }) {
   const id = nextConnId++;
   connTotal += 1;
-  bump(byFlow, [origin || 'unknown', route || 'unknown', host || 'unknown'].join(FLOW_SEP));
+  // Overflow keeps origin and route — both small fixed vocabularies — and buckets only the host,
+  // so every marginal still sums to `connTotal`.
+  bump(byFlow, [origin || 'unknown', route || 'unknown', host || 'unknown'].join(FLOW_SEP),
+    [origin || 'unknown', route || 'unknown', OTHER].join(FLOW_SEP));
   // Which machines actually delivered each kind of route. Kept so the panel can NAME a route
   // rather than calling it "proxy" — a label that is genuinely ambiguous here, since this add-on
   // is itself a proxy. The addresses are resolved to names at snapshot time, not now: the lookup
@@ -191,7 +205,11 @@ const SESSION_WINDOW_MS = 24 * 3600 * 1000;
 const SESSION_MAX = 500;
 const recent = new Map();
 
-const sessionKey = (c) => [c.ip || '?', c.dash || '?', c.device?.name || ''].join('\u0000');
+// Address and dashboard only. The mDNS device name used to be part of this, and it is not stable:
+// it is whichever announcement arrived first, and null for a client that connects before discovery
+// has answered — so ONE panel split into several rows, which the snapshot then rendered with the
+// same resolved name, as apparent duplicates the live-row exclusion could not match either.
+const sessionKey = (c) => [c.ip || '?', c.dash || '?'].join('\u0000');
 
 export function connClose(id) {
   const c = conns.get(id);
@@ -201,6 +219,10 @@ export function connClose(id) {
   const prior = recent.get(key);
   const closedAt = Date.now();
   if (prior) {
+    // Re-inserted so Map order is least-recently-SEEN first. Eviction below takes the first key,
+    // and without this that was the earliest FIRST-seen client — typically the always-on wall
+    // panel from boot, the one row most worth keeping.
+    recent.delete(key); recent.set(key, prior);
     prior.sessions += 1;
     prior.lastSeen = closedAt;
     prior.totalSec += Math.round((closedAt - c.since) / 1000);

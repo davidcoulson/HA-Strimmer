@@ -191,6 +191,28 @@ describe('proxy integration (strip on)', () => {
       'a single scheme describes the whole chain and stays single');
   });
 
+  // The probe is the second socket the proxy opens per browser, and it was the one left bare:
+  // Home Assistant attributed it to the PROXY's address, so a rejected token was a failed login
+  // by the proxy — and with ip_ban_enabled, enough of them bans every panel at once.
+  it('the identity probe carries the same forwarded headers as the bridge', async () => {
+    const at = mock.state.wsUpgradeHeaders.length;
+    // A token nothing else in this file uses, so the lookup is not answered from the cache.
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'michelle-token',
+      { 'x-forwarded-for': '10.9.9.9', 'x-forwarded-proto': 'https' });
+    await c.authed;
+    const deadline = Date.now() + 3000;
+    while (mock.state.wsUpgradeHeaders.length < at + 2 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    c.close();
+    const [bridge, probe] = mock.state.wsUpgradeHeaders.slice(at);
+    assert.ok(probe, 'the proxy must have opened an identity probe for an unseen token');
+    assert.equal(probe['x-forwarded-for'], '10.9.9.9, 127.0.0.1',
+      'HA must see the browser behind the probe, not the proxy');
+    assert.equal(probe['x-forwarded-for'], bridge['x-forwarded-for']);
+    assert.equal(probe['x-forwarded-proto'], 'https');
+  });
+
   // The property that protects trusted_networks. HA walks X-Forwarded-For from the right and
   // takes the first address not in trusted_proxies as the client. If a chain the client supplied
   // were merely preserved, any LAN host could send `X-Forwarded-For: <kiosk ip>` and arrive at HA
@@ -827,17 +849,21 @@ describe('boots while HA is still down', () => {
 // 9,592 entities plus all four registries, ~20MB pulled from HA each time, to change nothing.
 // The handler never looked at the payload.
 describe('registry event filtering', () => {
-  let mock, proxy, port, out = '';
+  let mock, proxy, port, statsPort, out = '';
 
   before(async () => {
     mock = await startMockHa();
     port = await getFreePort();
+    statsPort = await getFreePort();
     proxy = spawn(process.execPath, [PROXY], {
       cwd: path.join(DIR, '..'),
       env: {
         ...process.env,
         HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
-        PORT: String(port), STATS_PORT: String(await getFreePort()), STRIP_ENTITIES: '1',
+        PORT: String(port), STATS_PORT: String(statsPort), STRIP_ENTITIES: '1',
+        // These cases fire registry events seconds apart and count the rebuilds each causes, which
+        // is a test of the FIELD filter. The time floor has its own describe below.
+        REGISTRY_REBUILD_MIN_MS: '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -892,6 +918,43 @@ describe('registry event filtering', () => {
     assert.equal(rebuilds(), 1, `a payload with no "changes" must still rebuild; log:\n${out}`);
   });
 
+  // The other half of the same storm, and the louder one. Measured on a live instance
+  // 2026-09-19: 33 full rebuilds in 8.5 minutes, 28 from device_registry_updated, all "+0 -0" —
+  // the filter above only ever looked at entity events.
+  it('ignores a device update that only touches fields no allowlist reads', async () => {
+    out = '';
+    mock.fireEvent('device_registry_updated', {
+      action: 'update', device_id: 'dev-panel', changes: { sw_version: '2026.9.0', connections: [] },
+    });
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(rebuilds(), 0, `a firmware-version report must not rebuild; log:\n${out}`);
+    assert.match(out, /device_registry_updated ignored \(only sw_version, connections changed\)/);
+  });
+
+  it('still rebuilds when a device is renamed, moved or re-parented, and says what changed', async () => {
+    for (const field of ['name_by_user', 'area_id', 'via_device_id']) {
+      out = '';
+      mock.fireEvent('device_registry_updated', {
+        action: 'update', device_id: 'dev-panel', changes: { [field]: 'old', sw_version: '1' },
+      });
+      await new Promise((r) => setTimeout(r, 3000));
+      assert.equal(rebuilds(), 1, `a ${field} change must rebuild; log:\n${out}`);
+      // The cause, on the line that announces the rebuild — it used to be a bare event name.
+      assert.match(out, new RegExp(`device_registry_updated: update dev-panel \\(${field}, sw_version changed\\)`));
+    }
+  });
+
+  // Declared, published over MQTT, and never incremented: the sensor built to show a rebuild
+  // storm read 0 straight through one.
+  it('counts rebuilds where a person can see them', async () => {
+    const read = async () => JSON.parse((await httpGet(`http://127.0.0.1:${statsPort}/stats.json`)).body).allowlist.rebuilds;
+    const before = await read();
+    assert.ok(before >= 1, `the boot build counts, got ${before}`);
+    mock.fireEvent('entity_registry_updated', { action: 'create', entity_id: 'light.counted' });
+    await new Promise((r) => setTimeout(r, 3000));
+    assert.equal(await read(), before + 1);
+  });
+
   it('coalesces a burst into a single rebuild instead of overlapping them', async () => {
     // The debounce guards SCHEDULING, not execution: once the timer fires, buildAllow() is
     // awaited and a new event schedules a fresh timer that fires while the first is still
@@ -904,5 +967,51 @@ describe('registry event filtering', () => {
     await new Promise((r) => setTimeout(r, 4000));
     const n = rebuilds();
     assert.ok(n >= 1 && n <= 2, `8 events in ~1s must collapse to 1-2 rebuilds, got ${n}; log:\n${out}`);
+  });
+});
+
+// The backstop behind the field filter: whatever it does not recognise still cannot rebuild more
+// often than this. And it must never hold what a person is waiting for.
+describe('registry-triggered rebuilds have a floor; a dashboard edit does not', () => {
+  let mock, proxy, out = '';
+
+  before(async () => {
+    mock = await startMockHa();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env,
+        HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
+        PORT: String(await getFreePort()), STATS_PORT: String(await getFreePort()), STRIP_ENTITIES: '1',
+        REGISTRY_REBUILD_MIN_MS: '60000',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 10000;
+    while (!/watching lovelace_updated/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never subscribed\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    out = '';
+  });
+
+  after(() => { proxy?.kill(); mock?.close(); });
+
+  const rebuilds = () => (out.match(/allowlist recomputed/g) || []).length;
+
+  it('holds a registry rebuild that follows another build too closely, and says so', async () => {
+    // Seconds after the boot build — exactly when an integration finishing its own startup fires.
+    mock.fireEvent('entity_registry_updated', { action: 'create', entity_id: 'light.soon' });
+    await new Promise((r) => setTimeout(r, 3000));           // twice the debounce
+    assert.equal(rebuilds(), 0, `must be held, not run; log:\n${out}`);
+    assert.match(out, /rebuild held \d+s/);
+  });
+
+  it('lets a dashboard edit through at once, even with a held registry rebuild pending', async () => {
+    mock.fireLovelaceUpdated('test-dash');
+    await new Promise((r) => setTimeout(r, 3000));
+    assert.equal(rebuilds(), 1, `an edit someone is watching must not wait; log:\n${out}`);
   });
 });

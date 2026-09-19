@@ -93,14 +93,43 @@ export function parseTxt(txt) {
   return out;
 }
 
+// DNS names compare case-insensitively and may or may not carry the root dot. An SRV target of
+// `Panel.local.` and an A record for `panel.local` are the same host; joined as raw strings they
+// were two, and the device silently never got an address — or a label.
+export const hostKey = (name) => String(name ?? '').replace(/\.$/, '').toLowerCase();
+
+// Bounds. The tables used to take every A record from every response on the segment, keep it for
+// the life of the process, and rebuild the whole index on each one — measured, 20,000 spoofed
+// records cost 10.6s of event loop. Far above any real network; they exist so "unbounded" is not
+// something a chatty or hostile neighbour can turn into memory and CPU.
+export const HOSTS_MAX = 2000;
+export const INSTANCES_MAX = 1000;
+// Anything not re-heard within this many query intervals is forgotten — see expire().
+export const STALE_AFTER_INTERVALS = 3;
+
+const evictOldest = (map, max) => {
+  if (map.size <= max) return;
+  const byAge = [...map].sort((a, b) => (a[1].seenAt ?? 0) - (b[1].seenAt ?? 0));
+  for (const [k] of byAge.slice(0, map.size - max)) map.delete(k);
+};
+
 // Fold one mDNS response into { instances, hosts }.
 //
 // Kept as a pure function over the answer list so the interesting part — "did we understand this
 // packet" — is testable without a network, a socket, or a real device on the segment.
-export function ingest(packet, services, state) {
+//
+// Returns true only when something the INDEX depends on changed. It used to return true for any
+// A record at all, identical or not, so practically every packet on the LAN rebuilt both maps.
+// A record that merely confirms what is known refreshes `seenAt` and nothing else.
+export function ingest(packet, services, state, now = Date.now()) {
   const answers = [...(packet?.answers || []), ...(packet?.additionals || [])];
   const wanted = new Set(services);
   let changed = false;
+  // TTL 0 is a GOODBYE: the device is telling the segment that the record is gone. Recording it
+  // as a fresh sighting — which is what ignoring the TTL did — kept a departed panel's name
+  // pointing at its old address, and when DHCP reissued that address a `client` rule naming the
+  // panel widened a stranger.
+  const goodbye = (a) => a.ttl === 0;
 
   // PTR: service type -> instance name. SRV: instance -> host + port. TXT: instance -> metadata.
   // A: host -> address. A device usually sends all four together, but not always, so each record
@@ -108,22 +137,52 @@ export function ingest(packet, services, state) {
   for (const a of answers) {
     if (!a || typeof a.name !== 'string') continue;
     if (a.type === 'PTR' && wanted.has(a.name) && typeof a.data === 'string') {
-      const inst = state.instances.get(a.data) || { instance: a.data, service: a.name };
+      if (goodbye(a)) { if (state.instances.delete(a.data)) changed = true; continue; }
+      const known = state.instances.get(a.data);
+      const inst = known || { instance: a.data, service: a.name };
+      if (!known || inst.service !== a.name) changed = true;
       inst.service = a.name;
+      inst.seenAt = now;
       state.instances.set(a.data, inst);
-      changed = true;
     } else if (a.type === 'SRV' && a.data?.target) {
       const inst = state.instances.get(a.name);
-      if (inst) { inst.host = a.data.target; inst.port = a.data.port ?? null; changed = true; }
+      if (!inst) continue;
+      const host = hostKey(a.data.target), port = a.data.port ?? null;
+      if (inst.host !== host || inst.port !== port) changed = true;
+      inst.host = host; inst.port = port; inst.seenAt = now;
     } else if (a.type === 'TXT') {
       const inst = state.instances.get(a.name);
-      if (inst) { inst.txt = parseTxt(a.data); changed = true; }
+      if (!inst) continue;
+      const txt = parseTxt(a.data);
+      if (JSON.stringify(txt) !== JSON.stringify(inst.txt ?? null)) changed = true;
+      inst.txt = txt; inst.seenAt = now;
     } else if (a.type === 'A' && typeof a.data === 'string') {
-      state.hosts.set(a.name, a.data);
-      changed = true;
+      const key = hostKey(a.name);
+      // Multicast DNS names live under `.local` by definition. Anything else in an mDNS response
+      // is not something this table has a use for, and is the cheapest flood to refuse.
+      if (!key.endsWith('.local')) continue;
+      if (goodbye(a)) { if (state.hosts.delete(key)) changed = true; continue; }
+      const known = state.hosts.get(key);
+      if (!known || known.ip !== a.data) changed = true;
+      state.hosts.set(key, { ip: a.data, seenAt: now });
     }
   }
+  evictOldest(state.hosts, HOSTS_MAX);
+  evictOldest(state.instances, INSTANCES_MAX);
   return changed;
+}
+
+// Forget what has not been heard from. Every query re-asks for each service AND for each host
+// already held (see query()), so anything still on the network answers and refreshes its
+// `seenAt`; what stays silent for several rounds has left. Returns whether anything was dropped.
+export function expire(state, maxAgeMs, now = Date.now()) {
+  let dropped = false;
+  for (const map of [state.hosts, state.instances]) {
+    for (const [k, v] of map) {
+      if (now - (v.seenAt ?? 0) > maxAgeMs) { map.delete(k); dropped = true; }
+    }
+  }
+  return dropped;
 }
 
 // Flatten instances + host addresses into address -> device, which is the only shape the rest of
@@ -132,8 +191,8 @@ export function index(state) {
   const byIp = new Map();
   const byHost = new Map();
   for (const inst of state.instances.values()) {
-    const ip = inst.host ? state.hosts.get(inst.host) : null;
-    if (inst.host && ip) byHost.set(inst.host.replace(/\.$/, '').toLowerCase(), ip);
+    const ip = inst.host ? (state.hosts.get(hostKey(inst.host))?.ip ?? null) : null;
+    if (inst.host && ip) byHost.set(hostKey(inst.host), ip);
     if (!ip) continue;
     const row = {
       ip,
@@ -153,9 +212,8 @@ export function index(state) {
   }
   // Plain `<host>.local` A records with no service attached still resolve a name, which is what a
   // client_overrides hostname needs.
-  for (const [host, ip] of state.hosts) {
-    const k = host.replace(/\.$/, '').toLowerCase();
-    if (!byHost.has(k)) byHost.set(k, ip);
+  for (const [host, rec] of state.hosts) {
+    if (!byHost.has(host)) byHost.set(host, rec.ip);
   }
   return { byIp, byHost };
 }
@@ -172,8 +230,15 @@ export function createDiscovery({ services = DEFAULT_SERVICES, intervalMs = 3000
 
   const query = () => {
     if (!mdns) return;
+    // Age out first, so a host that stopped answering is not asked about forever.
+    if (expire(state, intervalMs * STALE_AFTER_INTERVALS)) reindex();
     try {
       mdns.query({ questions: services.map((name) => ({ name, type: 'PTR' })) });
+      // Re-ask for the hosts already held. A PTR query refreshes devices that advertise one of
+      // our services; a bare `<name>.local` — which is all a `client` rule hostname needs — is
+      // only re-announced if somebody asks for it, and would otherwise age out while still up.
+      const hosts = [...state.hosts.keys()].slice(0, 100);
+      if (hosts.length) mdns.query({ questions: hosts.map((name) => ({ name, type: 'A' })) });
     } catch (e) { /* a transient send failure is not worth a line every interval */ }
   };
 
@@ -208,7 +273,7 @@ export function createDiscovery({ services = DEFAULT_SERVICES, intervalMs = 3000
     // Resolve `panel.local` to an address. The OS resolver in the container cannot do this.
     resolve(host) {
       if (typeof host !== 'string') return null;
-      return view.byHost.get(host.replace(/\.$/, '').toLowerCase()) ?? null;
+      return view.byHost.get(hostKey(host)) ?? null;
     },
     // For the stats panel: everything discovered, newest shape first.
     snapshot() {

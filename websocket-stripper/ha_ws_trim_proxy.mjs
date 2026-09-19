@@ -38,7 +38,7 @@ import { classify, normalizeIp, isPrivate } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
-import { readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
+import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
 import { resourceInvariantProblems } from './resource_invariants.mjs';
 
 // Compiled bytecode is cached between runs, which is worth having because this add-on restarts
@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.17.1';
+const VERSION = '2026.09.19.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -179,6 +179,13 @@ const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS || '120000', 10);
 // Generous, because a full get_states on a large instance is legitimately slow; it only has to be
 // shorter than "forever". On expiry the socket is dropped, so the ordinary reconnect path rebuilds.
 const CONTROL_RPC_TIMEOUT_MS = parseInt(process.env.CONTROL_RPC_TIMEOUT_MS || '60000', 10);
+// The least time between two rebuilds that REGISTRY events cause. The field filter
+// (registryEventMatters) is the real defence against a rebuild storm; this is the backstop for
+// whatever it does not recognise — an integration rewriting a field that does matter, every few
+// seconds. A dashboard edit, a resource change and a pin are never held: someone is watching for
+// those. Env-only, like the timeouts above, and 0 turns it off.
+const REGISTRY_REBUILD_MIN_MS = parseInt(process.env.REGISTRY_REBUILD_MIN_MS || '30000', 10);
+let LAST_REBUILD_AT = 0;
 // Backpressure on the browser leg. A wall panel on weak wifi that stops reading — or a phone
 // that went to sleep mid-stream — leaves everything sent to it queued in THIS process, and nothing
 // stopped reading from Home Assistant on its behalf, so the queue had no bound but the panel's
@@ -559,6 +566,17 @@ function logThrottled(key, msg, level = LEVELS.info) {
   throttleState.set(key, { n: 0, msg, timer });
 }
 
+// True the first time a key is seen, false ever after. For lines that are worth saying once and
+// are noise the thousandth time, where logThrottled cannot help: it collapses repeats INSIDE a
+// ten-second window, and these recur every thirty seconds or every five minutes.
+const SAID = new Set();
+function onceOnly(key) {
+  if (SAID.has(key)) return false;
+  if (SAID.size >= 1000) SAID.clear();          // bounded; the cost of a clear is one repeat each
+  SAID.add(key);
+  return true;
+}
+
 // Last-resort safety net. An HA restart resets every in-flight socket at once (camera
 // streams, Assist pipelines, the browser's own connections), and a socket that errors before
 // http-proxy has attached its handlers reaches Node as an unhandled 'error' event — which
@@ -643,16 +661,52 @@ const IGNORABLE_REGISTRY_FIELDS = new Set([
   'suggested_object_id',
 ]);
 
+// The same list for `device_registry_updated`, which the filter above never covered — and which
+// turned out to be the louder of the two. Measured on a live instance, 2026-09-19: 33 full
+// rebuilds in 8.5 minutes, 28 of them from device events, every one "+0 -0".
+//
+// A device row reaches an allowlist through exactly five fields: `id`, `area_id`, `name`,
+// `name_by_user` and `via_device_id` (see buildRegistryCtx and the sub-device folding in
+// lovelace_extract.mjs). Listed here is what an integration rewrites on every reconnect or
+// firmware report and that none of those paths read. `manufacturer`, `model` and `model_id` are
+// here only because auto-entities' `device_manufacturer` / `device_model` filters are unsupported;
+// whoever adds them must take these three back out.
+const IGNORABLE_DEVICE_FIELDS = new Set([
+  'sw_version',
+  'hw_version',
+  'configuration_url',
+  'serial_number',
+  'connections',
+  'manufacturer',
+  'model',
+  'model_id',
+]);
+const IGNORABLE_BY_EVENT = new Map([
+  ['entity_registry_updated', IGNORABLE_REGISTRY_FIELDS],
+  ['device_registry_updated', IGNORABLE_DEVICE_FIELDS],
+]);
+
 // Does this registry event plausibly change what a dashboard resolves to?
 function registryEventMatters(eventType, data) {
-  if (eventType !== 'entity_registry_updated') return true;
+  const ignorable = IGNORABLE_BY_EVENT.get(eventType);
+  if (!ignorable) return true;
   // create/remove always matter: a new entity can match a filter, a removed one must go.
   if (data?.action !== 'update') return true;
   const changed = data?.changes && typeof data.changes === 'object' ? Object.keys(data.changes) : null;
   if (!changed || !changed.length) return true;       // shape we don't understand -> rebuild
-  if (changed.some((k) => !IGNORABLE_REGISTRY_FIELDS.has(k))) return true;
-  logThrottled('reg-noop', `entity_registry_updated ignored (only ${changed.join(', ')} changed)`);
+  if (changed.some((k) => !ignorable.has(k))) return true;
+  logThrottled(`reg-noop:${eventType}`, `${eventType} ignored (only ${changed.join(', ')} changed)`);
   return false;
+}
+
+// What a registry event says happened, for the line that announces a rebuild. The rebuild used to
+// be logged as a bare `entity_registry_updated:` — so a storm of them named no entity, no device
+// and no field, and the only changed-field list ever printed was for events that were IGNORED.
+function describeRegistryEvent(data) {
+  const what = data?.entity_id ?? data?.device_id ?? data?.area_id ?? data?.label_id ?? null;
+  const changed = data?.changes && typeof data.changes === 'object' ? Object.keys(data.changes) : [];
+  return [data?.action, what, changed.length ? `(${changed.join(', ')} changed)` : null]
+    .filter(Boolean).join(' ');
 }
 
 // Subscription id for the lovelace resource collection, or null when unavailable. Module scope
@@ -681,6 +735,10 @@ function allowlistFor(cfg, states, registries, renderedTemplates) {
     excludeDeviceCategories: EXCLUDE_DEVICE_CATEGORIES,
   });
   const out = new Set(extracted.entities);
+  // What the extractor could NOT resolve. It has always returned this list and nothing ever read
+  // it, so an `or:` / `not:` / `floor:` filter — or a regex switched off for backtracking —
+  // produced an empty card behind the proxy and not one line anywhere to say why.
+  for (const u of extracted.unsupported || []) logThrottled(`unsupported:${u}`, `    not resolved: ${u}`);
   // Cards configured with a device are the single biggest source of entities nobody asked for,
   // so name them and show what each costs. Silence here would hide the whole trade-off.
   if (extracted.devices?.length) {
@@ -771,6 +829,10 @@ function applyOverrides(set, realIds, dash = null) {
 
 // Build the per-dashboard allowlists (and their union) using an authed rpc().
 async function buildAllow(rpc, renderTemplate) {
+  // Counted where the cost is paid — a rebuild that later fails still pulled the instance from
+  // Home Assistant. This was declared, published over MQTT and never incremented, so the one
+  // sensor built to show a rebuild storm read 0 straight through one.
+  REBUILD_COUNT++;
   const states = await rpc({ type: 'get_states' });
   const realIds = states.map((s) => s.entity_id);
   REAL_IDS = realIds;
@@ -931,6 +993,9 @@ async function buildAllow(rpc, renderTemplate) {
   const afterAlways = new Set([...union, ...withOverrides]).size;
   log(`overrides: base ${baseN}, +always ${afterAlways - baseN}, -never ${afterAlways - withOverrides.size}`);
   if (PER_DASH) log(`  per-dashboard: ${[...perDash].map(([p, s]) => `${p}=${s.size}`).join(', ')} (union ${withOverrides.size})`);
+  // Here as well as in runRecompute: the boot and reconnect builds do not go through it, and a
+  // registry event arriving seconds after either is exactly what the floor is for.
+  LAST_REBUILD_AT = Date.now();
   return { union: withOverrides, perDash };
 }
 
@@ -1034,6 +1099,11 @@ function startController() {
       // than merely rejecting: the socket is evidently not answering, and onGone() is the one
       // path that already knows how to wait for a healthy HA and rebuild.
       const rpc = (o) => {
+        // A socket that is already gone gets an immediate, honest answer. Sending anyway threw
+        // inside the executor AFTER the timeout was armed, so the entry sat in `pending` and, a
+        // minute later, logged "unanswered … dropping the connection" about a connection that had
+        // been replaced long before — a line that reads like a wedged Home Assistant.
+        if (gone || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('control ws closed'));
         o.id = id++;
         return new Promise((res, rej) => {
           const timer = setTimeout(() => {
@@ -1081,23 +1151,40 @@ function startController() {
       // instance, three rebuilds completed inside one second. So a rebuild in flight sets a
       // flag instead, and exactly one follow-up runs when it finishes.
       let rebuilding = false;
-      let rebuildAgain = null;
+      let rebuildAgain = null;                 // { why, floorMs } of the follow-up, if one is owed
       const runRecompute = async (why) => {
-        if (rebuilding) { rebuildAgain = why; return; }
+        if (rebuilding) return;
         rebuilding = true;
         try { applyAllow(await buildAllow(rpc, renderTemplate), `recomputed (${why})`); }
         catch (e) { log('recompute failed:', e.message); }
         finally {
           rebuilding = false;
+          LAST_REBUILD_AT = Date.now();
           const next = rebuildAgain;
           rebuildAgain = null;
-          if (next !== null) scheduleRecompute(next);
+          if (next !== null && !gone) scheduleRecompute(next.why, next.floorMs);
         }
       };
       // Published so a panel pin can trigger the same rebuild a dashboard edit does.
-      const scheduleRecompute = (why) => {
+      //
+      // `floorMs` is the least time since the LAST rebuild this one may run at — 0 for anything a
+      // person did, REGISTRY_REBUILD_MIN_MS for registry events. The lowest floor among the
+      // requests being debounced together wins, so a dashboard edit is never made to wait behind
+      // a registry event that happened to arrive beside it.
+      let pendingFloor = Infinity;
+      const scheduleRecompute = (why, floorMs = 0) => {
+        if (rebuilding) {
+          rebuildAgain = { why, floorMs: Math.min(floorMs, rebuildAgain?.floorMs ?? Infinity) };
+          return;
+        }
         clearTimeout(recomputeTimer);
-        recomputeTimer = setTimeout(() => runRecompute(why), 1500);
+        pendingFloor = Math.min(pendingFloor, floorMs);
+        const wait = Math.max(1500, LAST_REBUILD_AT + pendingFloor - Date.now());
+        if (wait > 1500) {
+          logThrottled('rebuild-held', `  rebuild held ${Math.ceil(wait / 1000)}s — registry events `
+            + `rebuild at most once per ${REGISTRY_REBUILD_MIN_MS / 1000}s`);
+        }
+        recomputeTimer = setTimeout(() => { pendingFloor = Infinity; runRecompute(why); }, wait);
       };
       // Cleared when this socket goes away, so a pin during an HA outage reports honestly that
       // it needs a restart rather than silently doing nothing.
@@ -1202,8 +1289,8 @@ function startController() {
           const ev = m.event.event_type;
           if (!registryEventMatters(ev, m.event.data)) return;
           const why = ev === 'lovelace_updated' ? (m.event.data?.url_path ?? '(default)') : ev;
-          log(`${ev}: ${ev === 'lovelace_updated' ? why : ''}`.trim());
-          scheduleRecompute(why);
+          log(`${ev}: ${ev === 'lovelace_updated' ? why : describeRegistryEvent(m.event.data)}`.trim());
+          scheduleRecompute(why, ev === 'lovelace_updated' ? 0 : REGISTRY_REBUILD_MIN_MS);
           return;
         }
         if (m.type === 'result' && pending[m.id]) { const p = pending[m.id]; m.success ? p[0](m.result) : p[1](new Error(JSON.stringify(m.error))); delete pending[m.id]; }
@@ -1211,6 +1298,11 @@ function startController() {
 
       const onGone = (e) => {
         if (gone) return; gone = true;
+        // `recomputeTimer` outlives this socket (it is shared across reconnects), so a rebuild
+        // debounced just before the drop would fire against the dead socket and log "recompute
+        // failed". Nothing is lost by cancelling it: the reconnect rebuilds from scratch, and that
+        // build reads the same ALWAYS / RES_ALWAYS lists a pending pin had already appended to.
+        clearTimeout(recomputeTimer);
         if (e) logThrottled(`ctrl:${e.code || e.message}`, `control ws error: ${e.message}`);
         Object.values(pending).forEach(([, rej]) => rej(new Error('control ws closed')));
         [...tplWaiters.keys()].forEach((k) => settleTpl(k, new Error('control ws closed')));
@@ -1592,6 +1684,7 @@ const BUILTIN_ICON_NS = new Set(['mdi', 'hass', 'hassio', 'homeassistant', 'cust
 
 const RESOURCE_CACHE = new Map();     // url -> { tested:Set, present:Set|null, bytes }
 let RESOURCES_BY_DASH = new Map();    // dash -> Set(url) to keep
+let LAST_RESOURCE_REPORT = null;      // the text of the last report printed — see buildResources
 let RESOURCE_ALL_PATHS = new Set();   // every resource path HA has registered
 // Per-dashboard resource figures for the stats panel. Populated by buildResources().
 let RESOURCE_STATS = new Map();       // dash -> { kept, dropped, keptKB, droppedKB }
@@ -1977,6 +2070,13 @@ async function buildResources(rpc, keysByDash) {
   catch (e) { log(`  resources: FAILED (${e.message}) — forwarding all resources`); RESOURCES_BY_DASH = new Map(); RESOURCE_STATS = new Map(); return; }
   if (!Array.isArray(rows)) { RESOURCES_BY_DASH = new Map(); RESOURCE_STATS = new Map(); return; }
 
+  // The report is collected, then printed only if it differs from the last one printed. Every
+  // rebuild used to reprint all of it — some sixty lines on the instance this was measured on,
+  // identical each time — so a run of no-change rebuilds pushed everything else out of the log.
+  // Problems still go out immediately through warn(); this only quietens the routine half.
+  const report = [];
+  const say = (line) => report.push(line);
+
   // Every token any dashboard could match on, tagged by kind so a card type and an icon
   // namespace that happen to share a name can never be confused for one another.
   const unionCards = new Set(), unionIcons = new Set(), unionModules = new Set();
@@ -2048,7 +2148,7 @@ async function buildResources(rpc, keysByDash) {
     if (p) PROVIDERS.set(t, p);
   }
   if (PROVIDERS.size) {
-    log(`  resources: ${PROVIDERS.size} of ${unionCards.size} card type(s) have an identifiable `
+    say(`  resources: ${PROVIDERS.size} of ${unionCards.size} card type(s) have an identifiable `
       + 'provider file; for those, bundles that only mention the name are not kept');
   }
 
@@ -2056,7 +2156,7 @@ async function buildResources(rpc, keysByDash) {
   FRAG_RARE_MAX = Math.max(2, Math.floor(readable.length * 0.05));
   const common = [...unionFrags].filter((f) => !isDistinctive(f));
   if (common.length) {
-    log(`  resources: ${common.length} fragment(s) too common to identify a card (>${FRAG_DF_MAX} of ${readable.length}): ${common.sort().join(', ')}`);
+    say(`  resources: ${common.length} fragment(s) too common to identify a card (>${FRAG_DF_MAX} of ${readable.length}): ${common.sort().join(', ')}`);
   }
 
   const byDash = new Map();
@@ -2144,12 +2244,12 @@ async function buildResources(rpc, keysByDash) {
         + `Add a matching fragment to resources_always_forward, or set trim_resources: false.`);
     }
     const needs = [...[...keys.cards].sort(), ...[...keys.icons].sort().map((i) => i + ':')];
-    log(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
-    log(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
+    say(`  resources ${dash} needs: ${needs.join(', ') || '(none)'}`);
+    say(`  resources ${dash}: ${keep.size}/${rows.length} kept (${(keptB / 1024).toFixed(0)}KB), ${rows.length - keep.size} dropped (${(dropB / 1024).toFixed(0)}KB)`);
   }
   RESOURCE_UNMET_COVERAGE = { checkable: checkable.size, unknowable: unknowable.size };
   if (unknowable.size) {
-    log(`  resources: ${checkable.size} of ${checkable.size + unknowable.size} card type(s) can be `
+    say(`  resources: ${checkable.size} of ${checkable.size + unknowable.size} card type(s) can be `
       + `checked for a missing definition; ${unknowable.size} build their element name at runtime `
       + `(${[...unknowable].sort().slice(0, 6).join(', ')}${unknowable.size > 6 ? ', …' : ''}) `
       + `and cannot be verified from here.`);
@@ -2212,14 +2312,22 @@ async function buildResources(rpc, keysByDash) {
 
   if (droppedByAll.length) {
     const kb = droppedByAll.reduce((t, r) => t + (RESOURCE_CACHE.get(r.url)?.bytes || 0), 0) / 1024;
-    log(`  resources: ${droppedByAll.length} dropped by ALL dashboards (no dashboard references them), ${kb.toFixed(0)}KB.`);
-    log('    If any of these run on load rather than rendering a card — an idle timer, a');
-    log('    pop-up, a heartbeat — add them to resources_always_forward. Dropping one of');
-    log('    those is INVISIBLE: the dashboard renders normally and only the behaviour stops.');
+    say(`  resources: ${droppedByAll.length} dropped by ALL dashboards (no dashboard references them), ${kb.toFixed(0)}KB.`);
+    say('    If any of these run on load rather than rendering a card — an idle timer, a');
+    say('    pop-up, a heartbeat — add them to resources_always_forward. Dropping one of');
+    say('    those is INVISIBLE: the dashboard renders normally and only the behaviour stops.');
     for (const r of droppedByAll) {
       const b = ((RESOURCE_CACHE.get(r.url)?.bytes || 0) / 1024).toFixed(0);
-      log(`      drop ${String(b).padStart(6)}KB ${r.url.split('?')[0]}`);
+      say(`      drop ${String(b).padStart(6)}KB ${r.url.split('?')[0]}`);
     }
+  }
+
+  const text = report.join('\n');
+  if (text === LAST_RESOURCE_REPORT) {
+    log(`  resources: unchanged since the last report (${rows.length} registered) — not repeated`);
+  } else {
+    LAST_RESOURCE_REPORT = text;
+    for (const line of report) log(line);
   }
 }
 
@@ -2306,7 +2414,15 @@ function tokenKey(token) {
 // first's promise. The result is cached the moment it lands, so nothing after that pays either.
 const USER_INFLIGHT = new Map();                // sha256(token) -> Promise<user|null>
 
-function resolveUser(token) {
+// `fwd` is the X-Forwarded-* set of the request this lookup is on behalf of (forwardHeadersFor).
+// Without it Home Assistant attributes the probe to THIS PROXY's address, and a rejected token is
+// a failed login: with `ip_ban_enabled`, one panel retrying a stale token — or anything on the LAN
+// posting junk Bearer tokens at the panel status endpoint — walks the proxy's own address to the
+// ban threshold and takes every panel down with it. Failures are deliberately not cached (see
+// finish), so every retry is another probe. The bridge socket was fixed for exactly this; the
+// probe beside it was not. A deduplicated caller rides on the first caller's headers, which is
+// the same client in every case that matters: one page load, one token, several sockets.
+function resolveUser(token, fwd = null) {
   const key = tokenKey(token);
   const hit = USER_CACHE.get(key);
   if (hit && Date.now() - hit.at < USER_TTL_MS) return Promise.resolve(hit.user);
@@ -2347,7 +2463,7 @@ function resolveUser(token) {
     if (typeof timer.unref === 'function') timer.unref();
 
     let ws;
-    try { ws = new WebSocket(HA_WS, { perMessageDeflate: false }); }
+    try { ws = new WebSocket(HA_WS, { perMessageDeflate: false, headers: fwd || {} }); }
     catch { clearTimeout(timer); return resolve(null); }
 
     ws.on('message', (raw) => {
@@ -2415,7 +2531,7 @@ async function resolveConnRules(registries) {
     if (!idsByName.has(n)) idsByName.set(n, []);
     idsByName.get(n).push(d.id);
   }
-  const entsFor = buildRegistryCtx({ devices, entities }).byDevice;
+  const entsFor = buildRegistryCtx(registries ?? {}).byDevice;      // memoised — see buildRegistryCtx
 
   // Addresses first, for every rule AT ONCE. These were resolved one rule at a time, so a
   // hostname that did not answer — a panel that is powered off — held the rules after it for
@@ -2455,7 +2571,7 @@ async function resolveConnRules(registries) {
     r.deviceEntities = [];
     for (const want of r.devices) {
       const ids = byId.has(want) ? [want] : (idsByName.get(want.trim().toLowerCase()) || []);
-      if (!ids.length) { log(`  client rule ${r.client}: no device named "${want}"`); continue; }
+      if (!ids.length) { log(`  ${ruleLabel(r)}: no device named "${want}"`); continue; }
       if (ids.length > 1) {
         warn(`  ${ids.length} devices are named "${want}" — the rule expands all of them;`
           + ' name one by its device id to pick just that one');
@@ -2465,11 +2581,22 @@ async function resolveConnRules(registries) {
       r.deviceEntities.push(...kept);
       // Named by the rule's own wording rather than by a device id: `want` is what someone
       // wrote, and when it matched several devices there is no single id to name here.
-      log(`  client rule ${r.client}: device "${want}"`
+      log(`  ${ruleLabel(r)}: device "${want}"`
         + (ids.length > 1 ? ` (${ids.length} devices)` : '')
         + ` -> ${kept.length} entities ${describeDeviceSplit(rows)}`);
     }
   }
+}
+
+// How a rule is named in the log. A rule used to be addressed as `client rule ${r.client}`, which
+// reads `client rule null` for every rule matched on anything else — a user, a role, an mDNS kind.
+function ruleLabel(r) {
+  if (r.client) return `client rule ${r.client}`;
+  const by = [['user', r.user], ['role', r.role], ['auth_provider', r.authProvider],
+    ['mdns_kind', r.mdnsKind], ['entrypoint', r.entrypoint], ['dashboard', r.dashboard],
+    ['user_agent', r.userAgent ? (r.userAgent.literal ?? String(r.userAgent.re)) : null]]
+    .filter(([, v]) => v).map(([k, v]) => `${k}=${v}`);
+  return `rule ${by.join(' ') || '(no matcher)'}`;
 }
 
 // Every client rule matching this connection's address, merged. Cheap: a handful of set lookups
@@ -2860,8 +2987,15 @@ async function serveDashboardPage(req, res, dash) {
   for (const [k, v] of Object.entries(req.headers)) {
     const key = k.toLowerCase();
     if (key === 'host' || key === 'connection' || key === 'accept-encoding') continue;
+    // Replaced below, never relayed. This is the third way a request reaches Home Assistant —
+    // after httpxy and the bridge socket — and it was the one that skipped the forwarded-header
+    // rule: a client-supplied X-Forwarded-For went up exactly as sent, without our peer on the
+    // right. The page is public, so nothing was exposed, but "our peer is always rightmost" is
+    // only an invariant if there is no path around it.
+    if (key.startsWith('x-forwarded-')) continue;
     headers[k] = v;
   }
+  Object.assign(headers, forwardHeadersFor(req));
   const r = await fetch(upstream, { headers, redirect: 'manual',
     signal: AbortSignal.timeout(20000) });
   const type = r.headers.get('content-type') || '';
@@ -2870,14 +3004,20 @@ async function serveDashboardPage(req, res, dash) {
   const rt = classify(req);
   const rr = resRulesOf(rulesForConnection({ ip: rt.ip, ua: req.headers['user-agent'] || null, dash, host: rt.host }));
   const { html, dropped } = stripExtraModules(body, dash, rr);
-  if (!dropped.length) return false;                      // nothing to do; let the proxy serve it
-
+  // Served from here even when nothing was removed. It used to hand the request back to the proxy
+  // in that case, which asked Home Assistant for the same page a second time — on every load of
+  // every dashboard that had nothing to strip, i.e. the common one. The body in hand is the page
+  // HA just sent; `html === body` when nothing matched, so this is the untouched document.
   const out = Buffer.from(html, 'utf8');
   for (const [k, v] of r.headers) {
     const key = k.toLowerCase();
     if (key === 'content-length' || key === 'content-encoding' || key === 'transfer-encoding') continue;
+    // Iterating yields one entry PER cookie, and setHeader replaces — so only the last survived.
+    if (key === 'set-cookie') continue;
     res.setHeader(k, v);
   }
+  const upstreamCookies = r.headers.getSetCookie?.() ?? [];
+  if (upstreamCookies.length) res.setHeader('set-cookie', upstreamCookies);
   res.setHeader('content-length', String(out.length));
   // Attribute this browser to this dashboard — the same cookie the proxyRes hook sets.
   //
@@ -2893,8 +3033,10 @@ async function serveDashboardPage(req, res, dash) {
   addDashCookie(res, dash);
   res.writeHead(r.status);
   res.end(out);
-  logThrottled(`extramod:${dash}`, `  extra modules trimmed for ${dash}: removed ${dropped.length} `
-    + `(${dropped.join(', ')})`);
+  if (dropped.length) {
+    logThrottled(`extramod:${dash}`, `  extra modules trimmed for ${dash}: removed ${dropped.length} `
+      + `(${dropped.join(', ')})`);
+  }
   return true;
 }
 
@@ -3041,7 +3183,7 @@ const server = http.createServer((req, res) => {
         error: 'send your Home Assistant access token as Authorization: Bearer <token>',
       }));
     }
-    resolveUser(token).then((user) => {
+    resolveUser(token, forwardHeadersFor(req)).then((user) => {
       if (!user) {
         // Same answer for an absent token and a rejected one: this must not become an oracle for
         // testing whether a token is valid any faster than asking Home Assistant directly.
@@ -3356,7 +3498,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       userChecked = true;
       toHA(s);
       gateQueue = [];
-      resolveUser(m.access_token).then((user) => {
+      resolveUser(m.access_token, meta.fwd).then((user) => {
         // Rebuilt from what bridge() was handed rather than captured in the upgrade handler:
         // the two are different functions, and reaching across cost a silent ReferenceError
         // inside this promise chain — the widening simply never happened and nothing said so.
@@ -3364,9 +3506,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         // Log the miss too. A rule that matches nothing is indistinguishable from no rule at
         // all otherwise — and the usual cause is that HA's user NAME ("David Coulson") is not
         // the first name people write in config.
+        // Once per user-and-dashboard, then debug: a companion app reconnecting every five
+        // minutes repeated this line for the life of the process, and it is advice, not news.
         if (!extra && user) {
-          logThrottled(`user-nomatch:${user.id}`, `no user rule matched ${JSON.stringify(user.name)} `
-            + `(id ${user.id})${dash ? ` on ${dash}` : ''} — match on that exact name or the id`);
+          const msg = `no user rule matched ${JSON.stringify(user.name)} `
+            + `(id ${user.id})${dash ? ` on ${dash}` : ''} — match on that exact name or the id`;
+          if (onceOnly(`user-nomatch:${user.id}:${dash ?? ''}`)) log(msg); else debug(msg);
         }
         if (extra) {
           allow = applyUserRules(allow, extra);
@@ -3394,7 +3539,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // Cached per token like the gated path, so a panel that reconnects hourly asks HA once.
     if (!userChecked && m && m.type === 'auth' && m.access_token && !userRulesCouldApply(dash)) {
       userChecked = true;
-      resolveUser(m.access_token)
+      resolveUser(m.access_token, meta.fwd)
         .then((user) => { if (user) stats.connIdentity(connId, { user: user.name ?? user.id }); })
         .catch(() => {});
       // Deliberately falls through: the auth message still has to reach HA the normal way.
@@ -3457,9 +3602,14 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // Log the announcement itself, not only the case where it changed something. A panel whose
       // entities are already supplied by a client_overrides rule adds nothing — so without this
       // the mechanism is invisible, and there is no way to tell "working, nothing to do" apart
-      // from "not working". Throttled: the satellite re-announces every 30 seconds.
-      logThrottled(`selfid:${meta.ip}`, `${meta.ip ?? '?'} announces ${m.entity_id}`
-        + `${added ? '' : ' (already covered)'}`);
+      // from "not working".
+      //
+      // ONCE per address-and-satellite, then at debug. The satellite re-announces every 30
+      // seconds and the throttle window is 10, so the throttle never collapsed anything: three
+      // panels wrote ~8,600 identical lines a day, which with the rebuild reports beside them left
+      // the Supervisor's log buffer holding about ten minutes of history.
+      const announceMsg = `${meta.ip ?? '?'} announces ${m.entity_id}${added ? '' : ' (already covered)'}`;
+      if (added || onceOnly(`selfid:${meta.ip}:${m.entity_id}`)) log(announceMsg); else debug(announceMsg);
       if (added && !added.every((id) => allow.has(id))) {
         log(`${meta.ip ?? '?'} identified itself as ${m.entity_id}: +${added.length} entities on its next connection`);
         // The allowlist for THIS connection was already sent; the frontend has to re-subscribe
@@ -3538,6 +3688,68 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       : () => s);
   });
 
+  // ---- per-connection helpers for the HA -> browser path ----
+  //
+  // These were defined INSIDE the message handler, so every frame — including each of the
+  // thousands-per-hour entity diffs — allocated six closures before doing anything. None of them
+  // depends on the frame: they read this connection's subscription sets and its `allow`, which is
+  // a `let` and so is seen at its current value from here exactly as it was from there.
+  const sized = (v) => { try { return Buffer.byteLength(JSON.stringify(v)); } catch { return 0; } };
+  // Does this frame carry the connection's initial entity state?
+  //
+  // `a` is HA's "added" block — the full state of every subscribed entity, sent once when a
+  // subscribe_entities subscription opens. `c` ("changed") is every diff after it. Checked
+  // through batched arrays too: HA packs messages together, and the initial payload is
+  // routinely bundled with other replies, so testing only the top-level object would miss it
+  // on exactly the connections that are busiest at startup.
+  const isInitialState = (x) => Boolean(
+    x && x.type === 'event' && subEntityIds.has(x.id)
+    && x.event && x.event.a && Object.keys(x.event.a).length,
+  );
+  const carriesInitialState = (msg) => (Array.isArray(msg) ? msg.some(isInitialState) : isInitialState(msg));
+  // Measure the `a` BLOCK, not the frame it arrived in.
+  //
+  // This used to be `Buffer.byteLength(s)` — the whole frame. HA batches messages into an
+  // array, so that number silently included whatever else was bundled alongside: sometimes
+  // lovelace/config and the registries, sometimes nothing. Measured live it varied by 164x
+  // between two clients on the SAME dashboard with the SAME 149-entity allowlist (246KB vs
+  // 1.5KB), which makes it useless as a payload figure and actively misleading next to a
+  // column header that says "Payload".
+  //
+  // The entity count is reported beside it deliberately. Bytes alone cannot be sanity-checked
+  // by a reader, but "447 bytes / 3 entities" against a 104-entity allowlist is visibly a
+  // partial first block rather than a mystery, and the panel stops being able to imply a
+  // cold-start payload it did not actually observe.
+  const initialStateSize = (msg) => {
+    let bytes = 0, entities = 0;
+    for (const x of (Array.isArray(msg) ? msg : [msg])) {
+      if (!isInitialState(x)) continue;
+      bytes += Buffer.byteLength(JSON.stringify(x.event.a));
+      entities += Object.keys(x.event.a).length;
+    }
+    return { bytes, entities };
+  };
+
+  // Home Assistant BATCHES messages into a JSON array. Every `m.type` check below sees
+  // undefined on those, so an array frame fell through every branch untouched and
+  // unlabelled — which is how an unfiltered firehose hid in plain sight. Handle the array
+  // by filtering its elements, then fall through with the rest of the logic intact.
+  // A registry change for an entity this connection cannot see. Dropped whole: the browser
+  // holds no row for it, so the update has nothing to apply to. Entities that are ADDED and
+  // later become relevant are not lost — a new entity changes the allowlist, which triggers
+  // a recompute and reconnects open dashboards.
+  const dropRegistryEvent = (x) => STRIP && TRIM_REGISTRIES
+    && x && x.type === 'event'
+    && registrySubs.has(x.id)
+    && typeof x.event?.data?.entity_id === 'string'
+    && !allow.has(x.event.data.entity_id);
+
+  const dropStateChanged = (x) => STRIP
+    && x && x.type === 'event'
+    && stateChangedSubs.has(x.id)
+    && typeof x.event?.data?.entity_id === 'string'
+    && !allow.has(x.event.data.entity_id);
+
   haWs.on('message', (raw, isBinary) => {
     // Same on the way back, and this is the direction that carries the volume: on the
     // instance this was built against, binary frames were 90% of everything a wall panel
@@ -3548,45 +3760,12 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       stats.connTraffic(connId, n, n, false);
       return safeSend(raw);
     }
-    // Does this frame carry the connection's initial entity state?
-    //
-    // `a` is HA's "added" block — the full state of every subscribed entity, sent once when a
-    // subscribe_entities subscription opens. `c` ("changed") is every diff after it. Checked
-    // through batched arrays too: HA packs messages together, and the initial payload is
-    // routinely bundled with other replies, so testing only the top-level object would miss it
-    // on exactly the connections that are busiest at startup.
-    const isInitialState = (x) => Boolean(
-      x && x.type === 'event' && subEntityIds.has(x.id)
-      && x.event && x.event.a && Object.keys(x.event.a).length,
-    );
-    const carriesInitialState = (msg) => (Array.isArray(msg) ? msg.some(isInitialState) : isInitialState(msg));
-    // Measure the `a` BLOCK, not the frame it arrived in.
-    //
-    // This used to be `Buffer.byteLength(s)` — the whole frame. HA batches messages into an
-    // array, so that number silently included whatever else was bundled alongside: sometimes
-    // lovelace/config and the registries, sometimes nothing. Measured live it varied by 164x
-    // between two clients on the SAME dashboard with the SAME 149-entity allowlist (246KB vs
-    // 1.5KB), which makes it useless as a payload figure and actively misleading next to a
-    // column header that says "Payload".
-    //
-    // The entity count is reported beside it deliberately. Bytes alone cannot be sanity-checked
-    // by a reader, but "447 bytes / 3 entities" against a 104-entity allowlist is visibly a
-    // partial first block rather than a mystery, and the panel stops being able to imply a
-    // cold-start payload it did not actually observe.
-    const initialStateSize = (msg) => {
-      let bytes = 0, entities = 0;
-      for (const x of (Array.isArray(msg) ? msg : [msg])) {
-        if (!isInitialState(x)) continue;
-        bytes += Buffer.byteLength(JSON.stringify(x.event.a));
-        entities += Object.keys(x.event.a).length;
-      }
-      return { bytes, entities };
-    };
-
     let s = raw.toString(); let m;
     // Sizes are measured on the decoded JSON, i.e. what the browser has to parse. The wire is
     // smaller when permessage-deflate is on, and deliberately not what the panel reports.
-    const inBytes = Buffer.byteLength(s);
+    // `raw` IS that UTF-8, so its length is the answer without walking the string again.
+    const inBytes = Buffer.isBuffer(raw) ? raw.length : Buffer.byteLength(s);
+    const received = s;
     let cat = null;
     // Set for a BATCHED (array) frame, so done() labels it once, after trimming. Home Assistant
     // packs messages into arrays; `m.type` is undefined on those, so without this they fall
@@ -3605,10 +3784,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // services and resources — a handful per page load — not the thousands-per-second event
     // stream, where exactly this pattern was removed for being wasteful.
     const frameTrims = [];
-    const sized = (v) => { try { return Buffer.byteLength(JSON.stringify(v)); } catch { return 0; } };
     let isEvent = false;
     const done = () => {
-      const outBytes = Buffer.byteLength(s);
+      // Most frames go out exactly as they came in; only a re-serialised one needs measuring.
+      const outBytes = s === received ? inBytes : Buffer.byteLength(s);
       // Per-message where we measured it; the frame total is only right for a lone message.
       if (frameTrims.length) for (const t of frameTrims) stats.recordTrim(t.cat, t.before, t.after);
       else if (cat) stats.recordTrim(cat, inBytes, outBytes);
@@ -3665,26 +3844,6 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       }
       return safeSend(s);
     };
-    // Home Assistant BATCHES messages into a JSON array. Every `m.type` check below sees
-    // undefined on those, so an array frame fell through every branch untouched and
-    // unlabelled — which is how an unfiltered firehose hid in plain sight. Handle the array
-    // by filtering its elements, then fall through with the rest of the logic intact.
-    // A registry change for an entity this connection cannot see. Dropped whole: the browser
-    // holds no row for it, so the update has nothing to apply to. Entities that are ADDED and
-    // later become relevant are not lost — a new entity changes the allowlist, which triggers
-    // a recompute and reconnects open dashboards.
-    const dropRegistryEvent = (x) => STRIP && TRIM_REGISTRIES
-      && x && x.type === 'event'
-      && registrySubs.has(x.id)
-      && typeof x.event?.data?.entity_id === 'string'
-      && !allow.has(x.event.data.entity_id);
-
-    const dropStateChanged = (x) => STRIP
-      && x && x.type === 'event'
-      && stateChangedSubs.has(x.id)
-      && typeof x.event?.data?.entity_id === 'string'
-      && !allow.has(x.event.data.entity_id);
-
     try { m = JSON.parse(s); } catch (e) {
       logThrottled('unparsed-frame', `frame that is neither binary nor JSON (${raw?.length ?? '?'} bytes): ${e.message}`);
       return done();
@@ -4056,6 +4215,9 @@ function statsExtras() {
       union: ALLOW.size,
       instanceEntities: INSTANCE_ENTITIES,
       version: ALLOW_VERSION,
+      // How many times the instance has been pulled to (re)build this. `version` only moves when
+      // the result CHANGED, so a storm of no-op rebuilds is invisible in it; this is not.
+      rebuilds: REBUILD_COUNT,
       byDashboard: Object.fromEntries([...ALLOW_BY_DASH].map(([d, s]) => [d, s.size])),
     },
     resources: {
@@ -4426,7 +4588,7 @@ const statsServer = http.createServer((req, res) => {
         // Only options this build knows about. Without this the store would happily accept a
         // typo'd key, write it, and report it back as managed — a setting that looks saved and
         // does nothing, which is the exact failure this whole ownership scheme exists to avoid.
-        if (!EDITABLE_KEYS[key]) {
+        if (!isKnownOption(key)) {
           res.writeHead(400, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ error: `"${key}" is not an option this version knows about` }));
         }

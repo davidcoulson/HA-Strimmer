@@ -1742,6 +1742,45 @@ describe('trim_extra_modules', () => {
     } finally { px.kill(); await mock.close(); }
   });
 
+  // Sixty identical lines per rebuild, on the instance this was measured on — enough that the
+  // Supervisor's log buffer held ten minutes of history. Said once; repeated only if it changed.
+  it('does not reprint the resource report when a rebuild changed nothing about it', async () => {
+    const { mock, px } = await boot({});
+    try {
+      mock.fireLovelaceUpdated('res-dash');
+      await px.waitForLog(/allowlist recomputed/);
+      assert.match(px.out, /resources: unchanged since the last report/);
+      assert.equal((px.out.match(/resources res-dash needs:/g) || []).length, 1,
+        'the per-dashboard report must appear once, from boot');
+    } finally { px.kill(); await mock.close(); }
+  });
+
+  // Two things about the one request this add-on fetches itself instead of streaming.
+  //
+  // It handed the request back to the proxy whenever nothing was removed, which fetched the same
+  // page from Home Assistant a second time on every such load. And it relayed the client's
+  // X-Forwarded-For exactly as sent — the one path to HA that skipped "our peer goes on the right".
+  it('asks Home Assistant for the page once, with our peer appended to a supplied chain', async () => {
+    // The rule keeps the only droppable module for this client, so there is nothing to strip.
+    // It names the forwarded address, because that is who the request says it is from.
+    const rule = JSON.stringify([{ client: '192.168.5.10', resources_always_forward: ['unrelated-widget'] }]);
+    const { mock, port, px } = await boot({ TRIM_EXTRA_MODULES: '1', OVERRIDES: rule });
+    try {
+      const at = mock.state.httpHits.length;
+      const html = await new Promise((resolve, reject) => {
+        http.get(`http://127.0.0.1:${port}/res-dash`,
+          { headers: { accept: 'text/html', 'x-forwarded-for': '192.168.5.10' } }, (res) => {
+            let body = ''; res.on('data', (c) => body += c); res.on('end', () => resolve(body));
+          }).on('error', reject);
+      });
+      for (const m of MODS) assert.ok(html.includes(m), `${m} must survive — nothing was to be removed`);
+      const hits = mock.state.httpHits.slice(at).filter((h) => h.url === '/res-dash');
+      assert.equal(hits.length, 1, `one page load must be one upstream fetch, got ${hits.length}`);
+      assert.equal(hits[0].xff, '192.168.5.10, 127.0.0.1',
+        'a forged single entry must not reach HA alone on this path either');
+    } finally { px.kill(); await mock.close(); }
+  });
+
   // The same rule reaches the page. A module the resource trim dropped is removed from the page
   // for everyone else and left in place for the one client whose rule names it — so the panel
   // that needs an injected engine gets it at page load, and no other panel pays for it.

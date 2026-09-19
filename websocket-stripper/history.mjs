@@ -98,6 +98,22 @@ function persist() {
   }
 }
 
+// A sample read back from disk is only trusted as far as its timestamp was. One with `saved: "x"`
+// or a missing field turned the 24h totals into "5x" and NaN for a day; every number is coerced and
+// the flow map rebuilt from finite counts only.
+function sanitize(s) {
+  const out = { ...s };
+  for (const k of ['clients', 'saved', 'before', 'events', 'cacheHits', 'spanMs']) {
+    if (k in out || k !== 'spanMs') out[k] = num(out[k]);
+  }
+  const flows = {};
+  if (s.flows && typeof s.flows === 'object' && !Array.isArray(s.flows)) {
+    for (const [k, n] of Object.entries(s.flows)) if (Number.isFinite(n)) flows[k] = n;
+  }
+  out.flows = flows;
+  return out;
+}
+
 export function load(dataDir, now = Date.now()) {
   file = path.join(dataDir, 'history.json');
   try {
@@ -105,7 +121,8 @@ export function load(dataDir, now = Date.now()) {
     const cutoff = now - WINDOW_MS;
     samples = (Array.isArray(raw?.samples) ? raw.samples : [])
       .filter((s) => s && Number.isFinite(s.t) && s.t >= cutoff)
-      .slice(-KEEP);
+      .slice(-KEEP)
+      .map(sanitize);
   } catch {
     samples = [];
   }
@@ -159,8 +176,11 @@ export function history() {
         return [...m]
           .sort((a, b) => b[1] - a[1])
           .map(([k, n]) => {
-            const [origin, route, host] = k.split('|');
-            return { origin, route, host, n };
+            // Split on the first two bars only. origin and route are fixed words; the host is a
+            // request header and may contain anything, including the separator — which used to
+            // truncate it and merge two hosts' totals. The on-disk key format is unchanged.
+            const a = k.indexOf('|'), b = k.indexOf('|', a + 1);
+            return { origin: k.slice(0, a), route: k.slice(a + 1, b), host: k.slice(b + 1), n };
           });
       })(),
     },

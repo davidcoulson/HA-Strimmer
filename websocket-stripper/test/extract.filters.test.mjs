@@ -4,7 +4,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractEntities, collectTemplates, expandGroupMembers, toMatcher } from '../lovelace_extract.mjs';
+import { extractEntities, collectTemplates, expandGroupMembers, toMatcher, looksCatastrophic } from '../lovelace_extract.mjs';
 import { STATES, REGISTRIES } from './fixtures.mjs';
 
 // Allowlist mode: this is exactly how ha_ws_trim_proxy.mjs calls the extractor.
@@ -140,5 +140,78 @@ describe('group membership expansion (issue #4)', () => {
     ];
     assert.deepEqual([...expandGroupMembers(['group.a'], cyclic)].sort(),
       ['group.a', 'group.b', 'light.kitchen']);
+  });
+});
+
+// Found by the 2026-09-19 review. Each of these resolved to NOTHING, or threw, with no log line —
+// the under-including direction, which is the one that blanks a card.
+describe('conditions the extractor used to get wrong silently', () => {
+  const S = [
+    { entity_id: 'sensor.phone_battery', state: '12', attributes: { device_class: 'battery', tags: ['a', 'b'] } },
+    { entity_id: 'sensor.remote_battery', state: '95', attributes: { device_class: 'battery' } },
+    { entity_id: 'sensor.loft_temperature', state: '5', attributes: { device_class: 'temperature' } },
+    { entity_id: 'light.desk', state: 'on', attributes: {} },
+  ];
+  const go = (filter, opts = {}) => extractEntities(
+    { views: [{ cards: [{ type: 'custom:auto-entities', filter }] }] }, S, { overInclude: true, ...opts });
+
+  test('an empty list item does not throw and does not cost the rest of the dashboard', () => {
+    // The YAML editor leaves `- ` behind as null. It used to throw out of extractEntities, and
+    // the caller then marked the WHOLE dashboard failed.
+    const got = go({ include: [null, { domain: 'light' }], exclude: [null] });
+    assert.deepEqual(got.entities, ['light.desk']);
+    assert.ok(got.unsupported.some((u) => u.includes('not a filter')), got.unsupported);
+  });
+
+  test('numeric comparisons are understood, in upstream\'s spellings', () => {
+    const live = (state) => go({ include: [{ state }] }, { overInclude: false }).entities;
+    assert.deepEqual(live('< 20'), ['sensor.loft_temperature', 'sensor.phone_battery']);
+    assert.deepEqual(live('<= 5'), ['sensor.loft_temperature']);
+    assert.deepEqual(live('>= 95'), ['sensor.remote_battery']);
+    assert.deepEqual(live('== 12'), ['sensor.phone_battery']);
+    assert.deepEqual(live('=12'), ['sensor.phone_battery']);
+  });
+
+  test('$$ matches against the JSON of a structured attribute', () => {
+    assert.deepEqual(go({ include: [{ attributes: { tags: '$$*"b"*' } }] }).entities, ['sensor.phone_battery']);
+  });
+
+  // The low-battery card. Evaluated against current state, a battery that drops below 20
+  // TOMORROW is never forwarded — no state change rebuilds an allowlist.
+  test('a descriptive attribute wins over a live comparison when building an allowlist', () => {
+    const filter = { include: [{ attributes: { device_class: 'battery' }, state: '< 20' }] };
+    assert.deepEqual(go(filter).entities, ['sensor.phone_battery', 'sensor.remote_battery'],
+      'every battery is forwarded; the card does the comparing');
+    assert.deepEqual(go(filter, { overInclude: false }).entities, ['sensor.phone_battery'],
+      'exact mode still means exactly what the card would show now');
+  });
+
+  test('a condition that is ONLY live is still resolved now, not widened to the instance', () => {
+    assert.deepEqual(go({ include: [{ state: 'on' }] }).entities, ['light.desk']);
+  });
+});
+
+describe('a regex cannot stall the event loop', () => {
+  test('flags nested quantifiers and nothing ordinary', () => {
+    for (const bad of ['^(a+)+$', '^(\\w+\\s?)+$', '(x{2,})+']) assert.ok(looksCatastrophic(bad), bad);
+    for (const ok of ['^sensor\\.pv_.*_power$', '(ab|cd)+', '^[+*]+$', 'battery$']) assert.ok(!looksCatastrophic(ok), ok);
+  });
+
+  test('a catastrophic pattern is cut off, switched off, and reported — once', () => {
+    const notes = [];
+    const m = toMatcher('/^(b+)+$/', (n) => notes.push(n));
+    let t = Date.now();
+    assert.equal(m(`${'b'.repeat(40)}!`), false);
+    assert.ok(Date.now() - t < 1000, 'bounded by the deadline, not by the backtracking (was 12s)');
+    t = Date.now();
+    assert.equal(m(`${'b'.repeat(41)}!`), false);
+    assert.ok(Date.now() - t < 20, 'a disabled pattern costs nothing afterwards');
+    assert.ok(notes.some((n) => /disabled/.test(n)), notes);
+  });
+
+  test('a nested quantifier that behaves is still honoured', () => {
+    const m = toMatcher('/^(ab+)+$/');
+    assert.equal(m('abbabb'), true);
+    assert.equal(m('xyz'), false);
   });
 });

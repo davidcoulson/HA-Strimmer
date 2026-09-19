@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Generate the add-on's icon and the README banner.
+"""Generate the app's icon and the README banner.
 
 Run from the repo root:  python3 tools/make_icon.py
 
 Produces:
-  websocket-stripper/icon.png   128x128, dark, shown in the Apps list
+  websocket-stripper/icon.png   128x128, shown in the Apps list
   assets/banner.png             1200x320, white, shown at the top of the README
 
-The mark is a funnel: five entities go in, one comes out — the whole add-on in one shape. It
-deliberately echoes `mdi:filter-variant`, the panel_icon on the Ingress sidebar entry, so the
-sidebar, the stats panel and the Apps list all read as the same thing.
+The mark is a blade of grass being cut: one tall blade sliced by a strimmer line, its tip falling
+away, with two shorter blades beside it that sit BELOW the line and are left alone. That is the
+app in one picture — only what stands above the line gets trimmed — and it matches `mdi:grass`,
+the panel_icon on the Ingress sidebar entry. (MDI has no strimmer or hedge-trimmer glyph; all
+7,447 were checked.) It replaced a funnel drawn to echo `mdi:filter-variant`.
 
-There is deliberately **no logo.png**. Home Assistant renders that small enough on the add-on
-page that a wordmark and tagline are illegible, so the add-on ships the mark alone and the
+Chosen 2026-09-19 from ten candidates and two rounds of refinement. `assets/icon.svg` is the
+same drawing as a vector, and the geometry below is copied from it on its 128-unit grid — change
+both together.
+
+There is deliberately **no logo.png**. Home Assistant renders that small enough on the app
+page that a wordmark and tagline are illegible, so the app ships the mark alone and the
 wordmark lives on the README, where there is room for it.
 
 The banner is on a solid white ground rather than transparent: GitHub renders READMEs on both
@@ -20,23 +26,27 @@ light and dark, and a transparent PNG would need text that works on both, which 
 colour does. White is legible either way.
 
 Everything is drawn at 4x and downsampled — PIL has no antialiased polygon fill, and the
-funnel is all diagonals.
+blades are all curves.
 """
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 SS = 4  # supersample factor
 
-# Dark palette (icon) — the stats panel's own dark ground and accent.
-NAVY = (18, 38, 58)
-BLUE = (79, 195, 247)
+# The tile: a clear sky, lighter toward the ground.
+SKY_TOP = (142, 197, 234)      # #8ec5ea
+SKY_BOTTOM = (216, 238, 250)   # #d8eefa
+BLADE_DARK = (27, 94, 32)      # #1b5e20
+BLADE_LIGHT = (46, 125, 50)    # #2e7d32
+SHORT_LEFT = (67, 160, 71)     # #43a047
+SHORT_RIGHT = (56, 142, 60)    # #388e3c
 WHITE = (255, 255, 255)
 
-# Light palette (banner) — same hue family, darkened so it holds against white.
+# Banner text — dark ink, with the second word in the blade's green.
 INK = (15, 23, 42)
-SKY = (14, 165, 233)
+GREEN = (46, 125, 50)
 SLATE = (100, 116, 139)
 
 TAGLINE = "not the whole house"
@@ -48,13 +58,90 @@ FONTS = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 )
 
-# The mark in design units on a 1024 grid, so both renderers share one geometry.
-DOTS_IN = (250, 381, 512, 643, 774)
-DOT_Y, DOT_R = 215, 34
-MOUTH_Y, MOUTH_HALF = 345, 322
-NECK_Y, NECK_HALF = 585, 46
-STEM_Y = 725
-OUT_Y = 815
+# ---- the mark, in the SVG's own 128-unit coordinates ----
+# Each blade is two cubic Béziers sharing a tip: up one side, down the other.
+TALL_FULL = ((38, 128), (40, 86), (54, 42), (92, 10), (82, 50), (80, 88), (82, 128))
+TALL_LIT = ((38, 128), (40, 86), (54, 42), (92, 10), (72, 46), (62, 88), (60, 128))
+SHORT_L = ((36, 128), (34, 112), (27, 100), (13, 91), (17, 104), (17, 116), (16, 128))
+SHORT_R = ((88, 128), (89, 108), (96, 91), (111, 77), (105, 95), (105, 112), (107, 128))
+# The cut runs between these two half-planes; the gap between them is where the line sits.
+BELOW_CUT = ((0, 128), (128, 128), (128, 50), (0, 82))
+ABOVE_CUT = ((0, 0), (128, 0), (128, 42), (0, 74))
+LINE = ((22, 80), (112, 57.5))
+LINE_WIDTH = 5
+# The severed tip: rotated 16 degrees clockwise about (78, 50), then nudged right and up.
+TIP_ROTATE, TIP_PIVOT, TIP_SHIFT = 16, (78, 50), (14, -2)
+CORNER = 24
+
+
+def _cubic(p0, p1, p2, p3, n=48):
+    for i in range(n + 1):
+        t = i / n
+        a, b, c, e = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t * t, t ** 3
+        yield (a * p0[0] + b * p1[0] + c * p2[0] + e * p3[0],
+               a * p0[1] + b * p1[1] + c * p2[1] + e * p3[1])
+
+
+def _blade(pts, k):
+    """A blade's outline as a polygon, scaled by k."""
+    outline = list(_cubic(*pts[0:4])) + list(_cubic(*pts[3:7]))
+    return [(x * k, y * k) for x, y in outline]
+
+
+def _mask(size, polygon):
+    m = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(m).polygon(polygon, fill=255)
+    return m
+
+
+def draw_tile(px):
+    """The whole mark on its rounded sky tile, px square, antialiased."""
+    S = px * SS
+    k = S / 128
+    sc = lambda pts: [(x * k, y * k) for x, y in pts]
+
+    # Sky: a vertical gradient, built one pixel wide and stretched.
+    col = Image.new("RGB", (1, S))
+    for y in range(S):
+        t = y / (S - 1)
+        col.putpixel((0, y), tuple(round(a + (b - a) * t) for a, b in zip(SKY_TOP, SKY_BOTTOM)))
+    tile = col.resize((S, S)).convert("RGBA")
+
+    def paint(colour, mask):
+        tile.paste(Image.new("RGBA", (S, S), colour + (255,)), (0, 0), mask)
+
+    # Short blades first, so the tall one overlaps them as it does in the SVG.
+    paint(SHORT_LEFT, _mask(S, _blade(SHORT_L, k)))
+    paint(SHORT_RIGHT, _mask(S, _blade(SHORT_R, k)))
+
+    full, lit = _mask(S, _blade(TALL_FULL, k)), _mask(S, _blade(TALL_LIT, k))
+    below, above = _mask(S, sc(BELOW_CUT)), _mask(S, sc(ABOVE_CUT))
+    paint(BLADE_DARK, ImageChops.multiply(full, below))
+    paint(BLADE_LIGHT, ImageChops.multiply(lit, below))
+
+    # The tip is cut out where it grew, THEN moved — the same order the SVG applies its clip
+    # and its transform in. PIL rotates counter-clockwise and y points down, hence the sign.
+    def moved(mask):
+        return mask.rotate(-TIP_ROTATE, resample=Image.BICUBIC,
+                           center=(TIP_PIVOT[0] * k, TIP_PIVOT[1] * k),
+                           translate=(TIP_SHIFT[0] * k, TIP_SHIFT[1] * k))
+    paint(BLADE_DARK, moved(ImageChops.multiply(full, above)))
+    paint(BLADE_LIGHT, moved(ImageChops.multiply(lit, above)))
+
+    # The strimmer line, with round caps (PIL's line has none).
+    d = ImageDraw.Draw(tile)
+    (x1, y1), (x2, y2) = sc(LINE)
+    w = LINE_WIDTH * k
+    d.line([(x1, y1), (x2, y2)], fill=WHITE, width=round(w))
+    for x, y in ((x1, y1), (x2, y2)):
+        d.ellipse([x - w / 2, y - w / 2, x + w / 2, y + w / 2], fill=WHITE)
+
+    # Rounded corners last, so everything above is clipped to the tile.
+    corners = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(corners).rounded_rectangle([0, 0, S - 1, S - 1], radius=CORNER * k, fill=255)
+    out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    out.paste(tile, (0, 0), corners)
+    return out.resize((px, px), Image.LANCZOS)
 
 
 def _face(size):
@@ -66,31 +153,8 @@ def _face(size):
     return None
 
 
-def draw_mark(d, cx, u, oy, funnel_colour, dot_colour):
-    """Draw the funnel centred on cx, scaled by u, offset vertically by oy."""
-    y = lambda v: int(v * u + oy)
-    r = int(DOT_R * u)
-    for x in DOTS_IN:
-        px = cx + int((x - 512) * u)
-        d.ellipse([px - r, y(DOT_Y) - r, px + r, y(DOT_Y) + r], fill=dot_colour)
-    d.polygon(
-        [
-            (cx - int(MOUTH_HALF * u), y(MOUTH_Y)), (cx + int(MOUTH_HALF * u), y(MOUTH_Y)),
-            (cx + int(NECK_HALF * u), y(NECK_Y)), (cx + int(NECK_HALF * u), y(STEM_Y)),
-            (cx - int(NECK_HALF * u), y(STEM_Y)), (cx - int(NECK_HALF * u), y(NECK_Y)),
-        ],
-        fill=funnel_colour,
-    )
-    d.ellipse([cx - r, y(OUT_Y) - r, cx + r, y(OUT_Y) + r], fill=dot_colour)
-
-
 def make_icon(px=128):
-    S = px * SS
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.18), fill=NAVY)
-    draw_mark(d, S // 2, S / 1024, 0, BLUE, WHITE)
-    return img.resize((px, px), Image.LANCZOS)
+    return draw_tile(px)
 
 
 def make_banner(w=1200, h=320):
@@ -99,12 +163,12 @@ def make_banner(w=1200, h=320):
     d = ImageDraw.Draw(img)
 
     margin = int(W * 0.045)
-    u = (H * 0.62) / (OUT_Y + DOT_R - (DOT_Y - DOT_R))   # mark height as a share of the banner
-    cx = margin + int(MOUTH_HALF * u)
-    oy = (H - (OUT_Y + DOT_R - (DOT_Y - DOT_R)) * u) / 2 - (DOT_Y - DOT_R) * u
-    draw_mark(d, cx, u, oy, SKY, INK)
+    side = int(H * 0.70)                                  # the tile, as a share of the banner
+    tile = draw_tile(side // SS * SS)
+    side = tile.width
+    img.paste(tile, (margin, (H - side) // 2), tile)
 
-    tx = cx + int(MOUTH_HALF * u) + int(W * 0.05)
+    tx = margin + side + int(W * 0.04)
     f_big = _face(int(H * 0.26))
     if not f_big:
         return img.resize((w, h), Image.LANCZOS)
@@ -112,7 +176,7 @@ def make_banner(w=1200, h=320):
     # Wordmark on one line, so the banner reads as a title rather than a stack.
     name_a, name_b = "WebSocket ", "Stripper"
     d.text((tx, int(H * 0.28)), name_a, font=f_big, fill=INK)
-    d.text((tx + f_big.getlength(name_a), int(H * 0.28)), name_b, font=f_big, fill=SKY)
+    d.text((tx + f_big.getlength(name_a), int(H * 0.28)), name_b, font=f_big, fill=GREEN)
 
     # Fit the tagline to what is left, so editing TAGLINE can never push it off the canvas.
     avail = W - tx - margin

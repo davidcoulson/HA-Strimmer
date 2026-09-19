@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, STORE_VERSION,
+  isKnownOption,
 } from '../config_store.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cfgstore-'));
@@ -93,5 +94,34 @@ describe('config store', () => {
     assert.deepEqual(o.managed, ['trim_themes']);
     assert.ok(o.fromYaml.includes('dashboards') && o.fromYaml.includes('port'));
     assert.ok(!o.fromYaml.includes('trim_themes'), 'a key cannot be claimed by both');
+  });
+});
+
+// From the 2026-09-19 review. Reachable only through Ingress, so an admin would have to do it to
+// themselves — but a store that lies about what it manages is the failure this file exists to stop.
+describe('the store does not trust key names or shapes', () => {
+  it('knows an option by OWN property, not by whatever Object.prototype carries', () => {
+    for (const k of ['constructor', 'toString', '__proto__', 'hasOwnProperty', '', null, 5]) {
+      assert.equal(isKnownOption(k), false, `${String(k)} is not an option`);
+    }
+    assert.equal(isKnownOption('trim_entities'), true);
+  });
+
+  it('a persisted "__proto__" key cannot make the store claim options it does not manage', () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'config.json'),
+      '{"version":1,"managed":{"__proto__":{"trim_entities":false}},"history":[]}');
+    const warnings = [];
+    const back = readStore(dir, (m) => warnings.push(m));
+    assert.equal('trim_entities' in back.managed, false);
+    assert.ok(warnings.some((w) => w.includes('__proto__')), warnings);
+  });
+
+  it('a history that is not a list does not break every later save', () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'config.json'), '{"version":1,"managed":{},"history":{}}');
+    const back = readStore(dir);
+    assert.deepEqual(back.history, []);
+    assert.doesNotThrow(() => adopt(back, 'trim_themes', true, {}));
   });
 });

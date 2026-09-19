@@ -156,6 +156,11 @@ export const EDITABLE_KEYS = Object.fromEntries(
   Object.entries(OPTIONS).map(([k, o]) => [k, o.type]),
 );
 
+// Is `key` an option this build declares? An OWN-property test, deliberately: EDITABLE_KEYS is a
+// plain object, so `EDITABLE_KEYS['constructor']` and `['toString']` are truthy, and the console's
+// "is this a known option" guard waved them through.
+export const isKnownOption = (key) => typeof key === 'string' && Object.hasOwn(EDITABLE_KEYS, key);
+
 const emptyStore = () => ({ version: STORE_VERSION, managed: {}, history: [] });
 
 export function storePath(dataDir) {
@@ -188,9 +193,20 @@ export function readStore(dataDir, onWarn = () => {}) {
         onWarn(`ignoring managed "${k}": setup options are always read from add-on options`);
         continue;
       }
+      // `managed[k] = v` with k === "__proto__" does not add a key, it REPLACES THE PROTOTYPE —
+      // after which `'trim_entities' in managed` is true for a store that manages nothing. Only
+      // that one name is refused: an option this build does not recognise is deliberately kept,
+      // so a downgrade shows it in the console rather than silently dropping it.
+      if (k === '__proto__') {
+        onWarn('ignoring managed "__proto__": not an option');
+        continue;
+      }
       managed[k] = v;
     }
-    return { version: Number(raw.version) || STORE_VERSION, managed, history: raw.history || [] };
+    // An array or nothing. `raw.history || []` accepted `{}`, and adopt() spreads it — so one odd
+    // file made every later save from the console fail with "not iterable".
+    return { version: Number(raw.version) || STORE_VERSION, managed,
+      history: Array.isArray(raw.history) ? raw.history : [] };
   } catch (e) {
     onWarn(`could not read ${p} (${e.message}) — using add-on options`);
     return emptyStore();

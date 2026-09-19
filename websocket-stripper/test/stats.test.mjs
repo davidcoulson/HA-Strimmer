@@ -1066,3 +1066,64 @@ describe('pins are written to the source that owns the option', () => {
     } finally { proxy.kill(); await mock.close(); }
   });
 });
+
+// From the 2026-09-19 review: bounded maps that went quiet instead of saying "other".
+describe('category caps fold into (other) instead of dropping', () => {
+  it('flows still sum to the connection total once the cap is passed', () => {
+    stats.reset();
+    // The host is a request header, counted before anyone has authenticated.
+    for (let i = 0; i < 100; i++) stats.connOpen({ ip: '10.0.0.1', origin: 'lan', route: 'direct', host: `junk-${i}.example` });
+    stats.connOpen({ ip: '10.0.0.2', origin: 'internet', route: 'cloudflare', host: 'real.example' });
+    const p = stats.pathsSnapshot();
+    const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+    assert.equal(sum(p.byHost), 101, 'every connection is in a host bucket');
+    assert.equal(sum(p.byRoute), 101);
+    assert.equal(p.byRoute.cloudflare, 1, 'the route of an overflowed flow is still its own');
+    assert.ok(p.byHost['(other)'] > 0);
+    stats.reset();
+  });
+
+  it('a new message kind past the cap is visible as (other), with its bytes', () => {
+    stats.reset();
+    for (let i = 0; i < 80; i++) stats.recordTraffic(`result:kind_${i}`, 10);
+    stats.recordTraffic('result:the_big_one', 5000000);
+    const rows = stats.snapshot().traffic ?? stats.snapshot().byMessage;
+    const other = (Array.isArray(rows) ? rows : Object.entries(rows).map(([kind, v]) => ({ kind, ...v })))
+      .find((r) => (r.kind ?? r.type ?? r.name) === '(other)');
+    assert.ok(other, 'there must be an (other) row');
+    assert.ok(other.bytes >= 5000000, 'and the large stream must be in it, not dropped');
+    stats.reset();
+  });
+
+  it('a client-chosen message type cannot become an unbounded key', () => {
+    stats.reset();
+    stats.recordTraffic(`result:${'x'.repeat(5000)}`, 1);
+    assert.ok(JSON.stringify(stats.snapshot()).length < 20000);
+    stats.reset();
+  });
+});
+
+describe('recently-closed sessions', () => {
+  it('one panel is one row whether or not mDNS had answered when it connected', () => {
+    stats.reset();
+    stats.connClose(stats.connOpen({ ip: '10.2.4.109', dash: 'stairs', device: null }));
+    stats.connClose(stats.connOpen({ ip: '10.2.4.109', dash: 'stairs', device: { kind: 'Kiosk Satellite', name: 'Stairs' } }));
+    stats.connClose(stats.connOpen({ ip: '10.2.4.109', dash: 'stairs', device: { kind: 'ESPHome', name: 'ks-stairs' } }));
+    const recent = stats.snapshot().clients.recent;
+    assert.equal(recent.length, 1);
+    assert.equal(recent[0].sessions, 3);
+    stats.reset();
+  });
+
+  it('at the cap it forgets the least recently SEEN client, not the first ever seen', () => {
+    stats.reset();
+    const visit = (ip) => stats.connClose(stats.connOpen({ ip, dash: 'd' }));
+    visit('10.0.0.1');                                  // the wall panel, there since boot…
+    for (let i = 2; i <= 500; i++) visit(`10.0.${Math.floor(i / 250)}.${i % 250 + 2}`);
+    visit('10.0.0.1');                                  // …and still reconnecting
+    visit('10.9.9.9');                                  // one more than the cap
+    const ips = stats.snapshot().clients.recent.map((r) => r.ip);
+    assert.ok(ips.includes('10.0.0.1'), 'the panel that was just seen must survive');
+    stats.reset();
+  });
+});

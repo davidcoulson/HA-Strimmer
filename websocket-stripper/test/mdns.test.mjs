@@ -6,7 +6,7 @@
 // address -> device view the rest of the add-on asks for.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ingest, index, parseTxt, labelFor, DEFAULT_SERVICES, preferredRow, KIND_PRIORITY } from '../mdns.mjs';
+import { ingest, index, expire, parseTxt, labelFor, DEFAULT_SERVICES, preferredRow, KIND_PRIORITY, HOSTS_MAX } from '../mdns.mjs';
 
 const SERVICES = DEFAULT_SERVICES;
 const fresh = () => ({ instances: new Map(), hosts: new Map() });
@@ -149,4 +149,58 @@ test('mDNS priority: answers nothing for nothing', () => {
 
 test('mDNS priority: orders ha-paneld, Kiosk Satellite, ESPHome', () => {
   assert.deepEqual(KIND_PRIORITY.slice(0, 3), ['ha-paneld', 'Kiosk Satellite', 'ESPHome']);
+});
+
+// ---- the tables are bounded, and they forget ----
+//
+// They used to keep every A record on the segment for the life of the process. The cost that
+// mattered was not memory: a panel that left kept its name pointing at its old address, and when
+// DHCP reissued that address a `client` rule naming the panel widened a stranger.
+
+test('a goodbye (TTL 0) removes the host instead of recording it as seen', () => {
+  const s = fresh();
+  ingest(ksPacket('aaa', 'Panel', '10.2.4.77', 'panel'), SERVICES, s);
+  assert.equal(index(s).byHost.get('panel.local'), '10.2.4.77');
+  assert.equal(ingest({ answers: [{ name: 'panel.local', type: 'A', data: '10.2.4.77', ttl: 0 }] }, SERVICES, s), true);
+  assert.equal(index(s).byHost.get('panel.local'), undefined);
+  assert.equal(index(s).byIp.size, 0, 'and the device row goes with its address');
+});
+
+test('whatever stops answering is forgotten', () => {
+  const s = fresh();
+  ingest(ksPacket('aaa', 'Old', '10.2.4.77', 'old'), SERVICES, s, 1000);
+  ingest(ksPacket('bbb', 'Live', '10.2.4.78', 'live'), SERVICES, s, 1000);
+  ingest(ksPacket('bbb', 'Live', '10.2.4.78', 'live'), SERVICES, s, 900000);   // re-heard
+  assert.equal(expire(s, 600000, 1000000), true);
+  const { byIp } = index(s);
+  assert.deepEqual([...byIp.keys()], ['10.2.4.78']);
+});
+
+test('an SRV target and its A record join regardless of case or a trailing dot', () => {
+  const s = fresh();
+  ingest({ answers: [
+    { name: '_esphomelib._tcp.local', type: 'PTR', data: 'node._esphomelib._tcp.local' },
+    { name: 'node._esphomelib._tcp.local', type: 'SRV', data: { target: 'Node.local.', port: 6053 } },
+    { name: 'node.local', type: 'A', data: '10.2.4.50' },
+  ] }, SERVICES, s);
+  assert.equal(index(s).byIp.get('10.2.4.50')?.[0]?.kind, 'ESPHome');
+});
+
+test('a packet that only confirms what is known does not ask for a reindex', () => {
+  const s = fresh();
+  const p = ksPacket('aaa', 'Panel', '10.2.4.77', 'panel');
+  assert.equal(ingest(p, SERVICES, s), true);
+  assert.equal(ingest(p, SERVICES, s), false, 'identical records must not rebuild the index');
+  p.answers[3].data = '10.2.4.99';
+  assert.equal(ingest(p, SERVICES, s), true, 'a moved address must');
+});
+
+test('the host table is capped, and only takes .local names', () => {
+  const s = fresh();
+  const answers = [];
+  for (let i = 0; i < HOSTS_MAX + 500; i++) answers.push({ name: `h${i}.local`, type: 'A', data: '10.0.0.1' });
+  answers.push({ name: 'example.com', type: 'A', data: '93.184.216.34' });
+  ingest({ answers }, SERVICES, s);
+  assert.equal(s.hosts.size, HOSTS_MAX);
+  assert.equal(s.hosts.has('example.com'), false);
 });
