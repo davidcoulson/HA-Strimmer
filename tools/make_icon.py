@@ -4,7 +4,7 @@
 Run from the repo root:  python3 tools/make_icon.py
 
 Produces:
-  websocket-stripper/icon.png   128x128, shown in the Apps list
+  strimmer/icon.png             128x128, shown in the Apps list
   assets/banner.png             1200x320, white, shown at the top of the README
 
 The mark is a blade of grass being cut: one tall blade sliced by a strimmer line, its tip falling
@@ -44,14 +44,15 @@ SHORT_LEFT = (67, 160, 71)     # #43a047
 SHORT_RIGHT = (56, 142, 60)    # #388e3c
 WHITE = (255, 255, 255)
 
-# Banner text — dark ink, with the second word in the blade's green.
+# Banner text. Dark ink for the name, grey for the tagline; the tile beside them is the colour.
 INK = (15, 23, 42)
-GREEN = (46, 125, 50)
 SLATE = (100, 116, 139)
 
-TAGLINE = "not the whole house"
+NAME = "Strimmer"
+TAGLINE = "cuts what your panel never shows"
 
 ROOT = Path(__file__).resolve().parent.parent
+APP_DIR = "strimmer"                 # the add-on folder, renamed from websocket-stripper
 FONTS = (
     "/System/Library/Fonts/HelveticaNeue.ttc",
     "/System/Library/Fonts/Helvetica.ttc",
@@ -173,10 +174,11 @@ def make_banner(w=1200, h=320):
     if not f_big:
         return img.resize((w, h), Image.LANCZOS)
 
-    # Wordmark on one line, so the banner reads as a title rather than a stack.
-    name_a, name_b = "WebSocket ", "Stripper"
-    d.text((tx, int(H * 0.28)), name_a, font=f_big, fill=INK)
-    d.text((tx + f_big.getlength(name_a), int(H * 0.28)), name_b, font=f_big, fill=GREEN)
+    # One word, one colour. It used to be two — "WebSocket" in ink and "Stripper" in the accent —
+    # which is a device for a two-part name and has nothing to colour in a one-word one. The tile
+    # beside it carries the colour; a single dark wordmark next to it reads as a title rather than
+    # competing with it.
+    d.text((tx, int(H * 0.28)), NAME, font=f_big, fill=INK)
 
     # Fit the tagline to what is left, so editing TAGLINE can never push it off the canvas.
     avail = W - tx - margin
@@ -188,8 +190,8 @@ def make_banner(w=1200, h=320):
 
 
 if __name__ == "__main__":
-    (ROOT / "websocket-stripper").mkdir(exist_ok=True)
+    (ROOT / APP_DIR).mkdir(exist_ok=True)
     (ROOT / "assets").mkdir(exist_ok=True)
-    make_icon().save(ROOT / "websocket-stripper" / "icon.png")
+    make_icon().save(ROOT / APP_DIR / "icon.png")
     make_banner().save(ROOT / "assets" / "banner.png")
-    print("wrote websocket-stripper/icon.png and assets/banner.png")
+    print(f"wrote {APP_DIR}/icon.png and assets/banner.png")

@@ -1,4 +1,4 @@
-# WebSocket Stripper — standalone (Home Assistant Container / Core).
+# Strimmer — standalone (Home Assistant Container / Core).
 #
 # You do not need this file if you run Home Assistant OS or Supervised: install it as an
 # add-on instead and configure it in the UI. This is for installs that have no Supervisor and
@@ -14,9 +14,9 @@
 # replace it, and nothing about your HA install changes.
 
 services:
-  websocket-stripper:
-    image: ghcr.io/davidcoulson/ha-websocket-stripper:latest
-    container_name: websocket-stripper
+  strimmer:
+    image: ghcr.io/davidcoulson/strimmer:latest
+    container_name: strimmer
     restart: unless-stopped
 
     ports:
@@ -26,7 +26,7 @@ services:
     volumes:
       # Keeps the 24h statistics history across restarts. Without it the add-on still works
       # and still samples — the window just starts empty on every restart.
-      - stripper-data:/data
+      - strimmer-data:/data
 
     environment:
       # ---- required ----
@@ -65,4 +65,4 @@ services:
       # UA_DASHBOARDS: '[{"match":"io.robbie.HomeAssistant","dashboard":"lovelace"}]'
 
 volumes:
-  stripper-data:
+  strimmer-data:

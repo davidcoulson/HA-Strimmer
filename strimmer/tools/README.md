@@ -22,7 +22,7 @@ says so:
 So this measures from outside, in a real browser, where "the dashboard is up" is an observable
 event: the first `<ha-card>` to exist anywhere in the page's shadow DOM.
 
-**The A/B needs no configuration change.** Point it at the stripper's port for the trimmed run
+**The A/B needs no configuration change.** Point it at Strimmer's port for the trimmed run
 and at Home Assistant's own port for the untrimmed one. Same dashboard, same browser, same
 throttle, same machine — only the path differs. That is deliberate: toggling `strip_entities`
 off on a live instance degrades every panel in the house while the benchmark runs.
@@ -48,7 +48,7 @@ reported distinctly from a slow render so the two are never confused.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `HA_TOKEN` | *(required)* | Long-lived access token |
-| `HA_HOST` | `127.0.0.1` | Host running both the stripper and HA |
+| `HA_HOST` | `127.0.0.1` | Host running both Strimmer and HA |
 | `DASH` | `dashboard-test` | Dashboard `url_path` to load |
 | `RUNS` | `3` | Runs per profile per side; the **median** is reported |
 | `PROFILES` | `4G,weak cell,no limit` | Which throttle profiles to run |

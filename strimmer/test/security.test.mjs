@@ -160,7 +160,7 @@ describe('the client status endpoint', () => {
   after(async () => { proxy?.kill(); await mock?.close(); });
 
   it('refuses a request with no token', async () => {
-    const res = await req(port, '/stripper/client.json');
+    const res = await req(port, '/strimmer/client.json');
     assert.equal(res.status, 401);
     assert.match(res.headers['www-authenticate'] || '', /Bearer/);
     // It must not leak the answer in the refusal.
@@ -168,23 +168,23 @@ describe('the client status endpoint', () => {
   });
 
   it('refuses a token Home Assistant does not accept', async () => {
-    const res = await req(port, '/stripper/client.json', { headers: { authorization: 'Bearer invalid-token' } });
+    const res = await req(port, '/strimmer/client.json', { headers: { authorization: 'Bearer invalid-token' } });
     assert.equal(res.status, 401);
     assert.ok(!/trimming/.test(res.body));
   });
 
   it('answers a caller holding a valid token', async () => {
-    const res = await req(port, '/stripper/client.json', { headers: { authorization: 'Bearer david-token' } });
+    const res = await req(port, '/strimmer/client.json', { headers: { authorization: 'Bearer david-token' } });
     assert.equal(res.status, 200, `expected an answer, got ${res.status}: ${res.body}`);
     const d = JSON.parse(res.body);
-    assert.equal(d.stripper.running, true);
+    assert.equal(d.strimmer.running, true);
     assert.equal(typeof d.trimming.entities, 'boolean');
   });
 
   // An Authorization header makes this a non-simple cross-origin request, so a panel admin page
   // on its own origin preflights and never sends the real request if nobody answers.
   it('answers the CORS preflight the Authorization header forces', async () => {
-    const res = await req(port, '/stripper/client.json', { method: 'OPTIONS' });
+    const res = await req(port, '/strimmer/client.json', { method: 'OPTIONS' });
     assert.equal(res.status, 204);
     assert.match(res.headers['access-control-allow-headers'] || '', /authorization/i,
       'without this a browser will not send the token at all');
@@ -229,7 +229,7 @@ describe('the panel status API access list', () => {
     try {
       // cf-ray is stamped by Cloudflare's edge and a client cannot remove it, which is what makes
       // this the trustworthy half of the check.
-      const res = await req(t.port, '/stripper/client.json', {
+      const res = await req(t.port, '/strimmer/client.json', {
         headers: { 'cf-ray': '8abc-DFW', authorization: 'Bearer david-token' },
       });
       assert.equal(res.status, 403, 'a Cloudflare request must be refused');
@@ -256,7 +256,7 @@ describe('the panel status API access list', () => {
     try {
       // The peer here is loopback, so this stands in for the forwarded case: a proxy that says
       // the original caller was public.
-      const res = await req(t.port, '/stripper/client.json', {
+      const res = await req(t.port, '/strimmer/client.json', {
         headers: { 'x-forwarded-for': '203.0.113.7', authorization: 'Bearer david-token' },
       });
       assert.equal(res.status, 403);
@@ -267,7 +267,7 @@ describe('the panel status API access list', () => {
   it('still answers a local caller with a token', async () => {
     const t = await spawnWith({});
     try {
-      const res = await req(t.port, '/stripper/client.json', {
+      const res = await req(t.port, '/strimmer/client.json', {
         headers: { authorization: 'Bearer david-token' },
       });
       assert.equal(res.status, 200, `a local panel must still work, got ${res.body}`);
@@ -277,7 +277,7 @@ describe('the panel status API access list', () => {
   it('honours an explicit allow entry over the heuristics', async () => {
     const t = await spawnWith({ CLIENT_API_ALLOW: '203.0.113.7' });
     try {
-      const res = await req(t.port, '/stripper/client.json', {
+      const res = await req(t.port, '/strimmer/client.json', {
         headers: { 'x-forwarded-for': '203.0.113.7', authorization: 'Bearer david-token' },
       });
       assert.equal(res.status, 200, 'an address someone listed on purpose is allowed');
@@ -287,7 +287,7 @@ describe('the panel status API access list', () => {
   it('can be switched off entirely, and then answers nobody', async () => {
     const t = await spawnWith({ CLIENT_API_ACCESS: 'off' });
     try {
-      const res = await req(t.port, '/stripper/client.json', {
+      const res = await req(t.port, '/strimmer/client.json', {
         headers: { authorization: 'Bearer david-token' },
       });
       assert.equal(res.status, 403);
@@ -299,12 +299,12 @@ describe('the panel status API access list', () => {
   it('can be opened up, leaving the token as the only check', async () => {
     const t = await spawnWith({ CLIENT_API_ACCESS: 'any' });
     try {
-      const open = await req(t.port, '/stripper/client.json', {
+      const open = await req(t.port, '/strimmer/client.json', {
         headers: { 'cf-ray': '8abc-DFW', authorization: 'Bearer david-token' },
       });
       assert.equal(open.status, 200, 'the network check is off');
       // But the token still is not.
-      const noToken = await req(t.port, '/stripper/client.json', { headers: { 'cf-ray': '8abc-DFW' } });
+      const noToken = await req(t.port, '/strimmer/client.json', { headers: { 'cf-ray': '8abc-DFW' } });
       assert.equal(noToken.status, 401, 'opening the network check must not open the endpoint');
     } finally { t.proxy.kill(); await t.mock.close(); }
   });

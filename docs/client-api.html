@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stripper Client Status API</title>
+<title>Strimmer Client Status API</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
   :root {
@@ -143,8 +143,8 @@
 
 <div class="wrap">
 
-  <h1>Stripper Client Status API</h1>
-  <p class="lede">How a panel asks the HA WebSocket Stripper what it is doing, and what that is
+  <h1>Strimmer Client Status API</h1>
+  <p class="lede">How a panel asks Strimmer what it is doing, and what that is
   worth on this connection.</p>
 
   <div class="meta">
@@ -154,18 +154,25 @@
     <span class="pill">additive schema</span>
   </div>
 
-  <p>The Stripper is a reverse proxy in front of Home Assistant that trims the entity websocket and
+  <p>Strimmer is a reverse proxy in front of Home Assistant that trims the entity websocket and
   several HTTP payloads down to what each dashboard actually uses. This endpoint exists so a panel
   can render an admin/diagnostics screen: <em>is the trimmer in front of me, what is it cutting,
   and what is it saving me.</em></p>
 
   <div class="endpoint">
     <span class="verb">GET</span>
-    <code class="url">http://&lt;your-ha-host&gt;:9123/stripper/client.json</code>
+    <code class="url">http://&lt;your-ha-host&gt;:9123/strimmer/client.json</code>
   </div>
-  <p style="color:var(--muted);font-size:15px;margin-top:8px">Port 9123 is the Stripper's default
+  <p style="color:var(--muted);font-size:15px;margin-top:8px">Port 9123 is Strimmer's default
   proxy port — the same host and port a panel already loads dashboards from. Use whatever base URL
   the panel is configured with; do not hardcode 9123.</p>
+
+  <div class="note">
+    <p><strong>The old path still answers.</strong> This endpoint was
+    <code>/stripper/client.json</code> before the project was renamed, and that path remains a
+    permanent alias — a panel written against it keeps working and gets the same reply. New clients
+    should use <code>/strimmer/client.json</code>.</p>
+  </div>
 
   <h2>Stability</h2>
 
@@ -177,7 +184,8 @@
     <li>The detection semantics below: <code>200</code>, <code>401</code>, <code>403</code>,
       <code>404</code>.</li>
     <li>Authentication by Home Assistant bearer token.</li>
-    <li>The path, <code>/stripper/client.json</code>.</li>
+    <li>The path, <code>/strimmer/client.json</code> — and <code>/stripper/client.json</code>, which
+      keeps answering permanently rather than being retired at some later version.</li>
   </ul>
 
   <h3>Will change, and your client must tolerate it</h3>
@@ -192,7 +200,8 @@
       transient refusal into a false "offline".</li>
   </ul>
 
-  <p><strong>Versioning.</strong> <code>stripper.version</code> is the add-on's own date-based
+  <p><strong>Versioning.</strong> <code>strimmer.version</code> (the payload key predates the
+  rename — see below) is the add-on's own date-based
   version (<code>2026.09.15.32</code>), which sorts lexically. There is no separate API version:
   the payload tells you which build answered, and that is the thing to log when something looks
   wrong.</p>
@@ -223,18 +232,18 @@
 
   <h2>Detection: reaching it is the proof</h2>
 
-  <p>A panel cannot tell from a dashboard page alone whether the Stripper served it or whether it
+  <p>A panel cannot tell from a dashboard page alone whether Strimmer served it or whether it
   is talking straight to Home Assistant. It does not need a header to find out.</p>
 
   <p>This path is served <strong>by the proxy itself and never forwarded</strong>. So:</p>
 
   <ul>
-    <li><span class="yes">200</span> — the Stripper is running <em>and is in the path</em> for this
+    <li><span class="yes">200</span> — Strimmer is running <em>and is in the path</em> for this
       panel. Both halves of the question, answered by arriving.</li>
-    <li><span class="no">401</span> — the Stripper <em>is</em> in the path, but your token is
+    <li><span class="no">401</span> — Strimmer <em>is</em> in the path, but your token is
       missing or Home Assistant did not accept it. Still a positive detection: "present, not
       authorised".</li>
-    <li><span class="no">403</span> — the Stripper <em>is</em> in the path, but it does not answer
+    <li><span class="no">403</span> — Strimmer <em>is</em> in the path, but it does not answer
       callers from where you are: the request came from the internet or through Cloudflare and the
       instance answers local callers only. The <code>error</code> field says which. Also a positive
       detection — say "this Home Assistant does not answer status requests from here", not
@@ -242,7 +251,7 @@
     <li><span class="no">404</span> — you are talking to Home Assistant directly. HA has no such
       route.</li>
     <li><strong>Connection error</strong> — neither is reachable; a network problem, not a
-      Stripper problem. Say so differently.</li>
+      Strimmer problem. Say so differently.</li>
   </ul>
 
   <div class="note">
@@ -280,6 +289,11 @@
   <p>A real reply, from a panel with two open connections:</p>
 
 <pre><code>{
+  "strimmer": {
+    "running": true,
+    "version": "2026.09.15.21",
+    "uptime_sec": 26
+  },
   "stripper": {
     "running": true,
     "version": "2026.09.15.21",
@@ -320,7 +334,11 @@
   }
 }</code></pre>
 
-  <h3>stripper</h3>
+  <h3>strimmer (and stripper)</h3>
+  <p>Two keys, one object, byte-identical. <code>strimmer</code> is the name to read;
+  <code>stripper</code> is what the key was called before the rename and is emitted beside it
+  permanently, because the stability commitment above rules out breaking a client that already
+  reads it. New code should use <code>strimmer</code>; nothing has to change to keep working.</p>
   <div class="scroll">
   <table>
     <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
@@ -329,7 +347,7 @@
         reply. Present so the payload reads correctly when cached or logged.</td></tr>
       <tr><td><code>version</code></td><td>string</td><td>Build in front of this panel, e.g.
         <code>2026.09.15.21</code>. Date-based, sorts lexically.</td></tr>
-      <tr><td><code>uptime_sec</code></td><td>int</td><td>Seconds since the Stripper started. A
+      <tr><td><code>uptime_sec</code></td><td>int</td><td>Seconds since Strimmer started. A
         small number here explains a panel that just reconnected.</td></tr>
     </tbody>
   </table>
@@ -343,7 +361,7 @@
     <thead><tr><th>Key</th><th>What it cuts</th></tr></thead>
     <tbody>
       <tr><td><code>entities</code></td><td>The entity websocket itself — the core feature. If this
-        is <code>false</code> the Stripper is a plain pass-through.</td></tr>
+        is <code>false</code> Strimmer is a plain pass-through.</td></tr>
       <tr><td><code>by_dashboard</code></td><td>Serves each connection only the dashboard it is
         viewing, rather than the union of every configured dashboard.</td></tr>
       <tr><td><code>registries</code></td><td>Entity, device and area registries.</td></tr>
@@ -367,7 +385,7 @@
   <table>
     <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
     <tbody>
-      <tr><td><code>ip</code></td><td>string</td><td>The address the Stripper sees you as. Useful
+      <tr><td><code>ip</code></td><td>string</td><td>The address Strimmer sees you as. Useful
         for diagnosing a panel behind an unexpected NAT or proxy hop.</td></tr>
       <tr><td><code>connections</code></td><td>int</td><td>Open websockets from this address.
         <code>0</code> is a real answer — see below. <code>2</code> briefly during a reload.</td></tr>
@@ -412,7 +430,7 @@
   </div>
 
   <div class="note">
-    <p><strong><code>not_sent</code> is not the same as the Stripper's headline “saved” figure.</strong>
+    <p><strong><code>not_sent</code> is not the same as Strimmer's headline “saved” figure.</strong>
     It is the difference between two measured totals on <em>your</em> connections. The panel's own
     savings statistic is computed differently, over trimmed request/response payloads where a real
     before-and-after exists. Do not present the two as the same number.</p>
@@ -426,7 +444,7 @@
   different address than it fetches from.</p>
 
   <p>In that state <code>dashboard</code>, <code>entities_served</code>, <code>traffic</code> and
-  <code>first_payload</code> are all <code>null</code>. <code>stripper</code> and
+  <code>first_payload</code> are all <code>null</code>. <code>strimmer</code> (with its <code>stripper</code> twin) and
   <code>trimming</code> are still fully populated.</p>
 
   <h2>What this endpoint will never tell you</h2>
@@ -458,9 +476,9 @@
   <p>Fetch on demand, when the admin screen opens. It is cheap but not free — it takes a stats
   snapshot per call.</p>
 
-<pre><code>async function stripperStatus(haBaseUrl, haAccessToken) {
+<pre><code>async function strimmerStatus(haBaseUrl, haAccessToken) {
   try {
-    const res = await fetch(new URL('/stripper/client.json', haBaseUrl), {
+    const res = await fetch(new URL('/strimmer/client.json', haBaseUrl), {
       cache: 'no-store',
       headers: { Authorization: `Bearer ${haAccessToken}` },
       signal: AbortSignal.timeout(2000),
@@ -493,7 +511,7 @@
 
   <h3>A reasonable admin panel</h3>
   <ul>
-    <li><strong>Status line.</strong> “Trimmed by WebSocket Stripper 2026.09.15.21” — or “Not
+    <li><strong>Status line.</strong> “Trimmed by Strimmer 2026.09.15.21” — or “Not
       behind the trimmer” on a 404. That one line is most of the value.</li>
     <li><strong>What it is cutting.</strong> The <code>trimming</code> booleans as chips. Showing
       only the <code>true</code> ones and a count of the rest keeps the row short.</li>
@@ -505,7 +523,7 @@
   </ul>
 
   <footer>
-    <p>HA WebSocket Stripper —
+    <p>Strimmer —
       <a href="https://github.com/davidcoulson/HA-Websocket-Stripper">davidcoulson/HA-Websocket-Stripper</a>.
       Endpoint added in 2026.09.15.21. Questions and schema additions welcome via an issue.</p>
   </footer>

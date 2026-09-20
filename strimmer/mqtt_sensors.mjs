@@ -25,7 +25,7 @@ import mqtt from 'mqtt';
 import tls from 'node:tls';
 
 const DISCOVERY_PREFIX = 'homeassistant';
-const NODE = 'websocket_stripper';
+const NODE = 'strimmer';
 
 // device_class + state_class are what make the recorder build long-term statistics. `measurement`
 // keeps min/max/mean per hour; `total_increasing` keeps a sum that survives counter resets.
@@ -166,8 +166,8 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000 } 
 
   const device = {
     identifiers: [NODE],
-    name: 'WebSocket Stripper',
-    manufacturer: 'HA WebSocket Stripper',
+    name: 'Strimmer',
+    manufacturer: 'Strimmer',
     model: 'Add-on',
     sw_version: version,
   };

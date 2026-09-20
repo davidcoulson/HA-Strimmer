@@ -1,4 +1,4 @@
-# HA WebSocket Stripper — project context
+# Strimmer — project context
 
 ## What this is / why it exists
 
@@ -62,7 +62,7 @@ Then `+ always_forward`, then `- never_forward` (never wins), then **group membe
 ### auto-entities filter resolution (`condTests` / `toMatcher`)
 
 `toMatcher()` is a deliberate port of **the auto-entities CARD's** `src/match.ts`
-(thomasloven/lovelace-auto-entities — nothing to do with the upstream *stripper* repo, so forking
+(thomasloven/lovelace-auto-entities — nothing to do with the upstream *proxy* repo, so forking
 away from that changes nothing here). The card in the panel's browser uses that matcher to decide
 what it shows, so what a pattern MEANS has to follow it, quirks included (`"! on"` parses NaN and
 matches everything). What is ours to decide is which tests an ALLOWLIST applies — see
@@ -83,12 +83,33 @@ Values may also arrive in HA's selector object form `{ custom: …, active_choic
 `result: null` then pushes events, so `renderTemplate()` takes the first event and
 unsubscribes. Don't route it through `rpc()`, which resolves on `result`.
 
+## The name
+
+Renamed from **WebSocket Stripper** to **Strimmer** on 2026-09-19 — a strimmer trims, and it reads
+as "stream trimmer". The fork had diverged far enough (183 commits ahead of
+GabrielGoldsteinAnidea/HA-Websocket-Stripper, which has none of the console, config store, MQTT,
+mDNS or resource-trimming code) that sharing a name misdescribed what is installed. Tagline: *cuts
+what your panel never shows*.
+
+Renamed with it: the add-on `slug` (`websocket_stripper` -> `strimmer`, so Supervisor treats it as
+a new install with an empty `/data`), the folder, the MQTT node id and every sensor's unique_id
+(long-term statistics start over — an accepted cost), the image name, and the panel.
+
+Deliberately NOT renamed, and each for a reason a rename would have cost something real:
+- `/stripper/client.json` still answers beside `/strimmer/client.json`, and the status reply
+  carries both a `strimmer` and a `stripper` key. ha-paneld and Kiosk Satellite were written
+  against the old ones and must not break on an update they did not make.
+- The panel's `localStorage` keys keep the `stripper-` prefix. They live in each viewer's browser;
+  renaming them silently resets everyone's remembered tab, theme and columns for nothing.
+- Old CHANGELOG entries keep the old name: they are a record of what it was called at the time.
+- The GitHub repo is still `HA-Websocket-Stripper`, so every URL in here is still correct.
+
 ## Files
 
-- `websocket-stripper/ha_ws_trim_proxy.mjs` — the proxy (HTTP passthrough + ws intercept + allowlist precompute).
-- `websocket-stripper/lovelace_extract.mjs` — the card-tree entity extractor.
-- `websocket-stripper/config.yaml` / `Dockerfile` / `package.json` — HA app packaging.
-- `websocket-stripper/DOCS.md` — app Documentation tab (option reference).
+- `strimmer/ha_ws_trim_proxy.mjs` — the proxy (HTTP passthrough + ws intercept + allowlist precompute).
+- `strimmer/lovelace_extract.mjs` — the card-tree entity extractor.
+- `strimmer/config.yaml` / `Dockerfile` / `package.json` — HA app packaging.
+- `strimmer/DOCS.md` — app Documentation tab (option reference).
 - `repository.yaml` — lets HA add this GitHub URL as an app repository.
 - `README.md` — install + dev-run.
 
@@ -102,7 +123,7 @@ unsubscribes. Don't route it through `rpc()`, which resolves on `result`.
 
 Dev run:
 ```bash
-cd websocket-stripper && npm ci     # `ci`, not `install` — the image builds from the lockfile
+cd strimmer && npm ci     # `ci`, not `install` — the image builds from the lockfile
 HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   DASH_PATHS="fridge-status,home-status,dashboard-deck" node ha_ws_trim_proxy.mjs
 # open http://localhost:9123/fridge-status
@@ -283,7 +304,7 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   proxying to an h2 upstream. More fundamentally: WS over HTTP/2 needs RFC 8441 Extended
   CONNECT, which `ws` does not support server-side and HA's aiohttp does not serve at all, so
   the HA leg is HTTP/1.1 by necessity. Browsers already get h2/h3 from **NPM and Cloudflare,
-  which sit in front** of this; the NPM→stripper hop is plain HTTP over the LAN, where
+  which sit in front** of this; the NPM→Strimmer hop is plain HTTP over the LAN, where
   multiplexing buys nothing. And NPM measured **3.6× faster** than hitting the proxy directly,
   which is what killed the direct-TLS proposal too. Let the edge own front-end transport.
 

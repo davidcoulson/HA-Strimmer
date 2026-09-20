@@ -1,4 +1,4 @@
-# WebSocket Stripper
+# Strimmer
 
 Serves your real Home Assistant dashboards but only forwards the entities each dashboard
 uses, so kiosk/wall-panel pages load fast on large instances — with no loss of fidelity
@@ -34,7 +34,7 @@ still read. See [docs/MIGRATING.md](../docs/MIGRATING.md) for what was renamed a
 | `resources_always_forward` | list | URL patterns (literal substring, or `/regex/`) always sent. Needed for plugins that patch the frontend instead of registering a card — they contain none of the dashboard's card names, so the content match cannot tell they're used. In practice: icon packs, and anything that restyles core cards. A module with its own top-level config block on the dashboard (`kiosk_mode:`, `swipe_nav:`) is detected from that block and does not need listing. |
 | `resources_never_forward` | list | URL patterns never sent to any dashboard. Wins over `resources_always_forward`. |
 | `overrides` | list | **One list for every override rule.** Each rule may match on a dashboard, a Home Assistant user, a role, how they signed in, the device kind announced over mDNS, the entry point they arrived through, a device address, and a client app — and the matchers you set must **all** hold. See *Override rules* below. The four older lists (`dashboard_overrides`, `user_overrides`, `client_overrides`, `user_agent_dashboards`) still work and are read into this same list at startup, so nothing needs changing. |
-| `client_api_access` | enum | `lan` (default) / `any` / `off`. Who may reach `/stripper/client.json`, the endpoint a wall panel uses to show whether this app is in front of it. `lan` refuses internet and Cloudflare requests **before** the token is checked. A Home Assistant token is required either way — this narrows who may try, it does not replace authentication. See [Client status API](../docs/CLIENT-API.md). |
+| `client_api_access` | enum | `lan` (default) / `any` / `off`. Who may reach `/strimmer/client.json` (and `/stripper/client.json`, the pre-rename path, which still answers), the endpoint a wall panel uses to show whether this app is in front of it. `lan` refuses internet and Cloudflare requests **before** the token is checked. A Home Assistant token is required either way — this narrows who may try, it does not replace authentication. See [Client status API](../docs/CLIENT-API.md). |
 | `client_api_allow` | list | Addresses or CIDRs allowed to reach that endpoint whatever `client_api_access` says — for a panel on a subnet this app does not consider local. |
 | `proxy_port` | int | Port browsers and wall panels connect to (default `9123`). The older name `port` is still accepted. Because it runs with `host_network: true`, this option is how you move it off `9123` — the **Network** tab can't remap a host-network port. Change it if `9123` collides with another app (e.g. Zigbee2MQTT). |
 | `mgmt_port` | int | Where the console and its JSON API listen (default `9122`). The older name `stats_port` is still accepted. **Only the default is reachable from the sidebar** — Home Assistant routes the Ingress panel to `ingress_port`, fixed at install time. Move this and the console is still served directly at `http://<host>:<port>/`, and the app says so in its log when the two differ. |
@@ -205,7 +205,7 @@ keeps working out of the box.
 
 ## The console
 
-The app registers an Ingress panel, so there is a **Stripper** entry in the Home Assistant
+The app registers an Ingress panel, so there is a **Strimmer** entry in the Home Assistant
 sidebar. (If it is missing, turn on *Show in sidebar* on the app's own page — Supervisor
 stores that flag per install and leaves it off for apps that gained Ingress in an update.)
 
@@ -240,7 +240,7 @@ Point a `rest` sensor at either to graph it in Home Assistant itself:
 ```yaml
 sensor:
   - platform: rest
-    name: Stripper entities served
+    name: Strimmer entities served
     resource: http://homeassistant.local:9122/stats.json
     value_template: "{{ value_json.allowlist.union }}"
     json_attributes_path: "$.savings"

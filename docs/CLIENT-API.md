@@ -1,6 +1,6 @@
 # Client status API
 
-How a panel asks the WebSocket Stripper what it is doing, and what that is worth on this
+How a panel asks Strimmer what it is doing, and what that is worth on this
 connection.
 
 > Available from **2026.09.15.21**. **Requires a Home Assistant access token from 2026.09.15.25.** Additive schema.
@@ -9,17 +9,21 @@ connection.
 > in a browser if you would rather read it that way, or send it to someone who is not working in
 > this repo.
 
-The Stripper is a reverse proxy in front of Home Assistant that trims the entity websocket and
+Strimmer is a reverse proxy in front of Home Assistant that trims the entity websocket and
 several HTTP payloads down to what each dashboard actually uses. This endpoint exists so a panel —
 ha-paneld, Kiosk Satellite, anything else sitting in front of HA — can render an admin or
 diagnostics screen: *is the trimmer in front of me, what is it cutting, and what is it saving me.*
 
 ```
-GET http://<your-ha-host>:9123/stripper/client.json
+GET http://<your-ha-host>:9123/strimmer/client.json
 ```
 
-Port 9123 is the Stripper's default proxy port — the same host and port the panel already loads
+Port 9123 is Strimmer's default proxy port — the same host and port the panel already loads
 dashboards from. **Use whatever base URL the panel is configured with; do not hardcode 9123.**
+
+> **The old path still answers.** This endpoint was `/stripper/client.json` before the project was
+> renamed, and that path remains a permanent alias — a panel written against it keeps working and
+> gets the same reply. New clients should use `/strimmer/client.json`.
 
 ## Stability
 
@@ -30,7 +34,8 @@ This endpoint is meant to be built against. What that commitment is, precisely:
 - what a field means — a name is never reused for something else
 - the detection semantics below: `200`, `401`, `403`, `404`
 - authentication by Home Assistant bearer token
-- the path, `/stripper/client.json`
+- the path, `/strimmer/client.json` — and `/stripper/client.json`, which keeps answering
+  permanently rather than being retired at some later version
 
 **Will change, and your client must tolerate it:**
 
@@ -42,9 +47,9 @@ This endpoint is meant to be built against. What that commitment is, precisely:
   answer"*, not as *"the trimmer is gone"* — that distinction is the whole point of the table
   below, and getting it wrong turns a transient refusal into a false "offline".
 
-**Versioning.** `stripper.version` is the add-on's own date-based version (`2026.09.15.32`), which
-sorts lexically. There is no separate API version: the payload tells you which build answered, and
-that is the thing to log when something looks wrong.
+**Versioning.** `strimmer.version` (the payload key predates the rename — see below) is the add-on's
+own date-based version (`2026.09.15.32`), which sorts lexically. There is no separate API version:
+the payload tells you which build answered, and that is the thing to log when something looks wrong.
 
 ### Breaking changes so far
 
@@ -61,18 +66,18 @@ called out as such rather than slipped into a point release.
 
 ## Detection: reaching it is the proof
 
-A panel cannot tell from a dashboard page alone whether the Stripper served it or whether it is
+A panel cannot tell from a dashboard page alone whether Strimmer served it or whether it is
 talking straight to Home Assistant. It does not need a header to find out.
 
 This path is served **by the proxy itself and never forwarded**. So:
 
 | Result | Meaning |
 | --- | --- |
-| `200` | The Stripper is running **and is in the path** for this panel. Both halves of the question, answered by arriving. |
-| `401` | The Stripper IS in the path, but your token is missing or Home Assistant did not accept it. Still a positive detection — treat it as "present, not authorised". |
-| `403` | The Stripper IS in the path, but it does not answer callers from where you are. Also a positive detection. The `error` field says why — typically the request arrived from the internet or through Cloudflare, and the instance is set to answer local callers only. |
+| `200` | Strimmer is running **and is in the path** for this panel. Both halves of the question, answered by arriving. |
+| `401` | Strimmer IS in the path, but your token is missing or Home Assistant did not accept it. Still a positive detection — treat it as "present, not authorised". |
+| `403` | Strimmer IS in the path, but it does not answer callers from where you are. Also a positive detection. The `error` field says why — typically the request arrived from the internet or through Cloudflare, and the instance is set to answer local callers only. |
 | `404` | You are talking to Home Assistant directly. HA has no such route. |
-| connection error | Neither is reachable — a network problem, not a Stripper problem. Say so differently. |
+| connection error | Neither is reachable — a network problem, not a Strimmer problem. Say so differently. |
 
 ## Who may ask
 
@@ -116,6 +121,11 @@ A real reply, from a panel with two open connections:
 
 ```json
 {
+  "strimmer": {
+    "running": true,
+    "version": "2026.09.15.21",
+    "uptime_sec": 26
+  },
   "stripper": {
     "running": true,
     "version": "2026.09.15.21",
@@ -157,13 +167,18 @@ A real reply, from a panel with two open connections:
 }
 ```
 
-### `stripper`
+### `strimmer` (and `stripper`)
+
+Two keys, one object, byte-identical. `strimmer` is the name to read; `stripper` is what the key
+was called before the rename and is emitted beside it permanently, because the stability
+commitment above rules out breaking a client that already reads it. New code should use
+`strimmer`; nothing has to change to keep working.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `running` | bool | Always `true` when you get a reply. Present so the payload reads correctly when cached or logged. |
 | `version` | string | Build in front of this panel, e.g. `2026.09.15.21`. Date-based, sorts lexically. |
-| `uptime_sec` | int | Seconds since the Stripper started. A small number here explains a panel that just reconnected. |
+| `uptime_sec` | int | Seconds since Strimmer started. A small number here explains a panel that just reconnected. |
 
 ### `trimming`
 
@@ -172,7 +187,7 @@ for a row of indicator chips.
 
 | Key | What it cuts |
 | --- | --- |
-| `entities` | The entity websocket itself — the core feature. If this is `false` the Stripper is a plain pass-through. |
+| `entities` | The entity websocket itself — the core feature. If this is `false` Strimmer is a plain pass-through. |
 | `by_dashboard` | Serves each connection only the dashboard it is viewing, rather than the union of every configured dashboard. |
 | `registries` | Entity, device and area registries. |
 | `resources` | Lovelace resources (custom cards). |
@@ -189,7 +204,7 @@ The caller's own numbers. **The subject is always whoever asked.**
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `ip` | string | The address the Stripper sees you as. Useful for diagnosing a panel behind an unexpected NAT or proxy hop. |
+| `ip` | string | The address Strimmer sees you as. Useful for diagnosing a panel behind an unexpected NAT or proxy hop. |
 | `connections` | int | Open websockets from this address. `0` is a real answer — see below. `2` briefly during a reload. |
 | `dashboard` | string \| null | The dashboard `url_path` this connection was attributed to. `null` means it could not be attributed and is being served the union. |
 | `attributed_via` | string \| null | How that was decided — `cookie`, `ip`, `user-agent`. Diagnostic: a panel landing on the union usually shows `null` here. |
@@ -208,7 +223,7 @@ The caller's own numbers. **The subject is always whoever asked.**
 | `not_sent_pct` | Same as a percentage, or `null` before any bytes have moved. Do not compute your own from a zero denominator. |
 | `update_bytes_per_min` | Live update throughput. `null` until a connection is a full minute old — a rate extrapolated from four seconds is that connection's opening burst multiplied by fifteen, not a measurement. Render `null` as "—", not as zero. |
 
-> **`not_sent` is not the same as the Stripper's headline "saved" figure.** It is the difference
+> **`not_sent` is not the same as Strimmer's headline "saved" figure.** It is the difference
 > between two measured totals on *your* connections. The panel's own savings statistic is computed
 > differently, over trimmed request/response payloads where a real before-and-after exists. Do not
 > present the two as the same number.
@@ -221,7 +236,7 @@ It usually means the panel has not opened its websocket yet, or is connecting fr
 address than it fetches from.
 
 In that state `dashboard`, `entities_served`, `traffic` and `first_payload` are all `null`.
-`stripper` and `trimming` are still fully populated.
+`strimmer` (and its `stripper` twin) and `trimming` are still fully populated.
 
 ## What this endpoint will never tell you
 
@@ -247,9 +262,9 @@ Fetch on demand, when the admin screen opens. It is cheap but not free — it ta
 per call.
 
 ```js
-async function stripperStatus(haBaseUrl, haAccessToken) {
+async function strimmerStatus(haBaseUrl, haAccessToken) {
   try {
-    const res = await fetch(new URL('/stripper/client.json', haBaseUrl), {
+    const res = await fetch(new URL('/strimmer/client.json', haBaseUrl), {
       cache: 'no-store',
       headers: { Authorization: `Bearer ${haAccessToken}` },
       signal: AbortSignal.timeout(2000),
@@ -283,7 +298,7 @@ async function stripperStatus(haBaseUrl, haAccessToken) {
 
 ### A reasonable admin panel
 
-- **Status line.** "Trimmed by WebSocket Stripper 2026.09.15.21" — or "Not behind the trimmer" on a
+- **Status line.** "Trimmed by Strimmer 2026.09.15.21" — or "Not behind the trimmer" on a
   404. That one line is most of the value.
 - **What it is cutting.** The `trimming` booleans as chips. Showing only the `true` ones and a count
   of the rest keeps the row short.

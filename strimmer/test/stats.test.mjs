@@ -171,7 +171,7 @@ describe('stats API over HTTP', () => {
     const res = await httpGet(`http://127.0.0.1:${statsPort}/`);
     assert.equal(res.status, 200);
     assert.match(res.type, /text\/html/);
-    assert.match(res.body, /WebSocket Stripper/);
+    assert.match(res.body, /Strimmer/);
     assert.match(res.body, /stats\.json/);
   });
 

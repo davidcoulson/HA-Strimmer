@@ -9,7 +9,7 @@ version: 2
 updates:
   # The app's own dependencies. Grouped so a quiet week is one PR, not four.
   - package-ecosystem: npm
-    directory: /websocket-stripper
+    directory: /strimmer
     schedule:
       interval: weekly
       day: monday
@@ -48,7 +48,7 @@ updates:
 
   # The base image. Majors are IGNORED deliberately — see below.
   - package-ecosystem: docker
-    directory: /websocket-stripper
+    directory: /strimmer
     schedule:
       interval: weekly
       day: monday

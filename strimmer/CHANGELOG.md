@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026.09.19.3 — 2026-09-19
+
+**Renamed to Strimmer.** A strimmer trims, and it reads as "stream trimmer" — which is the whole
+app in one word. This fork is 183 commits ahead of the project it started from, which has none of
+the console, config store, MQTT sensors, mDNS discovery or resource trimming, so sharing a name
+with it had stopped describing what is installed. New tagline: *cuts what your panel never shows*.
+
+The **slug** changes with it (`websocket_stripper` -> `strimmer`), so Supervisor sees a new app:
+install Strimmer, copy your options across, then remove the old one. `/data` starts empty, which
+costs the config store, the 24-hour history, the user cache and the client hints — all of which
+rebuild on their own. MQTT sensors are republished under new unique_ids, so their long-term
+statistics start fresh.
+
+Three things deliberately keep their old names, because renaming them would break something real
+rather than tidy it:
+
+- **`/stripper/client.json` still answers**, beside the new `/strimmer/client.json`, and the reply
+  carries a `stripper` key beside the new `strimmer` one. Panels were written against those.
+- **The panel's `localStorage` keys** keep the `stripper-` prefix: they live in each viewer's
+  browser, and renaming them would silently reset every panel's remembered tab, theme and columns.
+- **Older entries in this file** keep the old name. They are a record of what it was called then.
+
+The console's title, the sidebar entry, the boot line, the Docker image, the compose service and
+the CI paths all move to the new name. The banner wordmark is one word in one colour now — the
+two-tone treatment was a device for a two-part name.
+
+---
 ## 2026.09.19.2 — 2026-09-19
 
 **The console now looks like Sextant.** Two panels by the same person on the same Home Assistant

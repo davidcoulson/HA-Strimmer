@@ -91,7 +91,7 @@ export const SECTIONS = [
   { id: 'discovery', title: 'Device discovery', blurb: 'Ask the network what each connecting device is, so the Clients tab can name it.' },
   { id: 'monitoring', title: 'Monitoring', blurb: 'Long-term metrics and checks, published back into Home Assistant.' },
   { id: 'websocket', title: 'Websocket', blurb: 'How the browser connection itself is handled.' },
-  { id: 'client_api', title: 'Panel status API', blurb: 'Who may ask this app what it is doing, at /stripper/client.json on the proxy port.' },
+  { id: 'client_api', title: 'Panel status API', blurb: 'Who may ask this app what it is doing, at /strimmer/client.json on the proxy port.' },
 ];
 
 export const OPTIONS = {

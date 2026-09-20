@@ -1,6 +1,6 @@
-name: WebSocket Stripper
-version: "2026.09.19.2"
-slug: websocket_stripper
+name: Strimmer
+version: "2026.09.19.3"
+slug: strimmer
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
 # This fork, not upstream. `url` is what the Apps UI links to from the app's page, so it has to
@@ -33,7 +33,7 @@ ingress: true
 # breaks over Ingress while the direct port still works. A test pins them together.
 ingress_port: 9122
 panel_icon: mdi:grass
-panel_title: Stripper
+panel_title: Strimmer
 panel_admin: false
 # SUPERVISOR_TOKEN + core API access (used only to precompute the dashboard allowlists).
 homeassistant_api: true
@@ -128,7 +128,7 @@ options:
   # Where the stats panel and JSON API listen. Only the default is reachable over Ingress —
   # Supervisor routes the sidebar panel to ingress_port above, which is fixed at install time.
   mgmt_port: 9122
-  # Who may reach /stripper/client.json on the proxy port. `lan` answers only requests that
+  # Who may reach /strimmer/client.json on the proxy port. `lan` answers only requests that
   # arrived locally, and refuses internet and Cloudflare ones BEFORE checking the token.
   client_api_access: lan
   client_api_allow: []

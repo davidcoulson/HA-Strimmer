@@ -7,7 +7,7 @@
 // observable fact rather than an inference.
 //
 // The A/B needs no configuration change on the live instance, which is the point: port 9123 is
-// the stripper (trimmed) and 8123 is Home Assistant itself (untrimmed). Same dashboard, same
+// Strimmer (trimmed) and 8123 is Home Assistant itself (untrimmed). Same dashboard, same
 // browser, same throttle, same machine — only the path differs.
 import puppeteer from 'puppeteer-core';
 
@@ -120,7 +120,7 @@ async function once(profileName, port, label) {
 
 const results = [];
 for (const profile of (process.env.PROFILES || '4G,weak cell,no limit').split(',')) {
-  for (const [label, port] of [['trimmed (stripper)', 9123], ['untrimmed (HA direct)', 8123]]) {
+  for (const [label, port] of [['trimmed (Strimmer)', 9123], ['untrimmed (HA direct)', 8123]]) {
     for (let i = 0; i < RUNS; i++) {
       try {
         const r = await once(profile.trim(), port, label);

@@ -19,7 +19,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: websocket-stripper
+    working-directory: strimmer
 
 jobs:
   test:
@@ -40,7 +40,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-          cache-dependency-path: websocket-stripper/package-lock.json
+          cache-dependency-path: strimmer/package-lock.json
 
       # `ci`, not `install`: it installs exactly the committed lockfile and fails if the lock
       # and package.json have drifted apart — the same guarantee the image build now relies on.

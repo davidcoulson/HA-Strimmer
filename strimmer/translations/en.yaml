@@ -252,7 +252,7 @@ configuration:
   client_api_access:
     name: Panel status API — answer requests from
     description: >-
-      Who may reach `/stripper/client.json`, the endpoint a wall panel uses to show whether this
+      Who may reach `/strimmer/client.json`, the endpoint a wall panel uses to show whether this
       app is in front of it. `lan` (default) answers only requests that arrived locally and
       refuses internet and Cloudflare ones BEFORE checking the token, so a remote caller cannot
       even make this app ask Home Assistant about a token. `any` drops the network check and

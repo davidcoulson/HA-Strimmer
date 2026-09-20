@@ -1,4 +1,4 @@
-# Installing and configuring WebSocket Stripper
+# Installing and configuring Strimmer
 
 Everything needed to get the app running and tuned, whichever way you run Home Assistant.
 For *why* it exists and what it measures, see the [README](../README.md).
@@ -7,7 +7,7 @@ For *why* it exists and what it measures, see the [README](../README.md).
 |---|---|
 | 🏠 **Home Assistant OS / Supervised** | [Set it up](#supervisor) — the five-minute path |
 | 🐳 **Container / Core** | [Run it on plain Docker](#docker) |
-| ⚙️ **Every option, described** | [`websocket-stripper/DOCS.md`](../websocket-stripper/DOCS.md) — also the app's own Documentation tab |
+| ⚙️ **Every option, described** | [`strimmer/DOCS.md`](../strimmer/DOCS.md) — also the app's own Documentation tab |
 | 📈 **Measurements** | [`PERFORMANCE.md`](PERFORMANCE.md) |
 
 ---
@@ -18,7 +18,7 @@ For *why* it exists and what it measures, see the [README](../README.md).
 
 1. HA → **Settings → Apps → App store → ⋮ → Repositories**, add:
    `https://github.com/davidcoulson/HA-Websocket-Stripper`  <!-- fork -->
-2. Install **WebSocket Stripper**, open **Configuration**, and set `dashboards` to your own
+2. Install **Strimmer**, open **Configuration**, and set `dashboards` to your own
    dashboards' `url_path` values (Settings → Dashboards). It ships **empty** — until you set
    it, the app refuses `/api/websocket` and says so in the log, rather than silently
    serving the untrimmed firehose:
@@ -166,7 +166,7 @@ Apps need Supervisor, so if you run **Home Assistant Container** or **Core** you
 install one. Same program, same features — just a container:
 
 ```
-ghcr.io/davidcoulson/ha-websocket-stripper:latest
+ghcr.io/davidcoulson/strimmer:latest
 ```
 
 You need **one thing the app gets for free**: a long-lived access token. In HA, click your
@@ -175,13 +175,13 @@ user (bottom left) → **Security** → **Create token**.
 ### Quickest possible start
 
 ```bash
-docker run -d --name websocket-stripper --restart unless-stopped \
+docker run -d --name strimmer --restart unless-stopped \
   -p 9123:9123 -p 9122:9122 \
-  -v stripper-data:/data \
+  -v strimmer-data:/data \
   -e HA_BASE="http://homeassistant:8123" \
   -e HA_TOKEN="<your-long-lived-token>" \
   -e DASH_PATHS="kitchen-panel,hallway-kiosk" \
-  ghcr.io/davidcoulson/ha-websocket-stripper:latest
+  ghcr.io/davidcoulson/strimmer:latest
 ```
 
 Then point your kiosks at **`http://<this-host>:9123`** instead of your HA URL, and open
@@ -201,21 +201,21 @@ option commented. The short version:
 
 ```yaml
 services:
-  websocket-stripper:
-    image: ghcr.io/davidcoulson/ha-websocket-stripper:latest
+  strimmer:
+    image: ghcr.io/davidcoulson/strimmer:latest
     restart: unless-stopped
     ports:
       - "9123:9123"     # what your browsers and kiosks connect to
       - "9122:9122"     # stats panel + JSON API
     volumes:
-      - stripper-data:/data       # keeps the 24h stats across restarts
+      - strimmer-data:/data       # keeps the 24h stats across restarts
     environment:
       HA_BASE: "http://homeassistant:8123"
       HA_TOKEN: "<your-long-lived-token>"
       DASH_PATHS: "kitchen-panel,hallway-kiosk"
 
 volumes:
-  stripper-data:
+  strimmer-data:
 ```
 
 ```bash
@@ -266,7 +266,7 @@ are JSON.
 
 ### One thing that catches people
 
-Home Assistant only trusts a proxy it has been told about. Because the stripper forwards the
+Home Assistant only trusts a proxy it has been told about. Because Strimmer forwards the
 real client IP, HA needs to be told to believe it — otherwise every client appears to come
 from the container, which breaks `trusted_networks` logins and IP bans. In `configuration.yaml`:
 
@@ -274,12 +274,12 @@ from the container, which breaks `trusted_networks` logins and IP bans. In `conf
 http:
   use_x_forwarded_for: true
   trusted_proxies:
-    - 172.16.0.0/12        # the Docker network the stripper runs on
+    - 172.16.0.0/12        # the Docker network Strimmer runs on
 ```
 
 Use the container's actual subnet, and keep it as narrow as you can — anything in
 `trusted_proxies` is trusted to *claim* a client IP. If another reverse proxy sits in front of
-the stripper, list its address as well: the stripper appends its own peer to any
+Strimmer, list its address as well: Strimmer appends its own peer to any
 `X-Forwarded-For` chain it is handed, so HA sees `client, <front proxy>` and only resolves the
 client if the front proxy is trusted. The append is what stops a LAN host from forging a kiosk
 address and logging in password-less through `trusted_networks`.
@@ -362,7 +362,7 @@ edge proxy. Make sure HA trusts every hop:
 http:
   use_x_forwarded_for: true
   trusted_proxies:
-    - 127.0.0.1               # the stripper (reaches HA from the host, via host_network)
+    - 127.0.0.1               # Strimmer (reaches HA from the host, via host_network)
     - ::1
     - 192.168.1.5             # your Caddy / nginx host, if it's a different machine
 ```
@@ -390,7 +390,7 @@ works through the proxy too.
 Needs **Node 22 or newer** (the image ships 26; CI covers 22, 24 and 26).
 
 ```bash
-cd websocket-stripper
+cd strimmer
 npm ci                     # `ci`, not `install` — installs exactly the committed lockfile
 npm test                   # 398 tests, no network and no Home Assistant required
 HA_TOKEN="<long-lived-token>" \

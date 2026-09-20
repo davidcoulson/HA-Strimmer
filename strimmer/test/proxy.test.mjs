@@ -648,7 +648,7 @@ describe('log levels', () => {
 
   it('warn keeps the version and the allowlist summary, and drops the routine detail', async () => {
     const out = await bootLog('warn');
-    assert.match(out, /ha-ws-trim-proxy v/, 'the build must be identifiable at every level');
+    assert.match(out, /Strimmer v/, 'the build must be identifiable at every level');
     assert.match(out, /union allowlist for/, 'and so must the summary of what it is serving');
     assert.doesNotMatch(out, /registry reach:/, 'routine info detail must be suppressed');
   });

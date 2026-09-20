@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.19.2';
+const VERSION = '2026.09.19.3';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -108,7 +108,16 @@ const PORT = parseInt(process.env.PROXY_PORT || process.env.PORT
 // cannot bind, so Ingress has nothing to reach either.
 // Where a panel asks about itself. A constant because two things have to agree on it: this
 // server, and every panel that was told the path — so it is quoted in the docs from here.
-const CLIENT_INFO_PATH = '/stripper/client.json';
+const CLIENT_INFO_PATH = '/strimmer/client.json';
+// The path this endpoint had before the app was renamed. It keeps answering, permanently rather
+// than deprecated-then-removed: panels in the wild — ha-paneld, Kiosk Satellite — were written
+// against it, and a renamed app that silently stops answering their status check is a worse
+// outcome than one extra string here.
+const CLIENT_INFO_PATH_LEGACY = '/stripper/client.json';
+const isClientInfoPath = (url) => {
+  const path = String(url || '').split('?')[0];
+  return path === CLIENT_INFO_PATH || path === CLIENT_INFO_PATH_LEGACY;
+};
 
 // Who may reach the panel status endpoint, checked BEFORE the token.
 //
@@ -3070,6 +3079,13 @@ function clientReport(ip) {
   const newest = mine.slice().sort((a, b) => (a.connectedSec ?? 0) - (b.connectedSec ?? 0))[0] || null;
 
   return {
+    strimmer: {
+      running: true,
+      version: VERSION,
+      uptime_sec: snap.uptimeSec,
+    },
+    // The same object under its pre-rename name, for panels that read `stripper.running`. Same
+    // reasoning as CLIENT_INFO_PATH_LEGACY: cheap here, and a broken status screen there.
     stripper: {
       running: true,
       version: VERSION,
@@ -3134,7 +3150,7 @@ const server = http.createServer((req, res) => {
   // panel admin page served from its own origin asks permission first — and never sends the real
   // request if nobody answers. Adding the header without this would have quietly broken exactly
   // the callers the endpoint exists for.
-  if (req.method === 'OPTIONS' && req.url.split('?')[0] === CLIENT_INFO_PATH) {
+  if (req.method === 'OPTIONS' && isClientInfoPath(req.url)) {
     res.writeHead(204, {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET, OPTIONS',
@@ -3143,7 +3159,7 @@ const server = http.createServer((req, res) => {
     });
     return res.end();
   }
-  if (req.method === 'GET' && (req.url === CLIENT_INFO_PATH || req.url.startsWith(CLIENT_INFO_PATH + '?'))) {
+  if (req.method === 'GET' && isClientInfoPath(req.url)) {
     // Authenticated with the caller's OWN Home Assistant token, validated against Home Assistant.
     //
     // This started unauthenticated on the reasoning that it says little: booleans and the
@@ -4129,7 +4145,7 @@ const PANEL_HTML = (() => {
 // What the machine in front of us is called.
 //
 // "proxy" as a label is ambiguous in this add-on of all places, because the add-on IS a proxy —
-// a row reading `lan · proxy` invites the reading "went through the stripper", which every row
+// a row reading `lan · proxy` invites the reading "went through this app", which every row
 // did. The honest generic is "reverse proxy", and that is the fallback. But the hop is a real
 // address and usually has a real name, so it is worth asking.
 //
@@ -4724,7 +4740,7 @@ history.start(() => stats.snapshot(statsExtras()), HISTORY_DIR);
 log(`history: sampling every ${history.INTERVAL_MS / 60000}min, keeping ${history.KEEP} buckets${HISTORY_DIR ? ` in ${HISTORY_DIR}` : ' (memory only)'}`);
 
 // ---- boot ----
-warn(`ha-ws-trim-proxy v${VERSION} starting`);
+warn(`Strimmer v${VERSION} starting`);
 // Anything the store had to say, now that logging exists.
 for (const m of CONFIG_WARNINGS) warn(`  config: ${m}`);
 // Which source answers for what. Without this, an option edited in the Configuration tab that

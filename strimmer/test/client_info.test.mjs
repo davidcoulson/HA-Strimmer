@@ -61,10 +61,12 @@ describe('the client info endpoint', () => {
   after(async () => { proxy?.kill(); await mock?.close(); });
 
   it('answers on the proxy port, which is what makes reaching it meaningful', async () => {
-    const res = await get(port, '/stripper/client.json');
+    const res = await get(port, '/strimmer/client.json');
     assert.equal(res.status, 200, 'a panel behind the proxy must get an answer');
     assert.match(res.headers['content-type'], /application\/json/);
     const d = JSON.parse(res.body);
+    assert.equal(d.strimmer.running, true);
+    // The pre-rename key, kept beside the new one so a panel written against it keeps working.
     assert.equal(d.stripper.running, true);
     assert.ok(d.stripper.version, 'the panel can show which build is in front of it');
     // The path is served by the proxy itself, never forwarded — that is the whole signal. If it
@@ -72,8 +74,19 @@ describe('the client info endpoint', () => {
     assert.ok(!/404/.test(String(res.status)));
   });
 
+  // The rename's compatibility promise. ha-paneld and Kiosk Satellite were written against
+  // /stripper/client.json, so it keeps answering rather than 404ing after an update they did not
+  // make. If this is ever deliberately dropped, this test is the place that says so.
+  it('still answers on the path it had before the rename', async () => {
+    const res = await get(port, '/stripper/client.json');
+    assert.equal(res.status, 200, 'a panel written against the old path must not break');
+    const d = JSON.parse(res.body);
+    assert.equal(d.strimmer.running, true);
+    assert.deepEqual(d.stripper, d.strimmer, 'the two keys describe one app');
+  });
+
   it('reports what is being trimmed, as booleans and nothing more', async () => {
-    const d = JSON.parse((await get(port, '/stripper/client.json')).body);
+    const d = JSON.parse((await get(port, '/strimmer/client.json')).body);
     assert.equal(d.trimming.entities, true);
     assert.equal(d.trimming.themes, true, 'reflects the running configuration, not a default');
     assert.equal(d.trimming.repairs, false);
@@ -84,7 +97,7 @@ describe('the client info endpoint', () => {
 
   // The important one. Everything below is what this port must never publish.
   it('never publishes rules, identities or other machines', async () => {
-    const raw = (await get(port, '/stripper/client.json')).body;
+    const raw = (await get(port, '/strimmer/client.json')).body;
 
     for (const secret of ['David Coulson', 'Secret Panel', '10.99.0.1', '/^update\\./']) {
       assert.ok(!raw.includes(secret),
@@ -102,7 +115,7 @@ describe('the client info endpoint', () => {
   it('describes the caller and offers no way to ask about anyone else', async () => {
     // A query string must not select a different subject. If it ever did, every panel could
     // enumerate every other panel on the network from an unauthenticated port.
-    const other = await get(port, '/stripper/client.json?ip=10.99.0.1');
+    const other = await get(port, '/strimmer/client.json?ip=10.99.0.1');
     assert.equal(other.status, 200);
     const d = JSON.parse(other.body);
     assert.notEqual(d.client.ip, '10.99.0.1', 'the subject must be the caller, not a parameter');
@@ -110,7 +123,7 @@ describe('the client info endpoint', () => {
   });
 
   it('reports zero connections honestly rather than pretending', async () => {
-    const d = JSON.parse((await get(port, '/stripper/client.json')).body);
+    const d = JSON.parse((await get(port, '/strimmer/client.json')).body);
     assert.equal(d.client.connections, 0, 'no websocket is open from this test yet');
     assert.equal(d.client.traffic, null, 'no traffic figures invented for a client with none');
     assert.equal(d.client.dashboard, null);
@@ -122,7 +135,7 @@ describe('the client info endpoint', () => {
     c.send({ type: 'subscribe_entities' });
     await new Promise((r) => setTimeout(r, 300));
     try {
-      const d = JSON.parse((await get(port, '/stripper/client.json')).body);
+      const d = JSON.parse((await get(port, '/strimmer/client.json')).body);
       assert.ok(d.client.connections >= 1, 'the open websocket is counted');
       assert.ok(Number.isInteger(d.client.entities_served),
         'the panel can show how many entities it is being served');

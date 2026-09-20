@@ -50,7 +50,7 @@ every panel in the house for the duration of the run.
 
 ### Instrument
 
-[`websocket-stripper/tools/bench-dashboard-load.mjs`](../websocket-stripper/tools/bench-dashboard-load.mjs),
+[`strimmer/tools/bench-dashboard-load.mjs`](../strimmer/tools/bench-dashboard-load.mjs),
 driving the system Chrome through `puppeteer-core`.
 
 | Step | How |
@@ -232,7 +232,7 @@ Stated plainly, because a benchmark that lists none is hiding some.
 ## 8. Reproducing this
 
 ```bash
-cd websocket-stripper
+cd strimmer
 npm install puppeteer-core          # deliberately not a package.json dependency
 
 HA_TOKEN="<long-lived-token>" \

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="WebSocket Stripper — not the whole house" width="640">
+  <img src="assets/banner.png" alt="Strimmer — cuts what your panel never shows" width="640">
 </p>
 
 ## 🚀 TL;DR
@@ -20,7 +20,7 @@ and sends each dashboard **only what it actually shows**. Same HA, same dashboar
 | | |
 |---|---|
 | 📦 **Install it** | **[Installation guide →](docs/INSTALL.md)** — about five minutes on HA OS, or a plain Docker container |
-| ⚙️ **Configure it** | **Point and click in the app's own sidebar panel** — checkboxes, not YAML — or **[every option, described →](websocket-stripper/DOCS.md)** |
+| ⚙️ **Configure it** | **Point and click in the app's own sidebar panel** — checkboxes, not YAML — or **[every option, described →](strimmer/DOCS.md)** |
 | 📈 **Check the numbers** | **[Full method and raw runs →](docs/PERFORMANCE.md)** |
 | 🔀 **Upgrading an existing config** | **[Migration guide →](docs/MIGRATING.md)** — nothing is required; every old option name and override list still works |
 | 🔌 **Build a client against it** | **[Client status API →](docs/CLIENT-API.md)** — how a panel reads trimmer status and its own stats, for ha-paneld, Kiosk Satellite and friends |
@@ -29,8 +29,8 @@ and sends each dashboard **only what it actually shows**. Same HA, same dashboar
 
 ## 🧬 This is a fork
 
-The original **[WebSocket Stripper](https://github.com/GabrielGoldsteinAnidea/HA-Websocket-Stripper)**
-is by **[Gabriel Goldstein](https://github.com/GabrielGoldsteinAnidea)**, and the core idea is his:
+Strimmer began as a fork of **[HA WebSocket Stripper](https://github.com/GabrielGoldsteinAnidea/HA-Websocket-Stripper)**
+by **[Gabriel Goldstein](https://github.com/GabrielGoldsteinAnidea)**, and the core idea is his:
 put something in front of Home Assistant so a dashboard is sent only the entities it actually
 shows. Everything below is built on that. Same MIT licence, same approach, same add-on — this
 version just goes further.
@@ -107,7 +107,7 @@ Websocket payload **5,799 KB → 844 KB**. The frontend bundle is untouched.
 
 **[Every run, the validity checks, the limitations, and a benchmark that said the opposite for an
 hour → `docs/PERFORMANCE.md`](docs/PERFORMANCE.md)** — reproduce it with
-[`tools/bench-dashboard-load.mjs`](websocket-stripper/tools/bench-dashboard-load.mjs).
+[`tools/bench-dashboard-load.mjs`](strimmer/tools/bench-dashboard-load.mjs).
 
 ### 📅 Now scale that to a day
 
@@ -176,7 +176,7 @@ the network, and parsed by a cheap wall tablet, so that it could be ignored.
 
 ```mermaid
 flowchart LR
-    B["📱 Your panel<br/>or phone"] --> S["🚿 Stripper"]
+    B["📱 Your panel<br/>or phone"] --> S["✂️ Strimmer"]
     S --> H["🏠 Home<br/>Assistant"]
     H -. "the whole house<br/>9,751 entities + 12.7MB catalogue<br/>+ 21MB of cards" .-> S
     S -. "just this dashboard<br/>104 entities, ~200KB, 3MB" .-> B
@@ -234,7 +234,7 @@ Being straight with you, because measuring this took a while:
   entities in `always_forward` and open an issue.
 - A **local** app bakes the code into its image at build time, so updates need a
   **Rebuild**, not a Restart.
-- See `CLAUDE.md` for architecture/decisions and `websocket-stripper/DOCS.md` for option
+- See `CLAUDE.md` for architecture/decisions and `strimmer/DOCS.md` for option
   details.
 
 ## ☕ Credit & support
@@ -249,5 +249,5 @@ appreciated.
 
 Every release is written up in plain English, newest first:
 
-**[`websocket-stripper/CHANGELOG.md`](websocket-stripper/CHANGELOG.md)**
+**[`strimmer/CHANGELOG.md`](strimmer/CHANGELOG.md)**
 
