@@ -166,3 +166,75 @@ deflate CPU across many connections is the plausible first real bottleneck.
 Explicitly rejected: `worker_threads` for `extractEntities` (measured a net loss — 27 ms of
 blocking clone to move 22 ms of work), and shared memory in any form, because Node cannot do it
 across processes without a native dependency this project will not take.
+
+---
+
+## 6. Would Rust or Go be better?
+
+The same question one layer down, and it deserves a straight answer: **yes, both would give better
+threading, and no, that is not a reason to rewrite this.**
+
+### Where they genuinely win
+
+**The catastrophic-regex class stops existing.** Go's `regexp` is RE2 and Rust's `regex` crate is
+its descendant; both match in time linear in the input, because neither backtracks. The pattern
+that cost this app 5.4 seconds on 27 characters —
+
+```
+/^(a|a)+$/   node: 5364 ms      RE2 / rust regex: linear, no backtracking
+```
+
+— is simply not expressible as a denial of service against them. Everything built to contain it
+(`looksCatastrophic`, the `node:vm` deadline, the memo, the kill-list) would delete itself. That
+is the most elegant argument for a move and the only one that removes code rather than adding it.
+
+**Real parallelism.** Go's goroutines and Rust's tokio both schedule across cores, so a task that
+blocks holds up one worker of N rather than everything. Every stall discussed in this document
+becomes a local problem.
+
+**Memory.** Measured now: **77 MB RSS**. Go would plausibly be 30–50 MB, Rust 15–30 MB.
+
+### Where Node is the better fit for *this* app
+
+**The domain is JSON manipulation of someone else's schema.** The whole proxy is
+`transform(msg)` over Home Assistant's websocket messages — a schema HA changes without notice,
+full of optional fields, two-letter keys (`a`, `c`, `ei`, `di`) and payloads that are sometimes an
+object and sometimes an array. JavaScript's dynamic objects are a genuinely good match. In Rust
+this is `serde_json::Value` and a lot of ceremony, or typed structs for a surface that keeps
+moving; Go sits in between with `map[string]any`.
+
+**The value in this repo is not the code.** It is CLAUDE.md: the X-Forwarded-For chain rules, the
+cache signature, the auth-gate ordering, batched-frame handling, backpressure semantics, the
+resource-trim heuristics. Every one of those was learned from a production failure. A rewrite
+inherits the list only if someone ports it deliberately, and the failure mode is re-learning them
+the same way they were learned the first time.
+
+**The console is a web page regardless.**
+
+### The measurements that decide it
+
+| | measured |
+| --- | --- |
+| CPU | 0.12–3.85% |
+| Event-loop delay p99 | 6.8 ms |
+| Worst stall since boot | 46 ms (the boot allowlist build) |
+| RSS | 77 MB |
+
+Threading is not the binding constraint. A runtime that threads better would be solving a problem
+this app does not have, at the cost of the one asset it does.
+
+### Honest caveat
+
+Asked as *"what would you start with today, knowing what this app does?"* the answer is different
+— **Go** would be a strong choice: RE2 by default, goroutines that suit one-per-connection
+naturally, `httputil.ReverseProxy` in the standard library, and `encoding/json` that handles
+dynamic shapes without a fight. That is a real argument, and it is an argument about a greenfield
+project, not about this one.
+
+### What would change the answer
+
+- Event-loop p99 climbing past ~100 ms under normal load (now measured continuously — section 5).
+- A fleet where deflate CPU across connections actually saturates a core.
+- A second pathological input class appearing that cannot be bounded as cheaply as the regex was.
+
+Absent those, the sunk knowledge outweighs the runtime.

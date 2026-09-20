@@ -315,6 +315,19 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   needs an INCOMPRESSIBLE payload: the browser leg deflates, so 200KB of `x` leaves as 200 bytes.
 - **`resolveUser` dedups in flight by token hash (`USER_INFLIGHT`).** A kiosk load opens several
   sockets with one token; they used to cost one probe each.
+- **Node, not Rust or Go — settled 2026-09-19, see `docs/CLUSTERING.md` §6.** Both would thread
+  better, and both would delete the whole catastrophic-regex apparatus outright (RE2 and Rust's
+  `regex` are linear-time and cannot backtrack). But measured: 0.12–3.85% CPU, event-loop p99
+  **6.8ms**, worst stall 46ms, 77MB RSS — threading is not the binding constraint. The asset here
+  is this file's list of production-learned behaviours, not the code, and a rewrite risks
+  re-learning it. Revisit only if p99 loop delay passes ~100ms under normal load.
+- **Clustering: measure first, see `docs/CLUSTERING.md`.** A `SharedArrayBuffer` does NOT survive
+  cluster IPC (tested — it arrives as a plain object), so real shared memory needs a native
+  dependency this project does not take; `cluster` passes sockets but not memory, `worker_threads`
+  the reverse. The design that resolves it needs no shared memory at all — route a client
+  consistently to one worker and `clientDash`, `clientLearned`, `USER_CACHE` and the registry
+  cache are all already client-local. `worker_threads` for `extractEntities` was measured a NET
+  LOSS: 27ms of blocking structured-clone to move 22ms of work.
 - **HTTP/2 and QUIC are settled: NO. Do not revisit without new facts.** httpxy has an `http2`
   option, but it only affects httpxy's own `listen()` helper (`http2.createSecureServer`) — we
   build our own server and call `proxy.web()`, so it is inert here, and it serves h2 rather than
