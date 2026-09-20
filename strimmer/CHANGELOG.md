@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026.09.20.1 — 2026-09-20
+
+**`devices_discovered` sawtoothed between 12 and ~120 about once an hour.** Reported from the
+sensor's own history, which is exactly what that sensor is for. Three faults, all introduced with
+mDNS expiry the day before, and each one alone was enough to cause it.
+
+- **The expiry window was 15 minutes** (three query intervals), chosen with no evidence. ESPHome
+  and Avahi re-announce on a far longer cycle — the sawtooth's own period says ~55–60 minutes — so
+  most of the estate aged out between announcements and returned in a rush when it next spoke.
+  Expiry here is a **backstop** for a device that vanished without a word; a clean departure sends
+  a goodbye record, which is handled directly. So it only has to be shorter than forever: now two
+  hours.
+- **Only the first 100 held hosts were re-queried.** Past a hundred hosts the tail was never asked
+  again and aged out on a timer — guaranteed, and invisible except as a number going down. All
+  held hosts are re-asked now, in chunks that fit a datagram.
+- **A host expiring silently un-resolved a live instance.** Hosts are refreshed only by A records
+  and instances only by PTR/SRV/TXT, and `index()` resolves an instance *through* its host — so a
+  device answering a service query without repeating its address kept a fresh instance, lost its
+  host, and disappeared from the view while demonstrably alive and talking to us. A host that a
+  surviving instance still points at is no longer expired: hearing the service is hearing the
+  device, and a withdrawal has its own record.
+
+The snapshot now also carries the `instances` and `hosts` counts behind `devices`. A device row
+needs both an instance and a resolvable host, and when those two diverge the count moves while the
+network has not — which is the fault above, and would have named itself.
+
+---
 ## 2026.09.19.8 — 2026-09-19
 
 **Event-loop delay is now measured and published.** Everything this proxy does to a frame happens

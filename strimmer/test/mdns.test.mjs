@@ -6,7 +6,7 @@
 // address -> device view the rest of the add-on asks for.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ingest, index, expire, parseTxt, labelFor, DEFAULT_SERVICES, preferredRow, KIND_PRIORITY, HOSTS_MAX } from '../mdns.mjs';
+import { ingest, index, expire, parseTxt, labelFor, DEFAULT_SERVICES, preferredRow, KIND_PRIORITY, HOSTS_MAX, STALE_AFTER_MS } from '../mdns.mjs';
 
 const SERVICES = DEFAULT_SERVICES;
 const fresh = () => ({ instances: new Map(), hosts: new Map() });
@@ -203,4 +203,41 @@ test('the host table is capped, and only takes .local names', () => {
   ingest({ answers }, SERVICES, s);
   assert.equal(s.hosts.size, HOSTS_MAX);
   assert.equal(s.hosts.has('example.com'), false);
+});
+
+// The sawtooth. `sensor.strimmer_devices_discovered` cycled between 12 and ~120 roughly hourly:
+// hosts are refreshed only by A records and instances only by PTR/SRV/TXT, so a device answering a
+// service query without repeating its address kept a fresh instance, lost its host, and vanished
+// from the view while demonstrably alive.
+test('a device that keeps announcing its service does not expire for want of an A record', () => {
+  const s = fresh();
+  ingest(ksPacket('aaa', 'Panel', '10.2.4.77', 'panel'), SERVICES, s, 1000);
+  assert.equal(index(s).byIp.size, 1);
+
+  // Two hours later it has re-announced PTR/SRV/TXT — as a service query elicits — but no A.
+  const later = 1000 + STALE_AFTER_MS + 60000;
+  ingest({ answers: [
+    { name: '_kiosk-satellite._tcp.local', type: 'PTR', data: 'ks-aaa._kiosk-satellite._tcp.local' },
+    { name: 'ks-aaa._kiosk-satellite._tcp.local', type: 'SRV', data: { target: 'panel.local', port: 2324 } },
+  ] }, SERVICES, s, later);
+
+  expire(s, STALE_AFTER_MS, later);
+  assert.equal(index(s).byIp.size, 1, 'hearing the service IS hearing the device — it must not vanish');
+  assert.equal(index(s).byIp.get('10.2.4.77')[0].name, 'Panel');
+});
+
+test('a host nothing points at any more does still expire', () => {
+  const s = fresh();
+  // A bare `<name>.local`, the kind a client rule resolves through — no instance references it.
+  ingest({ answers: [{ name: 'orphan.local', type: 'A', data: '10.2.4.9' }] }, SERVICES, s, 1000);
+  assert.equal(index(s).byHost.get('orphan.local'), '10.2.4.9');
+  const later = 1000 + STALE_AFTER_MS + 60000;
+  assert.equal(expire(s, STALE_AFTER_MS, later), true);
+  assert.equal(index(s).byHost.get('orphan.local'), undefined, 'the backstop must still work');
+});
+
+test('the expiry window is longer than a real announce cycle', () => {
+  // The observed sawtooth had a ~55-60 minute period; the window was 15 minutes. Anything at or
+  // under an hour reintroduces it, so this is a floor rather than a preference.
+  assert.ok(STALE_AFTER_MS >= 2 * 3600 * 1000, `${STALE_AFTER_MS}ms is not past the observed cycle`);
 });

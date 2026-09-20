@@ -104,8 +104,21 @@ export const hostKey = (name) => String(name ?? '').replace(/\.$/, '').toLowerCa
 // something a chatty or hostile neighbour can turn into memory and CPU.
 export const HOSTS_MAX = 2000;
 export const INSTANCES_MAX = 1000;
-// Anything not re-heard within this many query intervals is forgotten — see expire().
-export const STALE_AFTER_INTERVALS = 3;
+// How long a record survives without being re-heard. This is a BACKSTOP for a device that
+// vanished without saying anything — a panel unplugged, a board that crashed. The clean departure
+// is a goodbye record (TTL 0), which ingest() handles directly, so this only has to be shorter
+// than "forever" and longer than the slowest thing on the network.
+//
+// It was three query intervals — 15 minutes — and that was wrong by about 4x, with a visible
+// symptom: `sensor.strimmer_devices_discovered` sawtoothed between 12 and ~120 roughly hourly.
+// ESPHome and Avahi re-announce on a cycle far longer than 15 minutes, so most of the estate aged
+// out between announcements and came back in a rush when they next spoke. Two hours is past the
+// observed ~55-60 minute announce cycle with room to spare, and the cost of being generous is a
+// stale row on a panel, against the cost of being mean which is the count collapsing hourly.
+export const STALE_AFTER_MS = 2 * 3600 * 1000;
+// How many A questions to put in one query packet. A multicast DNS message wants to fit in a
+// single datagram, so held hosts are re-asked in chunks rather than all at once.
+export const QUERY_CHUNK = 30;
 
 const evictOldest = (map, max) => {
   if (map.size <= max) return;
@@ -177,10 +190,21 @@ export function ingest(packet, services, state, now = Date.now()) {
 // `seenAt`; what stays silent for several rounds has left. Returns whether anything was dropped.
 export function expire(state, maxAgeMs, now = Date.now()) {
   let dropped = false;
-  for (const map of [state.hosts, state.instances]) {
-    for (const [k, v] of map) {
-      if (now - (v.seenAt ?? 0) > maxAgeMs) { map.delete(k); dropped = true; }
-    }
+  for (const [k, v] of state.instances) {
+    if (now - (v.seenAt ?? 0) > maxAgeMs) { state.instances.delete(k); dropped = true; }
+  }
+  // A host that a surviving instance still points at is kept, however long since its own A record
+  // was last heard. Hosts are refreshed ONLY by A records and instances only by PTR/SRV/TXT, so a
+  // device that answers a service query without repeating its address — which is normal — used to
+  // keep a fresh instance and lose its host. index() resolves an instance THROUGH its host, so the
+  // device then vanished from the view while demonstrably alive and talking to us. Hearing the
+  // service is hearing the device; its address has not been withdrawn, and a withdrawal has its
+  // own record.
+  const stillNeeded = new Set();
+  for (const inst of state.instances.values()) if (inst.host) stillNeeded.add(hostKey(inst.host));
+  for (const [k, v] of state.hosts) {
+    if (stillNeeded.has(k)) continue;
+    if (now - (v.seenAt ?? 0) > maxAgeMs) { state.hosts.delete(k); dropped = true; }
   }
   return dropped;
 }
@@ -231,14 +255,21 @@ export function createDiscovery({ services = DEFAULT_SERVICES, intervalMs = 3000
   const query = () => {
     if (!mdns) return;
     // Age out first, so a host that stopped answering is not asked about forever.
-    if (expire(state, intervalMs * STALE_AFTER_INTERVALS)) reindex();
+    if (expire(state, STALE_AFTER_MS)) reindex();
     try {
       mdns.query({ questions: services.map((name) => ({ name, type: 'PTR' })) });
       // Re-ask for the hosts already held. A PTR query refreshes devices that advertise one of
       // our services; a bare `<name>.local` — which is all a `client` rule hostname needs — is
       // only re-announced if somebody asks for it, and would otherwise age out while still up.
-      const hosts = [...state.hosts.keys()].slice(0, 100);
-      if (hosts.length) mdns.query({ questions: hosts.map((name) => ({ name, type: 'A' })) });
+      //
+      // EVERY held host, in chunks. This used to take the first 100, which on a network with more
+      // hosts than that meant the tail was never re-asked and aged out on a timer — guaranteed,
+      // and invisible except as a number going down.
+      const hosts = [...state.hosts.keys()];
+      for (let i = 0; i < hosts.length; i += QUERY_CHUNK) {
+        const chunk = hosts.slice(i, i + QUERY_CHUNK);
+        mdns.query({ questions: chunk.map((name) => ({ name, type: 'A' })) });
+      }
     } catch (e) { /* a transient send failure is not worth a line every interval */ }
   };
 
@@ -281,6 +312,12 @@ export function createDiscovery({ services = DEFAULT_SERVICES, intervalMs = 3000
         available: !failed,
         error: failed,
         services,
+        // The two tables behind `devices`, so a count that moves has somewhere to be explained
+        // from. A device row needs BOTH an instance and a resolvable host; when the two diverge
+        // the count drops while the network has not changed, which is exactly the fault this
+        // pair would have made obvious.
+        instances: state.instances.size,
+        hosts: state.hosts.size,
         devices: [...view.byIp.entries()].flatMap(([ip, rows]) => rows.map((r) => ({ ...r, ip }))),
       };
     },
