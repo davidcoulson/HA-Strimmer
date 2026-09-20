@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.19.3';
+const VERSION = '2026.09.19.4';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -3176,7 +3176,10 @@ const server = http.createServer((req, res) => {
     // able to make it open a websocket to Home Assistant to check a token.
     const refusal = clientApiRefusal(req, classify(req));
     if (refusal) {
-      logThrottled('client-api-blocked', `refused ${CLIENT_INFO_PATH} from ${clientIp(req) ?? '?'} — ${refusal}`);
+      // Same reasoning as requireIngress: a panel polls this, so the line is said once per
+      // caller and then only at debug.
+      const blocked = `refused ${CLIENT_INFO_PATH} from ${clientIp(req) ?? '?'} — ${refusal}`;
+      if (onceOnly(`client-api-blocked:${clientIp(req) ?? '?'}`)) log(blocked); else debug(blocked);
       // 403, deliberately not 404. A panel uses 404 to mean "the trimmer is not in front of me",
       // and answering a blocked-but-local panel with 404 would tell it the opposite of the truth.
       res.writeHead(403, {
@@ -4357,7 +4360,12 @@ function effectiveFallback() {
 
 function requireIngress(req, res, what) {
   if (viaIngress(req)) return false;
-  logThrottled('read-denied', `refused ${what} from ${clientIp(req) ?? '?'} — open it from the Home Assistant sidebar`);
+  // Once per caller and endpoint, then debug. The console polls these every 60 seconds, and the
+  // throttle window is 10 — so a single page left open on the direct port wrote two lines a
+  // minute for as long as it stayed open, which is the noise class the rest of this file was just
+  // cleaned of. The refusal itself is unchanged; only the repetition is.
+  const denial = `refused ${what} from ${clientIp(req) ?? '?'} — open it from the Home Assistant sidebar`;
+  if (onceOnly(`read-denied:${what}:${clientIp(req) ?? '?'}`)) log(denial); else debug(denial);
   res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   res.end(JSON.stringify({
     error: 'this endpoint is only readable through Home Assistant Ingress',

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.09.19.4 — 2026-09-19
+
+**A console left open on the direct port wrote two log lines a minute, forever.** Found by reading
+the log after the rename rather than by a test: `/history.json` and `/access.json` are
+Ingress-only, the console polls them every 60 seconds, and `logThrottled`'s window is 10 — so the
+throttle never collapsed anything. The same 60-versus-10 mismatch as the announce lines fixed
+earlier in the day, in the one place that had not been looked at.
+
+Both ends now:
+
+- The refusal is said **once per caller and endpoint**, then at debug. The refusal itself is
+  unchanged — only the repetition is.
+- The console **stops asking** once an endpoint answers 403. It is also served on its own port,
+  where asking again can only ever be refused again, so one 403 is the answer for the life of the
+  page.
+
+`/strimmer/client.json` refusals get the same treatment, for the same reason: panels poll it.
+
+---
 ## 2026.09.19.3 — 2026-09-19
 
 **Renamed to Strimmer.** A strimmer trims, and it reads as "stream trimmer" — which is the whole

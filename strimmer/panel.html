@@ -1359,10 +1359,17 @@ function renderTuning(s) {
   }
 }
 
+// Endpoints this origin has already been refused. /access.json, /history.json and the rest are
+// Ingress-only, and the console is also served on its own port — where asking again every 60
+// seconds can only ever be refused again. One 403 is the answer for the life of the page.
+const forbidden = new Set();
+
 async function renderHttp() {
   let h;
+  if (forbidden.has('access')) return;
   try {
     const r = await fetch('./access.json?limit=40', { cache: 'no-store' });
+    if (r.status === 403) { forbidden.add('access'); return; }
     if (!r.ok) return;
     h = await r.json();
   } catch { return; }
@@ -2424,8 +2431,10 @@ renderConfig();
 
 async function tickHistory() {
   let h;
+  if (forbidden.has('history')) return;
   try {
     const r = await fetch('./history.json', { cache: 'no-store' });
+    if (r.status === 403) { forbidden.add('history'); return; }
     if (!r.ok) return;
     h = await r.json();
   } catch { return; }
