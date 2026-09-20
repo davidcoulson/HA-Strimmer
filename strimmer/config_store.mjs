@@ -94,17 +94,26 @@ export const SECTIONS = [
   { id: 'client_api', title: 'Panel status API', blurb: 'Who may ask this app what it is doing, at /strimmer/client.json on the proxy port.' },
 ];
 
+// Every option this build knows about: its type, which section it belongs to, and how it is
+// labelled.
+//
+// A boolean also carries `short` and `icon`, because the console draws booleans as a grid of
+// tiles rather than a column of switches — nine switch rows read as a form to work through, nine
+// tiles read as a state you can take in at a glance, which is what a settings screen is for. The
+// tile caption has room for about one word, so `short` is that word and `label` stays the full
+// sentence for the tooltip. `icon` is an MDI name; the panel owns the path, the way Home Assistant
+// passes `mdi:x` around rather than geometry.
 export const OPTIONS = {
   // Trimming
-  trim_entities: { type: 'bool', section: 'trim', label: 'Entity websocket' },
-  by_dashboard: { type: 'bool', section: 'trim', label: 'Only the dashboard being viewed' },
-  trim_registries: { type: 'bool', section: 'trim', label: 'Entity, device and area registries' },
-  trim_resources: { type: 'bool', section: 'trim', label: 'Custom cards' },
-  trim_extra_modules: { type: 'bool', section: 'trim', label: 'Modules injected into the page' },
-  trim_services: { type: 'bool', section: 'trim', label: 'Service list' },
-  trim_repairs: { type: 'bool', section: 'trim', label: 'Repairs backlog' },
-  trim_themes: { type: 'bool', section: 'trim', label: 'Themes' },
-  trim_translations: { type: 'bool', section: 'trim', label: 'Frontend translations' },
+  trim_entities: { type: 'bool', section: 'trim', label: 'Entity websocket', short: 'Entities', icon: 'transit-connection-variant' },
+  by_dashboard: { type: 'bool', section: 'trim', label: 'Only the dashboard being viewed', short: 'Per dashboard', icon: 'view-dashboard-outline' },
+  trim_registries: { type: 'bool', section: 'trim', label: 'Entity, device and area registries', short: 'Registries', icon: 'card-account-details-outline' },
+  trim_resources: { type: 'bool', section: 'trim', label: 'Custom cards', short: 'Custom cards', icon: 'puzzle-outline' },
+  trim_extra_modules: { type: 'bool', section: 'trim', label: 'Modules injected into the page', short: 'Injected JS', icon: 'script-text-outline' },
+  trim_services: { type: 'bool', section: 'trim', label: 'Service list', short: 'Services', icon: 'cog-transfer-outline' },
+  trim_repairs: { type: 'bool', section: 'trim', label: 'Repairs backlog', short: 'Repairs', icon: 'wrench-outline' },
+  trim_themes: { type: 'bool', section: 'trim', label: 'Themes', short: 'Themes', icon: 'palette-outline' },
+  trim_translations: { type: 'bool', section: 'trim', label: 'Frontend translations', short: 'Translations', icon: 'translate' },
 
   // Dashboards and entities
   dashboards: { type: 'list', section: 'entities', label: 'Dashboards to serve' },
@@ -124,7 +133,7 @@ export const OPTIONS = {
   user_agent_dashboards: { type: 'objects', section: 'overrides', label: 'Dashboard by client app' },
 
   // Discovery
-  mdns_discovery: { type: 'bool', section: 'discovery', label: 'Identify devices via mDNS' },
+  mdns_discovery: { type: 'bool', section: 'discovery', label: 'Identify devices via mDNS', short: 'mDNS', icon: 'access-point-network' },
   // `emptyMeans` is what an EMPTY list actually does. For most options empty means empty, but
   // here it means "use the built-in set" — and an empty row reads as "nothing is being looked
   // for", which is the opposite of the truth.
@@ -132,11 +141,11 @@ export const OPTIONS = {
     emptyMeans: 'the built-in set' },
 
   // Monitoring
-  mqtt_sensors: { type: 'bool', section: 'monitoring', label: 'Publish metrics over MQTT' },
+  mqtt_sensors: { type: 'bool', section: 'monitoring', label: 'Publish metrics over MQTT', short: 'MQTT', icon: 'chart-line' },
   cert_monitor_host: { type: 'str', section: 'monitoring', label: 'Certificate to watch' },
 
   // Websocket
-  compress_websocket: { type: 'bool', section: 'websocket', label: 'Compress the websocket' },
+  compress_websocket: { type: 'bool', section: 'websocket', label: 'Compress the websocket', short: 'Compression', icon: 'zip-box-outline' },
 
   // Panel status API
   client_api_access: {

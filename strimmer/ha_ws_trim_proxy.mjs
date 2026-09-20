@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.20.1';
+const VERSION = '2026.09.20.2';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -4612,6 +4612,9 @@ const statsServer = http.createServer((req, res) => {
           ? (k === 'mdns_services' ? `the built-in set (${DEFAULT_SERVICES.join(', ')})` : OPTIONS[k].emptyMeans)
           : null,
         label: OPTIONS[k]?.label || k,
+        // The console draws booleans as tiles; these are the caption and the glyph for one.
+        short: OPTIONS[k]?.short || null,
+        icon: OPTIONS[k]?.icon || null,
         source: own.managed.includes(k) ? 'console' : 'addon',
         editable: isKnownOption(k) && !BOOTSTRAP_KEYS.has(k),
       })),

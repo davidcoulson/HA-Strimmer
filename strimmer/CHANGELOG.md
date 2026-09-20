@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026.09.20.2 — 2026-09-20
+
+**The Config tab's switches are a grid of icon tiles**, the shape Sextant's edit toolbar uses: a
+bordered rounded cell with the glyph over its caption, and the active one filled in the accent.
+Blue means on — the same language as the switches it replaces and as Sextant's selected tool.
+
+Nine switch rows read as a form to work through. Nine tiles read as a state you can take in at a
+glance, which is what a settings screen is for: the answer to "what is this thing currently doing
+to my dashboards" is now one look rather than nine.
+
+- Each boolean carries a `short` caption and an MDI `icon` in the option catalogue, so the tile
+  has a word and a glyph. The full sentence and the config key stay in the tooltip, which is where
+  the long form belongs once the grid carries the scanning.
+- The catalogue names the glyph (`palette-outline`); the console owns the geometry. Same division
+  Home Assistant uses when it passes `mdi:x` around rather than paths.
+- Tiles are real buttons with `role="switch"` and `aria-checked`, so they are still operable from
+  the keyboard and still announced as toggles. A styled `div` would not be.
+- Options with a value to type — dashboards, entity lists, ports — keep their rows. A tile is
+  right for a thing that is on or off and wrong for a thing that holds text.
+- The standing explanation of how ownership works folds behind a link. The two facts that bite —
+  what *set here* means, and that nothing applies until a restart — stay visible.
+
+---
 ## 2026.09.20.1 — 2026-09-20
 
 **`devices_discovered` sawtoothed between 12 and ~120 about once an hour.** Reported from the

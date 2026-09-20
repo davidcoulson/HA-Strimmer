@@ -205,6 +205,28 @@
   .cfgbool input[type=checkbox]:checked::before { transform: translateX(16px); }
   .cfgbool input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .cfgbool input[disabled] { cursor: default; opacity: .3; }
+  /* Booleans as a grid of tiles, the shape Sextant's edit toolbar uses: a bordered rounded cell
+     with the glyph over its caption, and the active one filled in the accent. Nine switch rows
+     read as a form to work through; nine tiles read as a state you can take in at a glance, which
+     is what a settings screen is for. Blue filled = on, the same language as the switches it
+     replaces and as Sextant's selected tool. */
+  .cfgtiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 8px; margin: 4px 0 4px; }
+  .cfgtile { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; min-height: 76px; padding: 10px 6px; font: inherit; font-size: 12px;
+    text-align: center; cursor: pointer; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--muted);
+    transition: background .12s, border-color .12s, color .12s; }
+  .cfgtile:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); }
+  .cfgtile[aria-checked="true"] { background: var(--accent); border-color: var(--accent);
+    color: #fff; }
+  .cfgtile[aria-checked="true"]:hover:not(:disabled) { color: #fff; }
+  .cfgtile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .cfgtile:disabled { opacity: .4; cursor: default; }
+  /* The glyph is a mask so it follows the tile's colour through every state. */
+  .cfgtile i { display: block; width: 24px; height: 24px; background: currentColor;
+    -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
+  .cfgtile span { line-height: 1.2; overflow-wrap: anywhere; }
   .cfgname { flex: 0 0 210px; color: var(--muted); font-size: 13px; }
   .cfgsummary { flex: 1; color: var(--muted); font-size: 13px; }
   /* Lists are shown as their items. A JSON array in a text box made "Dashboards to serve" look
@@ -390,6 +412,9 @@
      there for the reader who wants it rather than in the way of the one who does not. */
   details.more { margin-top: 6px; }
   details.more summary { color: var(--accent); font-size: 12px; cursor: pointer; }
+  #cfg-intro details { display: inline; }
+  #cfg-intro summary { display: inline; color: var(--accent); cursor: pointer; }
+  #cfg-intro details[open] summary { display: block; margin-bottom: 2px; }
   details.more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* A pill that does something says so. */
   .pill.btn { cursor: pointer; }
@@ -638,12 +663,11 @@
 
   <div class="card" data-tab="config">
     <h2>Configuration</h2>
-    <div class="note" id="cfg-intro">Every option this app is running with, and which source is
-      answering for it. Options come from the add-on's Configuration tab unless you change one
-      here; a row marked <b>set here</b> is owned by this console and the Configuration tab no
-      longer applies to it. Taking a setting over never changes it — it is seeded from whatever is
-      already in effect. Options are read once at startup, so a change takes effect on the next
-      restart.</div>
+    <div class="note" id="cfg-intro">Every option this app runs with. Changes apply on the next
+      <b>restart</b>. <details><summary>How ownership works</summary>Options come from the add-on's
+      Configuration tab unless you change one here; a row marked <b>set here</b> is owned by this
+      console and the Configuration tab no longer applies to it. Taking a setting over never
+      changes it — it is seeded from whatever is already in effect.</details></div>
     <div id="cfg-msg" class="note" style="display:none"></div>
     <div id="cfgsections"></div>
   </div>
@@ -2249,6 +2273,57 @@ function chipList(o, d, save, say) {
   return wrap;
 }
 
+// MDI geometry for the boolean tiles, keyed by the icon NAME the server sends. The catalogue in
+// config_store.mjs names the glyph; the path lives here, so the server keeps talking in `mdi:x`
+// terms and the view owns the drawing.
+const TILE_ICONS = {
+  'access-point-network': 'M4.93,3.93C3.12,5.74 2,8.24 2,11C2,13.76 3.12,16.26 4.93,18.07L6.34,16.66C4.89,15.22 4,13.22 4,11C4,8.79 4.89,6.78 6.34,5.34L4.93,3.93M19.07,3.93L17.66,5.34C19.11,6.78 20,8.79 20,11C20,13.22 19.11,15.22 17.66,16.66L19.07,18.07C20.88,16.26 22,13.76 22,11C22,8.24 20.88,5.74 19.07,3.93M7.76,6.76C6.67,7.85 6,9.35 6,11C6,12.65 6.67,14.15 7.76,15.24L9.17,13.83C8.45,13.11 8,12.11 8,11C8,9.89 8.45,8.89 9.17,8.17L7.76,6.76M16.24,6.76L14.83,8.17C15.55,8.89 16,9.89 16,11C16,12.11 15.55,13.11 14.83,13.83L16.24,15.24C17.33,14.15 18,12.65 18,11C18,9.35 17.33,7.85 16.24,6.76M12,9A2,2 0 0,0 10,11A2,2 0 0,0 12,13A2,2 0 0,0 14,11A2,2 0 0,0 12,9M11,15V19H10A1,1 0 0,0 9,20H2V22H9A1,1 0 0,0 10,23H14A1,1 0 0,0 15,22H22V20H15A1,1 0 0,0 14,19H13V15H11Z',
+  'card-account-details-outline': 'M22,3H2C0.91,3.04 0.04,3.91 0,5V19C0.04,20.09 0.91,20.96 2,21H22C23.09,20.96 23.96,20.09 24,19V5C23.96,3.91 23.09,3.04 22,3M22,19H2V5H22V19M14,17V15.75C14,14.09 10.66,13.25 9,13.25C7.34,13.25 4,14.09 4,15.75V17H14M9,7A2.5,2.5 0 0,0 6.5,9.5A2.5,2.5 0 0,0 9,12A2.5,2.5 0 0,0 11.5,9.5A2.5,2.5 0 0,0 9,7M14,7V8H20V7H14M14,9V10H20V9H14M14,11V12H18V11H14',
+  'chart-line': 'M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.75L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z',
+  'cog-transfer-outline': 'M15 17V14H18V12L22 15.5L18 19V17H15M17 18V21H14V23L10 19.5L14 16V18H17M12 8C9.79 8 8 9.8 8 12C8 13.91 9.35 15.54 11.21 15.92L16 11.86C15.93 9.71 14.16 8 12 8M12 14C10.9 14 10 13.11 10 12S10.9 10 12 10 14 10.9 14 12 13.11 14 12 14M21.66 8.73L19.66 5.27C19.54 5.05 19.28 4.96 19.05 5.05L16.56 6.05C16.05 5.64 15.5 5.31 14.87 5.05L14.5 2.42C14.46 2.18 14.25 2 14 2H10C9.75 2 9.54 2.18 9.5 2.42L9.13 5.07C8.5 5.33 7.96 5.66 7.44 6.07L5 5.05C4.77 4.96 4.5 5.05 4.39 5.27L2.39 8.73C2.26 8.94 2.31 9.22 2.5 9.37L4.57 11L4.5 12L4.57 13L2.46 14.63C2.26 14.78 2.21 15.06 2.34 15.27L4.34 18.73C4.45 19 4.74 19.11 5 19L5 19L7.5 18C7.74 18.19 8 18.37 8.26 18.53L9.91 17.13C9.14 16.8 8.46 16.31 7.91 15.68L5.5 16.68L4.73 15.38L6.8 13.8C6.4 12.63 6.4 11.37 6.8 10.2L4.69 8.65L5.44 7.35L7.85 8.35C8.63 7.45 9.68 6.82 10.85 6.57L11.25 4H12.75L13.12 6.62C14.29 6.86 15.34 7.5 16.12 8.39L18.53 7.39L19.28 8.69L17.2 10.2C17.29 10.46 17.36 10.73 17.4 11H19.4L21.5 9.37C21.72 9.23 21.78 8.95 21.66 8.73M12 8C9.79 8 8 9.8 8 12C8 13.91 9.35 15.54 11.21 15.92L16 11.86C15.93 9.71 14.16 8 12 8M12 14C10.9 14 10 13.11 10 12S10.9 10 12 10 14 10.9 14 12 13.11 14 12 14M12 8C9.79 8 8 9.8 8 12C8 13.91 9.35 15.54 11.21 15.92L16 11.86C15.93 9.71 14.16 8 12 8M12 14C10.9 14 10 13.11 10 12S10.9 10 12 10 14 10.9 14 12 13.11 14 12 14Z',
+  'palette-outline': 'M12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2C17.5,2 22,6 22,11A6,6 0 0,1 16,17H14.2C13.9,17 13.7,17.2 13.7,17.5C13.7,17.6 13.8,17.7 13.8,17.8C14.2,18.3 14.4,18.9 14.4,19.5C14.5,20.9 13.4,22 12,22M12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C12.3,20 12.5,19.8 12.5,19.5C12.5,19.3 12.4,19.2 12.4,19.1C12,18.6 11.8,18.1 11.8,17.5C11.8,16.1 12.9,15 14.3,15H16A4,4 0 0,0 20,11C20,7.1 16.4,4 12,4M6.5,10C7.3,10 8,10.7 8,11.5C8,12.3 7.3,13 6.5,13C5.7,13 5,12.3 5,11.5C5,10.7 5.7,10 6.5,10M9.5,6C10.3,6 11,6.7 11,7.5C11,8.3 10.3,9 9.5,9C8.7,9 8,8.3 8,7.5C8,6.7 8.7,6 9.5,6M14.5,6C15.3,6 16,6.7 16,7.5C16,8.3 15.3,9 14.5,9C13.7,9 13,8.3 13,7.5C13,6.7 13.7,6 14.5,6M17.5,10C18.3,10 19,10.7 19,11.5C19,12.3 18.3,13 17.5,13C16.7,13 16,12.3 16,11.5C16,10.7 16.7,10 17.5,10Z',
+  'puzzle-outline': 'M22,13.5C22,15.26 20.7,16.72 19,16.96V20A2,2 0 0,1 17,22H13.2V21.7A2.7,2.7 0 0,0 10.5,19C9,19 7.8,20.21 7.8,21.7V22H4A2,2 0 0,1 2,20V16.2H2.3C3.79,16.2 5,15 5,13.5C5,12 3.79,10.8 2.3,10.8H2V7A2,2 0 0,1 4,5H7.04C7.28,3.3 8.74,2 10.5,2C12.26,2 13.72,3.3 13.96,5H17A2,2 0 0,1 19,7V10.04C20.7,10.28 22,11.74 22,13.5M17,15H18.5A1.5,1.5 0 0,0 20,13.5A1.5,1.5 0 0,0 18.5,12H17V7H12V5.5A1.5,1.5 0 0,0 10.5,4A1.5,1.5 0 0,0 9,5.5V7H4V9.12C5.76,9.8 7,11.5 7,13.5C7,15.5 5.75,17.2 4,17.88V20H6.12C6.8,18.25 8.5,17 10.5,17C12.5,17 14.2,18.25 14.88,20H17V15Z',
+  'script-text-outline': 'M15,20A1,1 0 0,0 16,19V4H8A1,1 0 0,0 7,5V16H5V5A3,3 0 0,1 8,2H19A3,3 0 0,1 22,5V6H20V5A1,1 0 0,0 19,4A1,1 0 0,0 18,5V9L18,19A3,3 0 0,1 15,22H5A3,3 0 0,1 2,19V18H13A2,2 0 0,0 15,20M9,6H14V8H9V6M9,10H14V12H9V10M9,14H14V16H9V14Z',
+  'transit-connection-variant': 'M18,11H14.82C14.4,9.84 13.3,9 12,9C10.7,9 9.6,9.84 9.18,11H6C5.67,11 4,10.9 4,9V8C4,6.17 5.54,6 6,6H16.18C16.6,7.16 17.7,8 19,8A3,3 0 0,0 22,5A3,3 0 0,0 19,2C17.7,2 16.6,2.84 16.18,4H6C4.39,4 2,5.06 2,8V9C2,11.94 4.39,13 6,13H9.18C9.6,14.16 10.7,15 12,15C13.3,15 14.4,14.16 14.82,13H18C18.33,13 20,13.1 20,15V16C20,17.83 18.46,18 18,18H7.82C7.4,16.84 6.3,16 5,16A3,3 0 0,0 2,19A3,3 0 0,0 5,22C6.3,22 7.4,21.16 7.82,20H18C19.61,20 22,18.93 22,16V15C22,12.07 19.61,11 18,11M19,4A1,1 0 0,1 20,5A1,1 0 0,1 19,6A1,1 0 0,1 18,5A1,1 0 0,1 19,4M5,20A1,1 0 0,1 4,19A1,1 0 0,1 5,18A1,1 0 0,1 6,19A1,1 0 0,1 5,20Z',
+  'translate': 'M12.87,15.07L10.33,12.56L10.36,12.53C12.1,10.59 13.34,8.36 14.07,6H17V4H10V2H8V4H1V6H12.17C11.5,7.92 10.44,9.75 9,11.35C8.07,10.32 7.3,9.19 6.69,8H4.69C5.42,9.63 6.42,11.17 7.67,12.56L2.58,17.58L4,19L9,14L12.11,17.11L12.87,15.07M18.5,10H16.5L12,22H14L15.12,19H19.87L21,22H23L18.5,10M15.88,17L17.5,12.67L19.12,17H15.88Z',
+  'view-dashboard-outline': 'M19,5V7H15V5H19M9,5V11H5V5H9M19,13V19H15V13H19M9,17V19H5V17H9M21,3H13V9H21V3M11,3H3V13H11V3M21,11H13V21H21V11M11,15H3V21H11V15Z',
+  'wrench-outline': 'M22.61,19L13.53,9.91C14.46,7.57 14,4.81 12.09,2.91C9.79,0.61 6.21,0.4 3.66,2.26L7.5,6.11L6.08,7.5L2.25,3.69C0.39,6.23 0.6,9.82 2.9,12.11C4.76,13.97 7.47,14.46 9.79,13.59L18.9,22.7C19.29,23.09 19.92,23.09 20.31,22.7L22.61,20.4C23,20 23,19.39 22.61,19M19.61,20.59L10.15,11.13C9.54,11.58 8.86,11.85 8.15,11.95C6.79,12.15 5.36,11.74 4.32,10.7C3.37,9.76 2.93,8.5 3,7.26L6.09,10.35L10.33,6.11L7.24,3C8.5,2.95 9.73,3.39 10.68,4.33C11.76,5.41 12.17,6.9 11.92,8.29C11.8,9 11.5,9.66 11.04,10.25L20.5,19.7L19.61,20.59Z',
+  'zip-box-outline': 'M12 17V15H14V17H12M14 13V11H12V13H14M14 9V7H12V9H14M10 11H12V9H10V11M10 15H12V13H10V15M21 5V19C21 20.1 20.1 21 19 21H5C3.9 21 3 20.1 3 19V5C3 3.9 3.9 3 5 3H19C20.1 3 21 3.9 21 5M19 5H12V7H10V5H5V19H19V5Z',
+};
+
+const svgMask = (d) => `url("data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='${d}'/></svg>`)}")`;
+
+// A boolean as one tile. Kept a real button with role=switch so it is operable from the keyboard
+// and announced as a toggle, which a styled div would not be.
+function configTile(o, d, save) {
+  const canEdit = o.editable && d.writable && d.editableHere;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'cfgtile';
+  b.setAttribute('role', 'switch');
+  b.setAttribute('aria-checked', String(Boolean(o.value)));
+  b.disabled = !canEdit;
+  // The full sentence and the key, which the caption no longer has room for.
+  b.title = `${o.label}\n${o.key} — ${o.value ? 'on' : 'off'}`;
+  const path = TILE_ICONS[o.icon];
+  if (path) {
+    const i = document.createElement('i');
+    i.style.setProperty('--i', svgMask(path));
+    b.appendChild(i);
+  }
+  const cap = document.createElement('span');
+  cap.textContent = o.short || o.label;
+  b.appendChild(cap);
+  b.onclick = () => {
+    if (b.disabled) return;
+    const next = b.getAttribute('aria-checked') !== 'true';
+    b.disabled = true;
+    save(o, 'adopt', next);
+  };
+  return b;
+}
+
 // One option, drawn according to its type.
 //
 // A boolean is a checkbox with a sentence next to it, not a row in a table whose second column
@@ -2419,8 +2494,20 @@ async function renderConfig() {
 
     // Overrides are rules, not settings: four config keys hold them but nobody thinks in config
     // keys, so that section gets its own list-and-wizard rather than four rows saying "2 rules".
-    if (sec.id === 'overrides') renderOverrides(box, d, save, say);
-    else for (const o of opts) box.appendChild(configRow(o, d, save, say));
+    if (sec.id === 'overrides') {
+      renderOverrides(box, d, save, say);
+    } else {
+      // Booleans first, as one grid; everything with a value to type keeps its row.
+      const bools = opts.filter((o) => o.type === 'bool');
+      const rest = opts.filter((o) => o.type !== 'bool');
+      if (bools.length) {
+        const grid = document.createElement('div');
+        grid.className = 'cfgtiles';
+        for (const o of bools) grid.appendChild(configTile(o, d, save));
+        box.appendChild(grid);
+      }
+      for (const o of rest) box.appendChild(configRow(o, d, save, say));
+    }
     host.appendChild(box);
   }
 
