@@ -106,7 +106,7 @@ export const SECTIONS = [
 export const OPTIONS = {
   // Trimming
   trim_entities: { type: 'bool', section: 'trim', label: 'Entity websocket', short: 'Entities', icon: 'transit-connection-variant' },
-  by_dashboard: { type: 'bool', section: 'trim', label: 'Only the dashboard being viewed', short: 'Per dashboard', icon: 'view-dashboard-outline' },
+  by_dashboard: { type: 'bool', section: 'trim', label: 'Only the dashboard being viewed', short: 'By dashboard', icon: 'view-dashboard-outline' },
   trim_registries: { type: 'bool', section: 'trim', label: 'Entity, device and area registries', short: 'Registries', icon: 'card-account-details-outline' },
   trim_resources: { type: 'bool', section: 'trim', label: 'Custom cards', short: 'Custom cards', icon: 'puzzle-outline' },
   trim_extra_modules: { type: 'bool', section: 'trim', label: 'Modules injected into the page', short: 'Injected JS', icon: 'script-text-outline' },

@@ -1479,8 +1479,14 @@ async function tick() {
   // way: green vs muted already says it, and the full name and state stay on hover.
   // `compress_websocket` is the only thing here that compresses, so the second word earns
   // nothing on a line this tight.
-  const SHORT = { compress_websocket: 'compress' };
-  const short = (k) => SHORT[k] || k.replace(/^trim_/, '').replace(/_/g, ' ');
+  // The pill and the Config tile must say the same words, so they read the same word: the
+  // catalogue's `short`. They used to be two lists — a regex on the key here, a caption there —
+  // and six of the twelve had already drifted apart ("resources" vs "Custom cards", "compress"
+  // vs "Compression"). One source cannot disagree with itself.
+  //
+  // The regex stays as the fallback for a console served OFF Ingress, where /config.json is
+  // refused and there is no catalogue to read. That is today's wording, so nothing regresses.
+  const short = (k) => OPTION_SHORT[k] || k.replace(/^trim_/, '').replace(/_/g, ' ');
   const bools = Object.entries(opts).filter(([, v]) => typeof v === 'boolean');
   const pillFor = (k, v) => {
     const pill = document.createElement('span');
@@ -2273,6 +2279,10 @@ function chipList(o, d, save, say) {
   return wrap;
 }
 
+// key -> the catalogue's short caption, filled in when /config.json loads. Empty until then, and
+// permanently empty off Ingress, which is what the fallback in `short()` is for.
+const OPTION_SHORT = {};
+
 // MDI geometry for the boolean tiles, keyed by the icon NAME the server sends. The catalogue in
 // config_store.mjs names the glyph; the path lives here, so the server keeps talking in `mdi:x`
 // terms and the view owns the drawing.
@@ -2472,6 +2482,9 @@ async function renderConfig() {
     msg.textContent = 'Viewing on the app\'s own port. Changes are only accepted through Home Assistant — '
       + 'open the panel from the Home Assistant sidebar to edit.';
   }
+
+  // One source for the option wording — see `short()`, which the status pills use.
+  for (const o of d.options) if (o.short) OPTION_SHORT[o.key] = o.short;
 
   const host = $('cfgsections');
   host.textContent = '';

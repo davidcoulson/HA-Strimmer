@@ -374,3 +374,28 @@ test('by_dashboard is grouped with trimming despite its name', async () => {
   assert.equal(OPTIONS.mqtt_sensors.section, 'monitoring');
   assert.equal(OPTIONS.compress_websocket.section, 'websocket');
 });
+
+// The Config tile and the status pill must say the same words. They used to be two lists — a
+// regex on the key in panel.html, a caption in the catalogue — and six of the twelve had already
+// drifted ("resources" vs "Custom cards", "compress" vs "Compression"). The pill now reads the
+// catalogue, so this guards the remaining assumption: that every boolean HAS a caption to read.
+test('every boolean option carries a short caption and an icon for its tile', () => {
+  const src = fs.readFileSync(path.join(DIR, '..', 'config_store.mjs'), 'utf8');
+  const bools = [...src.matchAll(/^ {2}(\w+): \{ type: 'bool'[^}]*\}/gm)];
+  assert.ok(bools.length >= 12, `expected the boolean options, found ${bools.length}`);
+  for (const [decl, key] of bools.map((m) => [m[0], m[1]])) {
+    assert.match(decl, /short: '[^']+'/, `${key} needs a short caption for its tile`);
+    assert.match(decl, /icon: '[a-z0-9-]+'/, `${key} needs an MDI icon name for its tile`);
+  }
+});
+
+// A caption the panel has no geometry for renders as a tile with a blank space where the glyph
+// should be — which looks like a rendering fault rather than a missing table entry.
+test('every icon the catalogue names has a path in the panel', () => {
+  const src = fs.readFileSync(path.join(DIR, '..', 'config_store.mjs'), 'utf8');
+  const panel = fs.readFileSync(path.join(DIR, '..', 'panel.html'), 'utf8');
+  const table = panel.slice(panel.indexOf('const TILE_ICONS = {'));
+  for (const m of src.matchAll(/icon: '([a-z0-9-]+)'/g)) {
+    assert.ok(table.includes(`'${m[1]}':`), `panel.html has no path for mdi:${m[1]}`);
+  }
+});

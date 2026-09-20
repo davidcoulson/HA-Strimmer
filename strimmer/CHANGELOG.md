@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.09.20.3 — 2026-09-20
+
+**The status pill and the Config tile now read the same word, because they read the same source.**
+The tile said "Per dashboard" where the pill said "by dashboard" — and that was not the only one.
+Checking the rest found **six of the twelve had already drifted**: "resources" against "Custom
+cards", "extra modules" against "Injected JS", "compress" against "Compression", and so on.
+
+Two hand-maintained lists that have to agree are a list that will disagree — this file records the
+same shape of fault in `statsExtras`, where an options list silently fell behind the options. So
+the fix is not to re-sync them: the pill now reads the catalogue's `short` caption, the same field
+the tile renders, and one source cannot contradict itself.
+
+The regex on the key stays as the fallback for a console served off Ingress, where `/config.json`
+is refused and there is no catalogue to read. That is today's wording exactly, so nothing
+regresses where the catalogue is unavailable.
+
+Two tests come with it: every boolean carries a caption and an icon name, and every icon the
+catalogue names has a path in the panel — a name with no geometry renders as a blank space where
+the glyph should be, which reads as a rendering fault rather than a missing table entry.
+
+---
 ## 2026.09.20.2 — 2026-09-20
 
 **The Config tab's switches are a grid of icon tiles**, the shape Sextant's edit toolbar uses: a
