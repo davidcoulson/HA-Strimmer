@@ -249,12 +249,24 @@ sensor:
 
 ### The Config tab
 
-Options can be changed from the console instead of the add-on's Configuration tab, grouped into
-sections — Trimming, Dashboards and entities, Custom cards, Overrides, Device discovery,
-Monitoring, Websocket, Panel status API. Booleans are switches, lists are their items with a
-remove button and an add box, and the override rules get a list and a wizard rather than a YAML
-block. Every row shows what the option is actually resolved to, so an option nothing has set
-still reads as its default rather than as blank.
+Options can be changed from the console instead of the add-on's Configuration tab.
+
+**Everything that is on or off is one grid at the top, headed Strimmers** — twelve icon tiles,
+filled blue for on and outlined for off, so "what is this app currently doing to my dashboards"
+is a glance rather than a scroll. A tile's caption has room for about a word; its tooltip carries
+the full sentence and the option's config key. Three of the twelve — mDNS, MQTT and compression —
+are not trims; they are in the grid because the question the grid answers is *what is switched
+on*, not *what is cut*.
+
+**Everything that holds a value keeps its section below**: Dashboards and entities, Custom cards,
+Overrides, Device discovery, Monitoring, Panel status API. Lists are their items with a remove
+button and an add box, and the override rules get a list and a wizard rather than a YAML block.
+Every row shows what the option actually resolved to, so an option nothing has set reads as its
+default rather than as blank.
+
+There is no *Trimming* or *Websocket* heading, which the sections list in older versions of this
+page had: both held nothing but switches, and a section with nothing left to set is skipped rather
+than drawn over empty space. Their options are all in the grid.
 
 This exists because the add-on's options have outgrown what a Supervisor schema can express:
 nested groups do not render in the Configuration tab at all, sub-options cannot carry

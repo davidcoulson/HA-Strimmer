@@ -121,6 +121,14 @@ by importing its mechanism — the tokens are defined locally, and `<ha-icon ico
 the brand mark is an inlined MDI path filled with `currentColor`, which is what `<ha-icon>` renders
 to anyway. Do not "fix" that to a real `<ha-icon>`; it would render nothing.
 
+**Config tab shape, and why:** every boolean is hoisted out of its section into one tile grid at
+the top headed **Strimmers** (accent-filled = on — "blue means on in this language"), and only
+options that hold a VALUE stay in their sections. A tile is right for on/off and wrong for text, so
+do not tile the lists. A section left with nothing but hoisted booleans is SKIPPED rather than
+drawn empty, which is why `SECTIONS` still declares Trimming and Websocket but the page shows
+neither. Each boolean's wording comes from `OPTIONS[key].short` — one source, so the status pill
+and the tile cannot drift (six of twelve had, before `.3`).
+
 ## Files
 
 - `strimmer/ha_ws_trim_proxy.mjs` — the proxy (HTTP passthrough + ws intercept + allowlist precompute).
