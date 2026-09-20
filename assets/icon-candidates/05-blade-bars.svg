@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Strimmer - grass blades as signal bars, trimmed to a level</title>
+  <defs><clipPath id="keep"><rect x="0" y="54" width="128" height="74"/></clipPath></defs>
+  <rect width="128" height="128" rx="24" fill="#1b2440"/>
+  <!-- ghosts of what was trimmed -->
+  <g fill="#7cb342" fill-opacity="0.3">
+    <path d="M70 106 V50 C70 40 84 32 90 28 V106 Z"/>
+    <path d="M96 106 V34 C96 24 108 16 116 12 V106 Z"/>
+  </g>
+  <!-- bars -->
+  <path d="M18 106 V92 C18 84 32 78 38 74 V106 Z" fill="#a5d66f"/>
+  <path d="M44 106 V76 C44 68 58 60 64 56 V106 Z" fill="#7cb342"/>
+  <g clip-path="url(#keep)">
+    <path d="M70 106 V50 C70 40 84 32 90 28 V106 Z" fill="#43a047"/>
+    <path d="M96 106 V34 C96 24 108 16 116 12 V106 Z" fill="#43a047"/>
+  </g>
+  <line x1="12" y1="50" x2="120" y2="50" stroke="#f1f8e9" stroke-width="4" stroke-linecap="round" stroke-dasharray="9 8"/>
+  <rect x="12" y="108" width="108" height="5" rx="2.5" fill="#f1f8e9" fill-opacity="0.35"/>
+</svg>

@@ -29,7 +29,7 @@ ARG BUILD_FROM=node:26-alpine
 FROM ${BUILD_FROM}
 
 # Points the GHCR package at this repo and its README.
-LABEL org.opencontainers.image.source="https://github.com/davidcoulson/HA-Websocket-Stripper" \
+LABEL org.opencontainers.image.source="https://github.com/davidcoulson/HA-Strimmer" \
       org.opencontainers.image.description="Serves your real Home Assistant dashboards but trims the entity websocket to only what each dashboard uses." \
       org.opencontainers.image.licenses="MIT"
 

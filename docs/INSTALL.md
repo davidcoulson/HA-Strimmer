@@ -17,7 +17,7 @@ For *why* it exists and what it measures, see the [README](../README.md).
 ## 🛠️ Set it up (about 5 minutes)
 
 1. HA → **Settings → Apps → App store → ⋮ → Repositories**, add:
-   `https://github.com/davidcoulson/HA-Websocket-Stripper`  <!-- fork -->
+   `https://github.com/davidcoulson/HA-Strimmer`  <!-- fork -->
 2. Install **Strimmer**, open **Configuration**, and set `dashboards` to your own
    dashboards' `url_path` values (Settings → Dashboards). It ships **empty** — until you set
    it, the app refuses `/api/websocket` and says so in the log, rather than silently

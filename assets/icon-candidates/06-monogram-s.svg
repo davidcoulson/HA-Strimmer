@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Strimmer - S monogram: a trimmer line that ends as a blade of grass</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a9440"/><stop offset="1" stop-color="#256b2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="24" fill="url(#bg)"/>
+  <!-- S: flung from the hub (bottom left), tapering to a blade tip (top right) -->
+  <path d="M32.5 92.8 L34.2 97.0 L37.4 101.4 L41.4 104.8 L45.8 107.3 L50.6 109.1 L55.6 110.2 L60.8 110.8 L66.0 110.7 L71.2 110.1 L76.3 108.8 L81.3 106.8 L85.8 104.0 L89.9 100.3 L93.2 95.6 L95.3 90.1 L96.0 84.0 L95.2 77.8 L92.8 72.2 L89.3 67.7 L85.1 64.2 L80.6 61.5 L76.0 59.3 L71.3 57.4 L66.7 55.7 L62.3 54.1 L58.2 52.6 L54.7 51.0 L51.9 49.5 L49.9 48.0 L48.8 46.7 L48.2 45.6 L48.0 43.9 L48.2 40.9 L48.9 38.4 L50.0 36.1 L51.6 34.0 L53.8 32.0 L56.6 30.2 L59.9 28.6 L63.6 27.3 L67.7 26.3 L72.1 25.6 L76.7 25.3 L81.4 25.3 L86.1 25.8 L90.9 26.7 L95.5 28.1 L99.8 30.2 L100.2 29.8 L96.6 26.4 L92.5 23.2 L87.9 20.4 L83.0 18.2 L77.8 16.6 L72.4 15.5 L66.9 15.0 L61.4 15.2 L56.0 16.1 L50.8 17.6 L46.0 20.0 L41.5 23.2 L37.6 27.2 L34.6 32.2 L32.7 37.8 L32.0 44.1 L32.9 50.1 L35.4 55.4 L39.0 59.6 L43.1 62.8 L47.6 65.3 L52.1 67.4 L56.8 69.2 L61.3 70.8 L65.6 72.3 L69.6 73.9 L73.1 75.6 L75.9 77.2 L77.8 78.9 L79.1 80.4 L79.7 81.9 L80.0 84.0 L79.7 86.3 L79.0 88.1 L77.9 89.7 L76.3 91.2 L74.1 92.5 L71.4 93.6 L68.3 94.4 L65.0 94.8 L61.6 94.8 L58.2 94.4 L55.2 93.8 L52.5 92.8 L50.5 91.6 L49.0 90.4 L48.2 89.3 L47.5 87.2 Z" fill="#f1f8e9" stroke="#f1f8e9" stroke-width="1" stroke-linejoin="round"/>
+  <circle cx="40" cy="90" r="13" fill="#ffd54f"/>
+  <circle cx="40" cy="90" r="4.5" fill="#256b2a"/>
+</svg>

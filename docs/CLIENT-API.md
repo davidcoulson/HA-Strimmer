@@ -310,4 +310,4 @@ async function strimmerStatus(haBaseUrl, haAccessToken) {
 ---
 
 Questions and schema additions welcome via an issue on
-[davidcoulson/HA-Websocket-Stripper](https://github.com/davidcoulson/HA-Websocket-Stripper).
+[davidcoulson/HA-Strimmer](https://github.com/davidcoulson/HA-Strimmer).

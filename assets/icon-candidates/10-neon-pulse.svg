@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Strimmer - neon pulse, peaks mown flat</title>
+  <rect width="128" height="128" rx="24" fill="#0a0f0d"/>
+  <rect x="1.5" y="1.5" width="125" height="125" rx="22.500" fill="none" stroke="#39ff14" stroke-opacity="0.22" stroke-width="3"/>
+  <!-- the peaks that were trimmed off -->
+  <g fill="none" stroke="#39ff14" stroke-opacity="0.32" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M76 50 L82 20 L88 50"/>
+    <path d="M100 50 L106 28 L112 50"/>
+  </g>
+  <!-- glow underlay, then the line -->
+  <path d="M8 76 H19 L28 30 L39 108 L50 18 L60 100 L65 76 H70 L75 54 H89 L94 98 L99 54 H113 L117 76 H121" fill="none" stroke="#39ff14" stroke-opacity="0.18" stroke-width="15" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M8 76 H19 L28 30 L39 108 L50 18 L60 100 L65 76 H70 L75 54 H89 L94 98 L99 54 H113 L117 76 H121" fill="none" stroke="#39ff14" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

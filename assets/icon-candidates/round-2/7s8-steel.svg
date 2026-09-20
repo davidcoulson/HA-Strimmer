@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Strimmer - sliced blade, steel blue, mid-green blades</title>
+  <defs>
+    <clipPath id="tile"><rect width="128" height="128" rx="24"/></clipPath>
+    <clipPath id="lower"><path d="M0 128 H128 V50 L0 82 Z"/></clipPath>
+    <clipPath id="upper"><path d="M0 0 H128 V42 L0 74 Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="128" height="128" fill="#6e8ba3"/>
+    <!-- two shorter blades: below the line, so the strimmer leaves them alone -->
+    <path d="M36 128 C34 112 27 100 13 91 C17 104 17 116 16 128 Z" fill="#2e7d32"/>
+    <path d="M88 128 C89 108 96 91 111 77 C105 95 105 112 107 128 Z" fill="#245f28"/>
+    <g clip-path="url(#lower)">
+      <path d="M38 128 C40 86 54 42 92 10 C82 50 80 88 82 128 Z" fill="#1b5e20"/>
+      <path d="M38 128 C40 86 54 42 92 10 C72 46 62 88 60 128 Z" fill="#2e7d32"/>
+    </g>
+    <g transform="translate(14 -2) rotate(16 78 50)">
+      <g clip-path="url(#upper)">
+        <path d="M38 128 C40 86 54 42 92 10 C82 50 80 88 82 128 Z" fill="#1b5e20"/>
+        <path d="M38 128 C40 86 54 42 92 10 C72 46 62 88 60 128 Z" fill="#2e7d32"/>
+      </g>
+    </g>
+    <line x1="22" y1="80" x2="112" y2="57.5" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

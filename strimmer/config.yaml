@@ -7,7 +7,7 @@ description: Serves your real HA dashboards but trims the entity websocket to on
 # point at the code that is actually installed — the version, changelog and docs shown there
 # should describe what is running. Upstream is credited in the README instead, which is the
 # right place for attribution and the wrong place for a "what am I running?" link.
-url: https://github.com/davidcoulson/HA-Websocket-Stripper
+url: https://github.com/davidcoulson/HA-Strimmer
 # armv7 is deliberately absent. Home Assistant deprecated 32-bit ARM in 2025.6 and dropped it
 # after 2025.12, and `node:24-alpine` publishes no arm/v7 image at all — so leaving it listed
 # would advertise an install that cannot build. amd64 and aarch64 are what both the base image

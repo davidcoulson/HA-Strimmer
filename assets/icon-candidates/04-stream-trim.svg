@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Strimmer - stream in, trimmed stream out</title>
+  <rect width="128" height="128" rx="24" fill="#0d3b40"/>
+  <!-- the cut -->
+  <line x1="71" y1="16" x2="57" y2="112" stroke="#f1f8e9" stroke-width="8" stroke-linecap="round"/>
+  <g stroke-linecap="round" stroke-width="8" fill="none">
+    <!-- dropped at the cut -->
+    <g stroke="#4f9397">
+      <line x1="16" y1="32" x2="56" y2="32"/>
+      <line x1="16" y1="64" x2="51" y2="64"/>
+      <line x1="16" y1="96" x2="46" y2="96"/>
+    </g>
+    <!-- kept: these run straight through -->
+    <g stroke="#a5d66f">
+      <line x1="16" y1="48" x2="112" y2="48"/>
+      <line x1="16" y1="80" x2="112" y2="80"/>
+    </g>
+  </g>
+</svg>

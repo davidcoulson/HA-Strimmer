@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Strimmer - grass with a clean cut line</title>
+  <defs>
+    <clipPath id="tile"><rect width="128" height="128" rx="24"/></clipPath>
+    <clipPath id="mown"><rect x="62" y="76" width="66" height="52"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="128" height="128" fill="#2b3036"/>
+    <!-- uncut, left -->
+    <path d="M6 128 C8 92 12 56 10 26 C22 56 25 94 25 128 Z" fill="#7cb342"/>
+    <path d="M20 128 C22 96 30 66 40 44 C41 72 40 100 39 128 Z" fill="#43a047"/>
+    <path d="M34 128 C34 90 38 50 50 16 C54 54 54 92 53 128 Z" fill="#a5d66f"/>
+    <path d="M48 128 C49 100 47 78 43 58 C58 78 64 102 66 128 Z" fill="#43a047"/>
+    <!-- mown, right: same kind of blades, clipped level -->
+    <g clip-path="url(#mown)">
+      <path d="M62 128 C64 92 68 56 66 30 C78 56 81 94 81 128 Z" fill="#7cb342"/>
+      <path d="M76 128 C78 96 84 60 94 36 C96 72 95 100 95 128 Z" fill="#a5d66f"/>
+      <path d="M90 128 C90 90 96 56 106 28 C110 54 110 92 109 128 Z" fill="#43a047"/>
+      <path d="M104 128 C105 100 108 70 118 44 C124 78 124 102 124 128 Z" fill="#7cb342"/>
+    </g>
+    <!-- the cut -->
+    <line x1="8" y1="74" x2="120" y2="74" stroke="#ffd54f" stroke-width="5" stroke-linecap="round" stroke-dasharray="11 9"/>
+  </g>
+</svg>
