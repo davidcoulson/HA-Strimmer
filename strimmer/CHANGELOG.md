@@ -2,8 +2,14 @@
 
 ## 2026.09.19.6 — 2026-09-19
 
-**One client could block every other panel with a 109KB frame.** `ws` defaults a server to a
-100MB `maxPayload`, and every text frame a browser sends is `JSON.parse`d on the one event loop
+**One client could block every other panel with a 109KB frame.** Found by asking the right
+question rather than by reading the code: *"is there a way to improve the internal threading so
+one bad client doesn't block the whole thing?"*, put about the regex guard below — where the
+honest answer is that a deadline only bounds a stall. Asked of the proxy in general, it turned
+over something exploitable that no test and no log line was ever going to surface.
+
+`ws` defaults a server to a 100MB `maxPayload`, and every text frame a browser sends is
+`JSON.parse`d on the one event loop
 that relays every other connection. This leg negotiates permessage-deflate, and `ws` inflates up
 to `maxPayload` before anything can inspect the result — so it is an amplification, not an upload:
 
