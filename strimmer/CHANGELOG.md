@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.09.20.5 — 2026-09-20
+
+**The switch grid is headed "Strimmers".** It was "What this app is doing", which was a sentence
+doing a heading's job and sat oddly beside the plain noun phrases under it — Dashboards and
+entities, Custom cards, Overrides. The grid's own line, *Every on/off setting. Blue is on.*, is
+what actually explains it, so the heading is free to be the product's word for the thing.
+
+Worth knowing: three of the twelve — mDNS, MQTT, compression — do not trim anything, so the
+heading is a shade wider than it is literally true. Splitting them back out would undo the single
+grid, which is the point of it, so they stay.
+
+---
 ## 2026.09.20.4 — 2026-09-20
 
 **All twelve switches are one grid at the top, under "What this app is doing".** Nine were under
