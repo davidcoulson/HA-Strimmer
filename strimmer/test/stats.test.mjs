@@ -1127,3 +1127,24 @@ describe('recently-closed sessions', () => {
     stats.reset();
   });
 });
+
+// The measurement docs/CLUSTERING.md turns on: whether one client can stall the others is a
+// question about the event loop, and it should be answered with a number rather than an opinion.
+describe('event-loop delay', () => {
+  it('reads ~0 on an idle loop and catches a real stall', async () => {
+    await new Promise((r) => setTimeout(r, 120));
+    const idle = stats.snapshot({}).loopDelayMs;
+    assert.ok(idle, 'the snapshot must carry it');
+    assert.equal(idle.since, 'boot', 'not reset per read — a reading must not depend on who polled last');
+    // The libuv histogram records the whole inter-tick interval, so the resolution is subtracted;
+    // without that an idle process reports its own sampling period as delay.
+    assert.ok(idle.max < 100, `idle should be small, got ${idle.max}ms`);
+
+    const t = Date.now();
+    while (Date.now() - t < 200) { /* block the loop on purpose */ }
+    await new Promise((r) => setTimeout(r, 120));
+    const after = stats.snapshot({}).loopDelayMs;
+    assert.ok(after.max > 100, `a 200ms block must show up, got ${after.max}ms`);
+    assert.ok(after.max >= after.p99 && after.p99 >= after.p50, 'percentiles must be ordered');
+  });
+});

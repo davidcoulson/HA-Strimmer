@@ -59,6 +59,14 @@ const SENSORS = [
   // the long-term signature of churn.
   { id: 'cache_hit_rate',     name: 'Registry cache hit rate', unit: '%',       icon: 'mdi:speedometer', sc: 'measurement' },
 
+  // Worst event-loop stall since boot. Everything this proxy does to a frame happens on that one
+  // loop, so this is the honest answer to "can one client hold up the others" — and the figure
+  // docs/CLUSTERING.md turns on: single-digit milliseconds means a second process would buy
+  // nothing. It belongs in long-term statistics rather than only the console, because the stall
+  // worth catching is the one that happened at 3am a fortnight ago.
+  { id: 'loop_delay_p99_ms',  name: 'Event loop delay (p99)', unit: 'ms',       icon: 'mdi:timer-sand', sc: 'measurement' },
+  { id: 'loop_delay_max_ms',  name: 'Event loop delay (max)', unit: 'ms',       icon: 'mdi:timer-alert-outline', sc: 'measurement' },
+
   // --- the one that is about the deployment rather than the traffic ----------------------
   { id: 'cert_days_left',     name: 'Certificate days left',  unit: 'd',        icon: 'mdi:certificate', sc: 'measurement' },
 ];
@@ -123,6 +131,8 @@ export function buildPayload(snap, extra = {}) {
     rebuilds_total: extra.rebuilds ?? 0,
     cache_hits_total: snap?.registryCache?.hits ?? 0,
     cache_hit_rate: snap?.registryCache?.hitRatePct ?? null,
+    loop_delay_p99_ms: snap?.loopDelayMs?.p99 ?? null,
+    loop_delay_max_ms: snap?.loopDelayMs?.max ?? null,
 
     cert_days_left: extra.certDaysLeft ?? null,
   };

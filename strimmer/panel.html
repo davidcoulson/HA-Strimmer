@@ -1444,7 +1444,12 @@ async function tick() {
   sub.textContent = 'v' + (s.version || '?') + ' · up ' + dur(s.uptimeSec) + ' · ';
   // Runtime facts belong with the raw-data footer, not in the headline next to what is
   // happening now. They are still on the page for the "did the rebuild take" check.
-  $('runtime').textContent = (s.node ? ' · node ' + s.node : '') + (s.os ? ' · ' + s.os : '');
+  // Event-loop delay sits with the runtime facts rather than in a tile: it is a health signal
+  // read occasionally, not a number anybody watches. `max` is the one that matters — the worst
+  // stall since boot is what says whether one client can hold up the others.
+  const ld = s.loopDelayMs;
+  $('runtime').textContent = (s.node ? ' · node ' + s.node : '') + (s.os ? ' · ' + s.os : '')
+    + (ld ? ` · event loop p99 ${ld.p99}ms, worst ${ld.max}ms` : '');
   // Almost every boolean here is a trim_*, so the prefix is the same on nearly every pill and
   // carries no information — it just made the row twice as wide. The state word went the same
   // way: green vs muted already says it, and the full name and state stay on hover.

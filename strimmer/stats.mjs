@@ -18,6 +18,7 @@
 // The only import this module has, and only for the one-shot OS read below. Everything else
 // here is a pure counter on purpose — no I/O, no clock beyond Date.now(), nothing to mock.
 import fs from 'node:fs';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 const MAX_CATS = 64;          // guards the category map against an unbounded key space
 
@@ -363,6 +364,14 @@ export function snapshot(extra = {}) {
     // socket is denied. After a base-image change, "did the rebuild actually take?" was
     // answerable only by trusting that it did. Now it is answerable by reading it.
     node: process.version,
+    // How long the event loop was blocked — the number that says whether this app needs to be
+    // more than one process, instead of anybody guessing. Everything this proxy does to a frame
+    // happens on this loop, so a climbing p99 here IS "one client can stall the others",
+    // measured rather than argued. See docs/CLUSTERING.md, which turns on this figure.
+    //
+    // `monitorEventLoopDelay` is a libuv histogram sampled in C, not a JS timer, so it costs
+    // effectively nothing and cannot itself add the lag it reports.
+    loopDelayMs: loopDelay(),
     // The OS underneath, for the same reason and with the same caveat as `node` above:
     // `node:26-alpine` is a FLOATING tag, so the Alpine release moves without anything in this
     // repo changing. Read once at boot (see OS_RELEASE) rather than per request — it cannot
@@ -490,6 +499,30 @@ export function pathsSnapshot(flows = byFlow) {
     byHost: marginal(2),
   };
 }
+
+// ---- event-loop delay ----
+//
+// Resolution is 20ms rather than the default 10: this is a health signal read once per snapshot,
+// not a profile, and a coarser bucket is cheaper. `.unref()` so it never holds the process open.
+//
+// The histogram is NOT reset between snapshots. Reset-per-read would make every reading depend on
+// when the last one happened — a console open in a browser polling every few seconds would report
+// a different p99 from a `rest:` sensor polling every minute, off the same process. Since boot is
+// one well-defined window, and `max` since boot is exactly the "what is the worst this has ever
+// been" question worth asking of a proxy.
+const LOOP_RES_MS = 20;
+const LOOP = monitorEventLoopDelay({ resolution: LOOP_RES_MS });
+LOOP.enable();
+LOOP.unref?.();
+// The histogram records the WHOLE interval between ticks, so a perfectly idle loop reads back
+// `resolution` — 20ms of "delay" that is not delay at all. Subtracting it is what makes an idle
+// process report 0 and a blocked one report how long it was blocked, which is the only reading
+// anyone can act on. Measured to confirm: idle 0.0ms, a deliberate 150ms block -> max 150.
+const loopDelay = () => {
+  const ms = (n) => Math.max(0, Math.round((n / 1e6 - LOOP_RES_MS) * 10) / 10);
+  return { mean: ms(LOOP.mean || 0), p50: ms(LOOP.percentile(50)), p99: ms(LOOP.percentile(99)),
+    max: ms(LOOP.max || 0), since: 'boot' };
+};
 
 // Test seam: the counters are module-level, so a test that wants a clean slate says so.
 export function reset() {

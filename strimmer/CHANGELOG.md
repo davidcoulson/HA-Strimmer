@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.09.19.8 — 2026-09-19
+
+**Event-loop delay is now measured and published.** Everything this proxy does to a frame happens
+on one event loop, so "can one client hold up the others" is a question about that loop — and it
+was being answered with opinions. It now reads as a number: mean, p50, p99 and the worst stall
+since boot, on the console beside the runtime facts and as two MQTT sensors, because the stall
+worth catching is the one that happened at 3am a fortnight ago.
+
+`monitorEventLoopDelay` is a libuv histogram sampled in C, not a JS timer, so it costs effectively
+nothing and cannot add the lag it reports. Two details that make the reading honest: the histogram
+records the WHOLE interval between ticks, so the sampling resolution is subtracted — otherwise an
+idle process reports 20ms of "delay" that is not delay — and it is never reset between reads, so a
+console polling every few seconds and a `rest:` sensor polling every minute cannot disagree about
+the same process.
+
+This is step 1 of `docs/CLUSTERING.md`, a written-up proposal for splitting Strimmer across
+processes. The short version of that document: **don't, yet.** Two findings decide its shape, both
+tested rather than assumed — a `SharedArrayBuffer` does not survive cluster IPC (it arrives as a
+plain object, so real shared memory needs a native dependency this project will not take), and
+`cluster` can pass sockets but not memory while `worker_threads` can share memory but not sockets.
+The design that resolves it needs no shared memory at all: route each client consistently to one
+worker and the caches that matter are already client-local. But at **0.12% CPU** there is nothing
+to parallelise, so the recommendation is to measure first and let this number decide — which is
+what this release adds.
+
+---
 ## 2026.09.19.7 — 2026-09-19
 
 **The console's brand mark is `mdi:grass`, the same glyph as the sidebar.** It was the app's own
