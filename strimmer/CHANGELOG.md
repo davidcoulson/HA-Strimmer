@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.09.19.7 — 2026-09-19
+
+**The console's brand mark is `mdi:grass`, the same glyph as the sidebar.** It was the app's own
+full-colour icon tile, inlined as a data URI — which is right for the Apps list and wrong at the
+left of a coloured header, where every other mark is a flat glyph in the bar's own colour.
+
+Sextant uses `<ha-icon icon="mdi:compass-rose">` in exactly this spot. That is a Home Assistant web
+component and only exists inside a **native** panel; this console is an Ingress iframe and has no
+access to it. So the MDI path is inlined and filled with `currentColor`, which is what `<ha-icon>`
+renders to anyway — same glyph, same 26px, same colour behaviour, no dependency on the frontend
+bundle. `icon.png` is untouched: the Apps-list tile is a different context and stays full-colour.
+
+---
 ## 2026.09.19.6 — 2026-09-19
 
 **One client could block every other panel with a 109KB frame.** Found by asking the right

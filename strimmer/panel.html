@@ -99,7 +99,8 @@
     background: var(--app-header-background-color); color: var(--app-header-text-color, #fff); }
   .brand { display: flex; align-items: center; gap: 8px; margin-right: 8px; color: inherit;
     text-decoration: none; flex: 0 0 auto; }
-  .brand img { width: 28px; height: 28px; display: block; border-radius: 6px; }
+  /* 26px to match Sextant's `--mdc-icon-size: 26px` on its own brand icon. */
+  .brand-mark { width: 26px; height: 26px; display: block; flex: 0 0 auto; fill: currentColor; }
   .brand-text { display: flex; flex-direction: column; line-height: 1.05; }
   .brand-name { font-weight: 600; font-size: 18px; }
   .brand-sub { font-size: 9px; letter-spacing: .04em; opacity: .75; text-transform: uppercase; }
@@ -403,7 +404,11 @@
        copy of it, so it cannot drift. -->
   <div class="topbar">
     <a class="brand" href="#" title="Overview" data-tab="overview">
-      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4IiB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCI+CiAgPHRpdGxlPlN0cmltbWVyIC0gc2xpY2VkIGJsYWRlLCBza3kgZ3JhZGllbnQsIGRhcmsgYmxhZGVzLCB3aGl0ZSBsaW5lPC90aXRsZT4KICA8ZGVmcz4KICAgIDxjbGlwUGF0aCBpZD0idGlsZSI+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIyNCIvPjwvY2xpcFBhdGg+CiAgICA8Y2xpcFBhdGggaWQ9Imxvd2VyIj48cGF0aCBkPSJNMCAxMjggSDEyOCBWNTAgTDAgODIgWiIvPjwvY2xpcFBhdGg+CiAgICA8Y2xpcFBhdGggaWQ9InVwcGVyIj48cGF0aCBkPSJNMCAwIEgxMjggVjQyIEwwIDc0IFoiLz48L2NsaXBQYXRoPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJiZyIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzhlYzVlYSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2Q4ZWVmYSIvPjwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxnIGNsaXAtcGF0aD0idXJsKCN0aWxlKSI+CiAgICA8cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgZmlsbD0idXJsKCNiZykiLz4KICAgIDwhLS0gdHdvIHNob3J0ZXIgYmxhZGVzOiBiZWxvdyB0aGUgbGluZSwgc28gdGhlIHN0cmltbWVyIGxlYXZlcyB0aGVtIGFsb25lIC0tPgogICAgPHBhdGggZD0iTTM2IDEyOCBDMzQgMTEyIDI3IDEwMCAxMyA5MSBDMTcgMTA0IDE3IDExNiAxNiAxMjggWiIgZmlsbD0iIzQzYTA0NyIvPgogICAgPHBhdGggZD0iTTg4IDEyOCBDODkgMTA4IDk2IDkxIDExMSA3NyBDMTA1IDk1IDEwNSAxMTIgMTA3IDEyOCBaIiBmaWxsPSIjMzg4ZTNjIi8+CiAgICA8ZyBjbGlwLXBhdGg9InVybCgjbG93ZXIpIj4KICAgICAgPHBhdGggZD0iTTM4IDEyOCBDNDAgODYgNTQgNDIgOTIgMTAgQzgyIDUwIDgwIDg4IDgyIDEyOCBaIiBmaWxsPSIjMWI1ZTIwIi8+CiAgICAgIDxwYXRoIGQ9Ik0zOCAxMjggQzQwIDg2IDU0IDQyIDkyIDEwIEM3MiA0NiA2MiA4OCA2MCAxMjggWiIgZmlsbD0iIzJlN2QzMiIvPgogICAgPC9nPgogICAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQgLTIpIHJvdGF0ZSgxNiA3OCA1MCkiPgogICAgICA8ZyBjbGlwLXBhdGg9InVybCgjdXBwZXIpIj4KICAgICAgICA8cGF0aCBkPSJNMzggMTI4IEM0MCA4NiA1NCA0MiA5MiAxMCBDODIgNTAgODAgODggODIgMTI4IFoiIGZpbGw9IiMxYjVlMjAiLz4KICAgICAgICA8cGF0aCBkPSJNMzggMTI4IEM0MCA4NiA1NCA0MiA5MiAxMCBDNzIgNDYgNjIgODggNjAgMTI4IFoiIGZpbGw9IiMyZTdkMzIiLz4KICAgICAgPC9nPgogICAgPC9nPgogICAgPGxpbmUgeDE9IjIyIiB5MT0iODAiIHgyPSIxMTIiIHkyPSI1Ny41IiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPC9nPgo8L3N2Zz4K" alt="">
+      <!-- mdi:grass, the same glyph as the sidebar `panel_icon`, drawn in the bar's own colour.
+           Sextant reaches for <ha-icon> here; that is a Home Assistant web component and only
+           exists inside a NATIVE panel, which this iframe is not — so the path is inlined and
+           filled with currentColor, which is what <ha-icon> renders to anyway. -->
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20H2V18H7.75C7 15.19 4.81 13 2 12.26C2.64 12.1 3.31 12 4 12C8.42 12 12 15.58 12 20M22 12.26C21.36 12.1 20.69 12 20 12C17.07 12 14.5 13.58 13.12 15.93C13.41 16.59 13.65 17.28 13.79 18C13.92 18.65 14 19.32 14 20H22V18H16.24C17 15.19 19.19 13 22 12.26M15.64 11C16.42 8.93 17.87 7.18 19.73 6C15.44 6.16 12 9.67 12 14V14C12.95 12.75 14.2 11.72 15.64 11M11.42 8.85C10.58 6.66 8.88 4.89 6.7 4C8.14 5.86 9 8.18 9 10.71C9 10.92 8.97 11.12 8.96 11.32C9.39 11.56 9.79 11.84 10.18 12.14C10.39 10.96 10.83 9.85 11.42 8.85Z"/></svg>
       <span class="brand-text"><span class="brand-name">Strimmer</span><span
         class="brand-sub">cuts what your panel never shows</span></span>
     </a>

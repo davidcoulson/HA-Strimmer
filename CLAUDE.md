@@ -107,6 +107,20 @@ Deliberately NOT renamed, and each for a reason a rename would have cost somethi
   resolving without being re-added. References to *GabrielGoldsteinAnidea*/HA-Websocket-Stripper
   are upstream's project and stay as they are, as does the LICENSE copyright.
 
+## The console and Sextant
+
+The console is deliberately styled to match **Sextant**, the other HA panel in this house
+(`/config/custom_components/sextant/`, design system in `frontend/sextant-ui.js`), so the two read
+as one family of tool. It uses Home Assistant's own CSS token names with this panel's short ones
+aliased onto them.
+
+The constraint that shapes every such decision: **Sextant is a NATIVE panel and this console is an
+Ingress iframe.** Sextant inherits the user's theme and can use HA's web components; the iframe
+inherits nothing and has none of them. So a Sextant rule is copied by reproducing its VALUES, not
+by importing its mechanism — the tokens are defined locally, and `<ha-icon icon="mdi:grass">` in
+the brand mark is an inlined MDI path filled with `currentColor`, which is what `<ha-icon>` renders
+to anyway. Do not "fix" that to a real `<ha-icon>`; it would render nothing.
+
 ## Files
 
 - `strimmer/ha_ws_trim_proxy.mjs` — the proxy (HTTP passthrough + ws intercept + allowlist precompute).
