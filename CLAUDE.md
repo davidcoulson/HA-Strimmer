@@ -102,7 +102,10 @@ Deliberately NOT renamed, and each for a reason a rename would have cost somethi
 - The panel's `localStorage` keys keep the `stripper-` prefix. They live in each viewer's browser;
   renaming them silently resets everyone's remembered tab, theme and columns for nothing.
 - Old CHANGELOG entries keep the old name: they are a record of what it was called at the time.
-- The GitHub repo is still `HA-Websocket-Stripper`, so every URL in here is still correct.
+- The GitHub repo was renamed too, `HA-Websocket-Stripper` -> **`HA-Strimmer`**, and every URL we
+  own moved with it. GitHub redirects the old one, so the Supervisor store repository entry keeps
+  resolving without being re-added. References to *GabrielGoldsteinAnidea*/HA-Websocket-Stripper
+  are upstream's project and stay as they are, as does the LICENSE copyright.
 
 ## Files
 

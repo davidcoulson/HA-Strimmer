@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026.09.19.5 — 2026-09-19
+
+**The regex guard shipped this morning missed the worse half of the problem.** Found by a review
+of the day's own changes, and proven rather than argued: `looksCatastrophic` flagged a quantified
+group containing another quantifier — `(a+)+` — but not one containing an **alternation**.
+`/^(a|a)+$/` against a 27-character string blocked the event loop for **5.4 seconds**, doubling
+with every further character, and took the plain unguarded path because the detector said it was
+fine. The guard existed for exactly this and let the commoner shape through.
+
+The detector now flags either form. It is deliberately loose — `(ab|cd)+` cannot backtrack badly
+and is flagged anyway — because a false positive costs only the guarded path (424ms across 10,000
+first-pass calls, ~0 once memoised) while a false negative costs every panel. Flagging is not
+rejecting: a flagged pattern still runs and still matches.
+
+Four smaller things from the same review, all introduced earlier today:
+
+- **A log flood that got past the auth gate.** The self-identify line keyed its once-only check on
+  the client-supplied `entity_id`, and that block runs before the gate — so a socket sending a
+  fresh id per frame produced one unthrottled line per frame. Keyed on the address now, with the
+  throttle still underneath.
+- **`onceOnly` cleared its whole set at the cap**, which inverts the guarantee: under key churn
+  every key is forgotten as soon as the set fills, so "say it once" becomes "say it every time".
+  It evicts the oldest entry instead, one at a time.
+- A bare entity id in an `include` list was added to the allowlist and *also* reported as skipped,
+  so the new "not resolved" line lied about the one case the same change had just handled.
+- The console's option listing still indexed `EDITABLE_KEYS` directly, so a hand-edited store row
+  named `constructor` would render as an editable option. It uses the own-property check now, like
+  the write path.
+
+---
 ## 2026.09.19.4 — 2026-09-19
 
 **A console left open on the direct port wrote two log lines a minute, forever.** Found by reading

@@ -125,11 +125,24 @@ const REGEX_KILLED = new Set();            // regex source
 const REGEX_MEMO = new Map();              // regex source -> Map(value -> boolean)
 let guardCtx = null, guardScript = null;
 
-// A quantified group whose body itself contains a quantifier: (a+)+, (\w+\s?)*, (x{2,})+.
-// Innermost groups only, escapes skipped. Deliberately loose — a false positive costs the guarded
-// path's microseconds, never a match.
+// A quantified group whose body contains EITHER another quantifier — (a+)+, (\w+\s?)*, (x{2,})+ —
+// OR an alternation: (a|a)+, (a|ab)*, (\d|\d\d)+.
+//
+// The alternation half was missed at first, and it is the worse of the two: an overlapping
+// alternation under a quantifier backtracks just as explosively, and `/^(a|a)+$/` against a
+// 27-character string measured 5.4 SECONDS unguarded — doubling with every further character —
+// against 12.3s for the `(a+)+` case the guard was originally written for. The detector flagged
+// the second and not the first.
+//
+// Innermost groups only, escapes skipped. Deliberately loose: it flags `(ab|cd)+`, which cannot
+// backtrack badly at all, because a false positive costs only the guarded path (measured: 424ms
+// across 10,000 first-pass calls, ~0 once memoised) while a false negative costs the event loop.
+// Flagging is not rejecting — a flagged pattern still runs and still matches.
 export function looksCatastrophic(src) {
-  return /\((?:[^()\\]|\\.)*(?:[+*]|\{\d+,\d*\})(?:[^()\\]|\\.)*\)(?:[+*]|\{\d+,\d*\})/.test(src);
+  const body = '(?:[^()\\\\]|\\\\.)*';
+  const quant = '(?:[+*]|\\{\\d+,\\d*\\})';
+  // ( …quantifier-or-alternation… ) followed by a quantifier
+  return new RegExp(`\\(${body}(?:${quant}|\\|)${body}\\)${quant}`).test(src);
 }
 
 function guardedTest(re, src, note) {
@@ -502,7 +515,7 @@ function expandAutoEntities(node, allStates, add, unsupported, ctx, overInclude)
   for (const cond of inc) {
     // A bare entity id is not a filter upstream either, but if it names a real-looking entity
     // then forwarding it is free and dropping it is not.
-    if (typeof cond === 'string' && isEntityId(cond)) add(cond);
+    if (typeof cond === 'string' && isEntityId(cond)) { add(cond); continue; }
     if (!isCond(cond, 'include')) continue;
     // An include entry can be an explicit entity rather than a filter.
     if (cond && isEntityId(cond.entity_id) && !String(cond.entity_id).includes('*')) {

@@ -194,7 +194,16 @@ describe('conditions the extractor used to get wrong silently', () => {
 describe('a regex cannot stall the event loop', () => {
   test('flags nested quantifiers and nothing ordinary', () => {
     for (const bad of ['^(a+)+$', '^(\\w+\\s?)+$', '(x{2,})+']) assert.ok(looksCatastrophic(bad), bad);
-    for (const ok of ['^sensor\\.pv_.*_power$', '(ab|cd)+', '^[+*]+$', 'battery$']) assert.ok(!looksCatastrophic(ok), ok);
+    for (const ok of ['^sensor\\.pv_.*_power$', '^[+*]+$', 'battery$', '^light\\.(kitchen|hall)$']) {
+      assert.ok(!looksCatastrophic(ok), ok);
+    }
+    // An overlapping alternation under a quantifier is the WORSE class and was missed at first:
+    // /^(a|a)+$/ measured 5.4s on 27 characters, against 12.3s for (a+)+ on 40.
+    for (const bad of ['^(a|a)+$', '^(a|ab)*$', '^(\\d|\\d\\d)+$']) assert.ok(looksCatastrophic(bad), bad);
+    // (ab|cd)+ cannot backtrack badly, but IS flagged: the detector is deliberately loose, and
+    // flagging only costs the guarded path — it never costs a match.
+    assert.ok(looksCatastrophic('(ab|cd)+'));
+    assert.equal(toMatcher('/^(ab|cd)+$/')('abcdab'), true, 'and it still matches');
   });
 
   test('a catastrophic pattern is cut off, switched off, and reported — once', () => {
@@ -213,5 +222,31 @@ describe('a regex cannot stall the event loop', () => {
     const m = toMatcher('/^(ab+)+$/');
     assert.equal(m('abbabb'), true);
     assert.equal(m('xyz'), false);
+  });
+});
+
+// The log-flood regression the scrub found: the self-identify key embedded a client-supplied
+// entity id, and `onceOnly` cleared its whole set at the cap — so "say it once" became "say it
+// every time" under key churn. The eviction half is what this pins.
+describe('onceOnly evicts the oldest rather than forgetting everything', () => {
+  test('a key already said stays said while newer keys churn past the cap', async () => {
+    // Exercised through the module that owns it would mean booting the proxy; the property is
+    // small enough to state directly against the same algorithm.
+    const SAID = new Set();
+    const MAX = 10;
+    const onceOnly = (key) => {
+      if (SAID.has(key)) return false;
+      while (SAID.size >= MAX) SAID.delete(SAID.values().next().value);
+      SAID.add(key);
+      return true;
+    };
+    assert.equal(onceOnly('keep'), true);
+    for (let i = 0; i < MAX - 1; i++) onceOnly(`churn-${i}`);
+    assert.equal(onceOnly('keep'), false, 'still remembered while it is not the oldest');
+    for (let i = 0; i < MAX * 3; i++) onceOnly(`later-${i}`);
+    assert.equal(SAID.size, MAX, 'bounded');
+    // The old `clear()` made every one of those churned keys sayable again immediately; eviction
+    // means only the oldest is ever forgotten, one at a time.
+    assert.equal(onceOnly(`later-${MAX * 3 - 1}`), false, 'the newest keys are still remembered');
   });
 });

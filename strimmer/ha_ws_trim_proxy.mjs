@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.19.4';
+const VERSION = '2026.09.19.5';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -579,9 +579,14 @@ function logThrottled(key, msg, level = LEVELS.info) {
 // are noise the thousandth time, where logThrottled cannot help: it collapses repeats INSIDE a
 // ten-second window, and these recur every thirty seconds or every five minutes.
 const SAID = new Set();
+const SAID_MAX = 1000;
 function onceOnly(key) {
   if (SAID.has(key)) return false;
-  if (SAID.size >= 1000) SAID.clear();          // bounded; the cost of a clear is one repeat each
+  // Evict the OLDEST, one at a time. This used to clear the whole set at the cap, which inverts
+  // the guarantee: under key churn every key is forgotten the moment the set fills, so "say it
+  // once" becomes "say it every time". A Set iterates in insertion order, so the first key is the
+  // oldest.
+  while (SAID.size >= SAID_MAX) SAID.delete(SAID.values().next().value);
   SAID.add(key);
   return true;
 }
@@ -3628,7 +3633,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // panels wrote ~8,600 identical lines a day, which with the rebuild reports beside them left
       // the Supervisor's log buffer holding about ten minutes of history.
       const announceMsg = `${meta.ip ?? '?'} announces ${m.entity_id}${added ? '' : ' (already covered)'}`;
-      if (added || onceOnly(`selfid:${meta.ip}:${m.entity_id}`)) log(announceMsg); else debug(announceMsg);
+      // Keyed on the ADDRESS only, and still throttled underneath. This block runs before the auth
+      // gate — only `type: 'auth'` is intercepted above — so `m.entity_id` is unauthenticated
+      // client input. With it in the key, a socket sending a fresh id per frame got one unthrottled
+      // line per frame and, once SAID filled, defeated the cap as well. An address is bounded by
+      // the network; a string off the wire is not.
+      if (added || onceOnly(`selfid:${meta.ip}`)) log(announceMsg);
+      else logThrottled(`selfid:${meta.ip}`, announceMsg, LEVELS.debug);
       if (added && !added.every((id) => allow.has(id))) {
         log(`${meta.ip ?? '?'} identified itself as ${m.entity_id}: +${added.length} entities on its next connection`);
         // The allowlist for THIS connection was already sent; the frontend has to re-subscribe
@@ -4566,7 +4577,7 @@ const statsServer = http.createServer((req, res) => {
         value: eff[k] !== undefined ? eff[k]
           : eff[legacyNameFor(k)] !== undefined ? eff[legacyNameFor(k)]
           : fallback[k],
-        type: EDITABLE_KEYS[k] || null,
+        type: isKnownOption(k) ? EDITABLE_KEYS[k] : null,
         section: OPTIONS[k]?.section || null,
         // What an empty value means, when that is not simply "empty".
         choices: OPTIONS[k]?.choices || null,
@@ -4575,7 +4586,7 @@ const statsServer = http.createServer((req, res) => {
           : null,
         label: OPTIONS[k]?.label || k,
         source: own.managed.includes(k) ? 'console' : 'addon',
-        editable: Boolean(EDITABLE_KEYS[k]) && !BOOTSTRAP_KEYS.has(k),
+        editable: isKnownOption(k) && !BOOTSTRAP_KEYS.has(k),
       })),
     }, null, 2);
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
