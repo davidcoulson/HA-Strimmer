@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026.09.19.6 — 2026-09-19
+
+**One client could block every other panel with a 109KB frame.** `ws` defaults a server to a
+100MB `maxPayload`, and every text frame a browser sends is `JSON.parse`d on the one event loop
+that relays every other connection. This leg negotiates permessage-deflate, and `ws` inflates up
+to `maxPayload` before anything can inspect the result — so it is an amplification, not an upload:
+
+| on the wire | inflated | JSON.parse |
+| --- | --- | --- |
+| 109 KB | 100 MB | ~130 ms |
+
+About 1000:1, from anything that can open the socket, repeatable as fast as it likes.
+
+Inbound browser frames are now capped at **4MB** (`BROWSER_MAX_PAYLOAD_BYTES`). Nothing legitimate
+is near it: commands are bytes, a voice satellite's audio chunks are kilobytes, and the largest
+real frame is a dashboard save at a few hundred KB. `ws` answers an oversized frame with close code
+1009 and drops the connection, and the proxy logs which address hit the limit — otherwise it looks
+like an unexplained disconnect from the panel's side.
+
+The Home Assistant leg deliberately keeps `maxPayload: 0`. HA really does send 14MB registry
+frames, and it is not an untrusted peer.
+
+---
 ## 2026.09.19.5 — 2026-09-19
 
 **The regex guard shipped this morning missed the worse half of the problem.** Found by a review

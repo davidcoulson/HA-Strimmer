@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.19.5';
+const VERSION = '2026.09.19.6';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -206,6 +206,22 @@ let LAST_REBUILD_AT = 0;
 const BP_HIGH_BYTES = parseInt(process.env.BACKPRESSURE_HIGH_BYTES || String(8 * 1024 * 1024), 10);
 const BP_LOW_BYTES = Math.max(1, Math.floor(BP_HIGH_BYTES / 4));
 const BP_STALL_MS = parseInt(process.env.BACKPRESSURE_STALL_MS || '60000', 10);
+// The largest frame a BROWSER may send us. `ws` defaults a server to 100MB, and every text frame
+// from a browser is JSON.parse'd on the one event loop that relays every other panel — so one
+// client could block everything for as long as that parse takes.
+//
+// It is an amplification, not just a large upload. permessage-deflate is negotiated on this leg,
+// and `ws` inflates up to maxPayload before anything can look at the result: measured, a 100MB
+// JSON payload compresses to 109KB on the wire, parses in ~130ms, and can be repeated as fast as
+// the client likes. About 1000:1, from any client that can open the socket.
+//
+// 4MB is far above anything legitimate. Commands are bytes; a voice satellite's audio chunks are
+// kilobytes; the largest real frame is a dashboard save (`lovelace/config/save`), which is
+// hundreds of KB for a big dashboard. At 4MB a parse is ~5ms. `ws` answers an oversized frame with
+// close code 1009 and drops the connection, which is the right outcome — nothing legitimate is
+// near it. The HA leg keeps `maxPayload: 0`: Home Assistant genuinely does send 14MB registry
+// frames, and that side is not an untrusted peer.
+const BROWSER_MAX_PAYLOAD = parseInt(process.env.BROWSER_MAX_PAYLOAD_BYTES || String(4 * 1024 * 1024), 10);
 const DASH_PATHS = toList(OPT.dashboards ?? (process.env.DASH_PATHS || process.env.DASH_PATH));
 // trim_entities: true (default) = inject the allowlist so HA streams only needed entities.
 //   false = pass the websocket straight through (full firehose) for A/B comparison.
@@ -3259,6 +3275,7 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({
   noServer: true,
   perMessageDeflate: COMPRESS_WS ? { threshold: 1024, concurrencyLimit: 10 } : false,
+  maxPayload: BROWSER_MAX_PAYLOAD,
 });
 server.on('upgrade', (req, socket, head) => {
   // A raw upgrade socket arrives with NO 'error' listener, and http-proxy only attaches one
@@ -4137,7 +4154,17 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     try { browserWs.close(); } catch {} try { haWs.close(); } catch {}
   };
   openBridges.set(close, dash);      // so a grown allowlist can recycle this connection (#7)
-  browserWs.on('close', close); browserWs.on('error', close);
+  browserWs.on('close', (code) => {
+    // 1009 is `ws` refusing a frame bigger than maxPayload. Worth a line: from the panel's side it
+    // is an unexplained disconnect, and the cause is a limit this proxy chose.
+    if (code === 1009) {
+      logThrottled(`toobig:${meta.ip}`, `${meta.ip ?? '?'} sent a frame over the `
+        + `${(BROWSER_MAX_PAYLOAD / 1048576).toFixed(0)}MB limit and was disconnected `
+        + '(BROWSER_MAX_PAYLOAD_BYTES)');
+    }
+    close();
+  });
+  browserWs.on('error', close);
   haWs.on('close', close);
   haWs.on('error', (e) => { logThrottled(`haws:${e.code || e.message}`, `HA ws error ${e.message}`); close(); });
 }

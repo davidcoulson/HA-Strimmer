@@ -309,3 +309,47 @@ describe('the panel status API access list', () => {
     } finally { t.proxy.kill(); await t.mock.close(); }
   });
 });
+
+// One client must not be able to block every other panel. `ws` defaults a server to a 100MB
+// maxPayload, and every text frame from a browser is JSON.parse'd on the shared event loop —
+// and with permessage-deflate negotiated, a 100MB payload is ~109KB on the wire, so it is an
+// amplification rather than an upload.
+describe('an oversized browser frame cannot block the event loop', () => {
+  let mock, proxy, port, out = '';
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+        PORT: String(port), STATS_PORT: String(await getFreePort()), STRIP_ENTITIES: '1',
+        BROWSER_MAX_PAYLOAD_BYTES: '65536' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
+    const deadline = Date.now() + 25000;
+    while (!/union allowlist for/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`no boot\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+  after(async () => { proxy?.kill(); await mock?.close(); });
+
+  it('drops the connection with 1009 instead of parsing it', async () => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    const closed = new Promise((r) => c.ws.on('close', (code) => r(code)));
+    // Comfortably over the 64KB test limit. `ws` enforces maxPayload while INFLATING, so a
+    // compressible payload is refused on its decompressed size — which is the whole point.
+    c.ws.send(JSON.stringify({ id: 99, type: 'x', pad: 'x'.repeat(80000) }));
+    assert.equal(await closed, 1009, 'ws must refuse the frame, not buffer and parse it');
+  });
+
+  it('and a normal-sized frame on a fresh connection still works', async () => {
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    const res = await c.rpc({ type: 'get_states' });
+    assert.ok(Array.isArray(res.result), 'the limit must not affect ordinary traffic');
+    c.close();
+  });
+});
