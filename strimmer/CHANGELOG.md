@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026.09.20.4 — 2026-09-20
+
+**All twelve switches are one grid at the top, under "What this app is doing".** Nine were under
+Trimming and the other three were scattered — mDNS three headings down, MQTT four, compression
+five — so answering "what is this app currently doing to my dashboards" meant scrolling and
+reading. It is one question, and it now answers in one glance.
+
+Everything that holds a **value** stays exactly where it was: dashboards, entity lists, resource
+rules, the override wizard, ports, the certificate host. A tile is right for a thing that is on or
+off and wrong for a thing that holds text, and moving those would have been rearrangement for its
+own sake.
+
+Two headings disappear as a consequence — **Trimming** and **Websocket** were entirely boolean, so
+with their switches hoisted there is nothing left to put under them. A section with nothing to set
+is skipped rather than drawn as a heading over empty space.
+
+Declared order is kept inside the grid, which puts the trimming switches first because that is how
+the catalogue reads; each tile's tooltip still carries its full sentence and its config key.
+
+---
 ## 2026.09.20.3 — 2026-09-20
 
 **The status pill and the Config tile now read the same word, because they read the same source.**

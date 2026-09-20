@@ -2489,11 +2489,40 @@ async function renderConfig() {
   const host = $('cfgsections');
   host.textContent = '';
 
+  // EVERY on/off setting in one grid at the top, whatever section it belongs to.
+  //
+  // Nine of the twelve were under Trimming and the other three were scattered — mDNS three
+  // headings down, MQTT four, compression five — so "what is this app currently doing" meant
+  // scrolling and reading. They are one question and they now answer in one glance. Declared
+  // order is kept, which puts the trimming switches first because that is how the catalogue
+  // reads; the tooltip carries each one's full sentence and its config key.
+  //
+  // The sections below keep everything that holds a VALUE, where they were. A section left with
+  // nothing but its hoisted booleans is skipped rather than drawn as a heading over empty space —
+  // Trimming and Websocket are both entirely boolean, so both disappear here.
+  const bools = d.options.filter((o) => o.type === 'bool');
+  if (bools.length) {
+    const box = document.createElement('section');
+    box.className = 'cfgsec';
+    const h = document.createElement('h3');
+    h.textContent = 'What this app is doing';
+    const blurb = document.createElement('div');
+    blurb.className = 'note';
+    blurb.textContent = 'Every on/off setting. Blue is on.';
+    const grid = document.createElement('div');
+    grid.className = 'cfgtiles';
+    for (const o of bools) grid.appendChild(configTile(o, d, save));
+    box.append(h, blurb, grid);
+    host.appendChild(box);
+  }
+
   // Grouped, in the declared order. A section with nothing in it is skipped rather than drawn as
   // a heading over empty space — which is what an unknown build would produce if the server sent
   // sections this page does not have options for.
   for (const sec of (d.sections || [])) {
-    const opts = d.options.filter((o) => o.section === sec.id);
+    // Booleans have gone to the grid above; a section is only worth a heading if it still has
+    // something to set.
+    const opts = d.options.filter((o) => o.section === sec.id && o.type !== 'bool');
     if (!opts.length) continue;
 
     const box = document.createElement('section');
@@ -2507,26 +2536,15 @@ async function renderConfig() {
 
     // Overrides are rules, not settings: four config keys hold them but nobody thinks in config
     // keys, so that section gets its own list-and-wizard rather than four rows saying "2 rules".
-    if (sec.id === 'overrides') {
-      renderOverrides(box, d, save, say);
-    } else {
-      // Booleans first, as one grid; everything with a value to type keeps its row.
-      const bools = opts.filter((o) => o.type === 'bool');
-      const rest = opts.filter((o) => o.type !== 'bool');
-      if (bools.length) {
-        const grid = document.createElement('div');
-        grid.className = 'cfgtiles';
-        for (const o of bools) grid.appendChild(configTile(o, d, save));
-        box.appendChild(grid);
-      }
-      for (const o of rest) box.appendChild(configRow(o, d, save, say));
-    }
+    if (sec.id === 'overrides') renderOverrides(box, d, save, say);
+    else for (const o of opts) box.appendChild(configRow(o, d, save, say));
     host.appendChild(box);
   }
 
   // Anything the server listed that this page has no section for. It should be empty, but an
   // option silently missing from the page is worse than an untidy 'Other' heading.
-  const orphans = d.options.filter((o) => !(d.sections || []).some((s) => s.id === o.section));
+  const orphans = d.options.filter((o) => o.type !== 'bool'
+    && !(d.sections || []).some((s) => s.id === o.section));
   if (orphans.length) {
     const box = document.createElement('section');
     box.className = 'cfgsec';
