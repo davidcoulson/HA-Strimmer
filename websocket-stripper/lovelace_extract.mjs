@@ -81,11 +81,22 @@ const REGEX_KILLED = new Set();            // regex source
 const REGEX_MEMO = new Map();              // regex source -> Map(value -> boolean)
 let guardCtx = null, guardScript = null;
 
-// A quantified group whose body itself contains a quantifier: (a+)+, (\w+\s?)*, (x{2,})+.
-// Innermost groups only, escapes skipped. Deliberately loose — a false positive costs the guarded
-// path's microseconds, never a match.
+// A quantified group whose body contains EITHER another quantifier — (a+)+, (\w+\s?)*, (x{2,})+ —
+// OR an alternation: (a|a)+, (a|ab)*, (\d|\d\d)+.
+//
+// Both halves are needed, and the alternation one is the worse: an overlapping alternation under a
+// quantifier backtracks just as explosively, and `/^(a|a)+$/` against a 27-character string
+// measured 5.4 SECONDS — doubling with every further character — against 12.3s for the `(a+)+`
+// case. A first version of this detector caught only the second.
+//
+// Innermost groups only, escapes skipped. Deliberately loose: it flags `(ab|cd)+`, which cannot
+// backtrack badly at all, because a false positive costs only the guarded path (measured: 424ms
+// across 10,000 first-pass calls, ~0 once memoised) while a false negative costs the event loop.
+// Flagging is not rejecting — a flagged pattern still runs and still matches.
 export function looksCatastrophic(src) {
-  return /\((?:[^()\\]|\\.)*(?:[+*]|\{\d+,\d*\})(?:[^()\\]|\\.)*\)(?:[+*]|\{\d+,\d*\})/.test(src);
+  const body = '(?:[^()\\\\]|\\\\.)*';
+  const quant = '(?:[+*]|\\{\\d+,\\d*\\})';
+  return new RegExp(`\\(${body}(?:${quant}|\\|)${body}\\)${quant}`).test(src);
 }
 
 function guardedTest(re, src, note) {

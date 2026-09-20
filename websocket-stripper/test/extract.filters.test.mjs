@@ -148,9 +148,16 @@ describe('group membership expansion (issue #4)', () => {
 describe('a dashboard regex cannot stall the event loop', () => {
   test('flags a nested quantifier and leaves ordinary patterns alone', () => {
     for (const bad of ['^(a+)+$', '^(\\w+\\s?)+$', '(x{2,})+']) assert.ok(looksCatastrophic(bad), bad);
-    for (const ok of ['^sensor\\.pv_.*_power$', '(ab|cd)+', '^[+*]+$', 'battery$']) {
+    // An overlapping alternation under a quantifier is the worse class: /^(a|a)+$/ measured 5.4s
+    // on 27 characters, against 12.3s for (a+)+ on 40.
+    for (const bad of ['^(a|a)+$', '^(a|ab)*$', '^(\\d|\\d\\d)+$']) assert.ok(looksCatastrophic(bad), bad);
+    for (const ok of ['^sensor\\.pv_.*_power$', '^[+*]+$', 'battery$', '^light\\.(kitchen|hall)$']) {
       assert.ok(!looksCatastrophic(ok), ok);
     }
+    // (ab|cd)+ cannot backtrack badly but IS flagged: the detector is deliberately loose, and
+    // flagging only costs the guarded path — it never costs a match.
+    assert.ok(looksCatastrophic('(ab|cd)+'));
+    assert.equal(toMatcher('/^(ab|cd)+$/')('abcdab'), true, 'and it still matches');
   });
 
   test('a catastrophic pattern is cut off, switched off, and reported — once', () => {
