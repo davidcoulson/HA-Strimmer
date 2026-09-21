@@ -10,9 +10,10 @@ reads as "the basement panel reconnected".
 On 2026-09-21 it wasn't. The basement stairs panel never received two newly added helpers,
 `input_number.basement_accent_speed` and `…_intensity`, and that line was taken as proof the panel
 had been handed them. The one connection dropped at both rebuilds was **a different client, on
-the union**, and the panel at 10.2.4.109 had no connection on that dashboard to drop. In the
-retained log it has **no trimmed connection at all**: not at those rebuilds, and not at the two
-Core restarts at 11:06 and 11:11 UTC, when every other panel reconnected.
+the union**, and the panel (10.2.4.240) had no connection on that dashboard to drop. In the
+retained log it has **no connection through this app at all**: not at those rebuilds, and not at
+the two Core restarts at 11:06 and 11:11 UTC, when every other panel reconnected. Its `client_overrides`
+rule names 10.2.4.109, an address the panel no longer has.
 
 - The line now names each recycled connection by address and set:
   `reconnecting 1 of 6 … to pick up the new entities: 10.2.3.56 (union)`.
