@@ -204,8 +204,13 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
     Supervisor. Writing to Supervisor unconditionally put the pin in the shadowed source, so it
     vanished at the next restart.
   - **A rebuild recycles only the bridges whose own dashboard grew** (`openBridges` maps close
-    → dashboard; unattributed bridges follow the union). It used to drop every open connection
-    whenever the union gained anything.
+    → `{ dash, ip }`; unattributed bridges follow the union). It used to drop every open connection
+    whenever the union gained anything. **Read "reconnecting N of M" by the addresses it names,
+    not by which dashboard grew.** Before 2026.09.21.1 the line ended with the grown dashboards, and
+    was taken as proof a panel had reconnected when the connection dropped was another client on
+    the union. A grown dashboard with nobody attributed to it now logs `no open connection is
+    attributed to <dash>`. And a panel with no `entity payload delivered to <its ip>` line after a
+    Core restart is not on a trimmed connection at all, since that restart drops every bridge.
   - Note for testing it: every loopback test client is `127.0.0.1`, so a `client_overrides` pin
     widens all of them or none and the collision case never arises. Use two USERS instead —
     that is what `two users on one dashboard never share each other's cached registry` does,

@@ -455,6 +455,51 @@ describe('a grown allowlist reconnects only the dashboards that grew', () => {
   });
 });
 
+// The recycle log has to say WHICH connections it dropped. It used to end with the dashboards
+// that grew, so "reconnecting 1 of 6 … (basement-stairs-panel)" was read as the basement panel
+// reconnecting — when the one connection dropped was another client on the union, and the panel
+// was attributed to no connection on that dashboard at all. The dashboard that grew here has
+// nobody on it; the log must say so, and must name the recycled connection by its own set.
+describe('the recycle log names what it recycled, not what grew', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  it('says a grown dashboard has no connection, and names the union one it did drop', async () => {
+    const open = async (cookie) => {
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`, 'test-token', cookie ? { cookie } : {});
+      await c.authed;
+      c.send({ type: 'subscribe_entities' });
+      return c;
+    };
+    const onTest = await open('ws_dash=test-dash');   // the "panel", attributed elsewhere
+    const onUnion = await open(null);                  // no cookie, no page GET: the union
+    await new Promise((r) => setTimeout(r, 200));
+    const marker = proxy.out.length;
+
+    // light.decoy is new to the union too, so the union connection is recycled — the exact
+    // shape of the live case.
+    mock.setConfig('auto-dash', { views: [{ path: 'main', cards: [
+      { type: 'entities', entities: ['light.living_room', 'light.decoy'] },
+    ] }] });
+    mock.fireLovelaceUpdated('auto-dash');
+    await proxy.waitForLog(/reconnecting 1 of 2 open dashboard connection/, 15000);
+
+    const out = proxy.out.slice(marker);
+    assert.match(out, /no open connection is attributed to auto-dash/,
+      'a grown dashboard nobody is on must be said, not implied');
+    const line = out.split('\n').find((l) => /reconnecting 1 of 2/.test(l));
+    assert.match(line, /127\.0\.0\.1 \(union\)/, 'the recycled connection is named by address and set');
+    assert.doesNotMatch(line, /auto-dash/, 'the grown dashboard must not read as the one that reconnected');
+    onTest.close(); onUnion.close();
+  });
+});
+
 // A command on the control connection that is never answered. handshakeTimeout only covers the
 // upgrade; a Home Assistant that answered it and then wedged on get_states left the rebuild
 // awaiting forever, and with it the `rebuilding` flag — so no later dashboard edit could trigger

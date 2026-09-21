@@ -75,7 +75,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.20.5';
+const VERSION = '2026.09.21.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -659,8 +659,9 @@ const PER_DASH = OPT.by_dashboard !== undefined ? !!OPT.by_dashboard
 const TRIM_REGISTRIES = OPT.trim_registries !== undefined ? !!OPT.trim_registries
   : (process.env.TRIM_REGISTRIES ?? '1') !== '0';
 // Every live browser <-> HA bridge, so a grown allowlist can reach already-open pages
-// (issue #7). close() -> the dashboard it serves (null for the union), so a rebuild can recycle
-// only the connections whose set actually grew. See refreshOpenConnections().
+// (issue #7). close() -> { dash, ip }: the dashboard it serves (null for the union), so a rebuild
+// can recycle only the connections whose set actually grew, and the client address, so the log
+// can say WHICH ones it recycled. See refreshOpenConnections().
 const openBridges = new Map();
 // False until the first allowlist lands. HA may still be booting when we start, and injecting
 // an EMPTY allowlist would render every card "unavailable" until a manual reload — so until
@@ -1094,12 +1095,30 @@ function applyAllow(built, why, { merge = false } = {}) {
 // dashboard is recycled when THAT dashboard's set grew; a bridge on the union (unattributed)
 // when the union did. A connection widened by a rule or by self-identification sits on top of
 // one of those two sets, so the same test holds for it.
+//
+// The log names the connections it RECYCLED, by address and the set each was on — not the
+// dashboards that grew. It used to end with the grown dashboards in brackets, so
+// "reconnecting 1 of 6 … (basement-stairs-panel)" read as "the basement panel reconnected"
+// when the one connection dropped was a different client on the union, and the panel itself,
+// attributed to no connection on that dashboard, was never touched — an investigation started
+// from exactly that misreading on 2026-09-21. A grown dashboard with nobody on it is now said
+// outright, because that is the fact that ends such an investigation.
 function refreshOpenConnections(grown, unionGrew) {
   if (!STRIP || !openBridges.size) return;
-  const victims = [...openBridges].filter(([, d]) => (d === null ? unionGrew : grown.has(d)));
+  const bridges = [...openBridges];
+  const onDash = new Set(bridges.map(([, b]) => b.dash));
+  const nobody = [...grown].filter((d) => !onDash.has(d));
+  if (nobody.length) {
+    log(`  no open connection is attributed to ${nobody.join(', ')} — a panel showing `
+      + `${nobody.length > 1 ? 'one of them' : 'it'} is on another set or not connected through this app, `
+      + 'and will not pick up the new entities until it reloads');
+  }
+  const victims = bridges.filter(([, b]) => (b.dash === null ? unionGrew : grown.has(b.dash)));
   if (!victims.length) return;
+  const who = victims.map(([, b]) => `${b.ip ?? '?'} (${b.dash ?? 'union'})`);
+  const shown = who.length > 10 ? `${who.slice(0, 10).join(', ')} …(+${who.length - 10} more)` : who.join(', ');
   log(`  reconnecting ${victims.length} of ${openBridges.size} open dashboard connection(s) to pick up `
-    + `the new entities (${[...grown].join(', ') || 'union'})`);
+    + `the new entities: ${shown}`);
   for (const [close] of victims) { try { close(); } catch {} }
 }
 
@@ -4153,7 +4172,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (bpTimer) { clearInterval(bpTimer); bpTimer = null; }
     try { browserWs.close(); } catch {} try { haWs.close(); } catch {}
   };
-  openBridges.set(close, dash);      // so a grown allowlist can recycle this connection (#7)
+  openBridges.set(close, { dash, ip: meta.ip ?? null });   // so a grown allowlist can recycle this connection (#7)
   browserWs.on('close', (code) => {
     // 1009 is `ws` refusing a frame bigger than maxPayload. Worth a line: from the panel's side it
     // is an unexplained disconnect, and the cause is a limit this proxy chose.

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026.09.21.1 — 2026-09-21
+
+**The recycle log now says which connections it recycled.** When a rebuild grows a dashboard,
+the open connections on it are dropped so they re-subscribe. The log line for that ended with the
+dashboards that *grew*, so `reconnecting 1 of 6 open dashboard connection(s) … (basement-stairs-panel)`
+reads as "the basement panel reconnected".
+
+On 2026-09-21 it wasn't. The basement stairs panel never received two newly added helpers,
+`input_number.basement_accent_speed` and `…_intensity`, and that line was taken as proof the panel
+had been handed them. The one connection dropped at both rebuilds was **a different client, on
+the union**, and the panel at 10.2.4.109 had no connection on that dashboard to drop. In the
+retained log it has **no trimmed connection at all**: not at those rebuilds, and not at the two
+Core restarts at 11:06 and 11:11 UTC, when every other panel reconnected.
+
+- The line now names each recycled connection by address and set:
+  `reconnecting 1 of 6 … to pick up the new entities: 10.2.3.56 (union)`.
+- A dashboard that grew with **no open connection on it** gets its own line:
+  `no open connection is attributed to basement-stairs-panel — a panel showing it is on another set
+  or not connected through this app, and will not pick up the new entities until it reloads`.
+  That is the fact that would have ended the investigation on the first read.
+
+This does not fix the panel. It makes the log stop pointing away from the cause. Which path the
+panel's websocket actually takes is still open.
+
+---
 ## 2026.09.20.5 — 2026-09-20
 
 **The switch grid is headed "Strimmers".** It was "What this app is doing", which was a sentence
