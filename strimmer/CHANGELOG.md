@@ -22,8 +22,9 @@ rule names 10.2.4.109, an address the panel no longer has.
   or not connected through this app, and will not pick up the new entities until it reloads`.
   That is the fact that would have ended the investigation on the first read.
 
-This does not fix the panel. It makes the log stop pointing away from the cause. Which path the
-panel's websocket actually takes is still open.
+The panel turned out to point at Home Assistant's own `:8123`, so it never touched Strimmer and
+the missing helpers were not a trimming fault. This change is still right: it is the log line
+that made it look otherwise.
 
 ---
 ## 2026.09.20.5 — 2026-09-20
