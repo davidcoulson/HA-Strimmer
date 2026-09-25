@@ -13,6 +13,7 @@
 // `esphome-device` does the protocol: Noise, framing, the entity messages, mDNS. It is a plain
 // ESM package with no native bindings, which is the rule for anything this image takes.
 
+import os from 'node:os';
 import { Device } from 'esphome-device';
 import { SENSORS, BINARY_SENSORS, buildPayload } from './metrics.mjs';
 
@@ -20,6 +21,38 @@ import { SENSORS, BINARY_SENSORS, buildPayload } from './metrics.mjs';
 // device by is derived from it — so this string is the thing that must never change casually:
 // a different name is a different device, with new entities and no history.
 export const NODE = 'strimmer';
+
+// Which address to advertise over mDNS — Home Assistant stores whatever it discovers and connects
+// to it from then on.
+//
+// Left to itself the library advertises EVERY non-loopback IPv4 the machine has, and on a Home
+// Assistant OS host with host networking that means the Supervisor and Docker bridges and, if the
+// Tailscale add-on is running, the tailnet address too. Home Assistant picked 100.86.127.109 —
+// Tailscale — so its connection to a device on the SAME machine ran through the tailnet interface,
+// and would have gone unavailable whenever Tailscale stopped. A LAN address cannot disappear that
+// way. Preference: 10/8 and 192.168/16 first, then 172.16/12 (the bridges, stable but internal),
+// never 100.64/10 (carrier-grade NAT, which is where Tailscale lives) or link-local. Interface order
+// breaks ties, so the answer is stable across restarts. Null means "no good answer; let the library
+// decide", which is no worse than before.
+export function pickAdvertiseAddress(ifaces = os.networkInterfaces()) {
+  const rank = (ip) => {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 10 || (a === 192 && b === 168)) return 0;
+    if (a === 172 && b >= 16 && b <= 31) return 1;
+    return null;        // 100.64/10, 169.254/16, public addresses: never advertised
+  };
+  let best = null;
+  for (const addrs of Object.values(ifaces)) {
+    for (const x of addrs || []) {
+      if (x.family !== 'IPv4' && x.family !== 4) continue;
+      if (x.internal) continue;
+      const r = rank(x.address);
+      if (r === null) continue;
+      if (!best || r < best.r) best = { r, ip: x.address };
+    }
+  }
+  return best ? best.ip : null;
+}
 
 export function createPublisher({ version, log = () => {}, intervalMs = 60000, DeviceClass = Device } = {}) {
   let dev = null;
@@ -53,16 +86,20 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000, D
   }
 
   return {
-    async start({ snapshot, extras, onCommand, port, noiseKey, allowPlaintext, mdns }) {
+    async start({ snapshot, extras, onCommand, port, noiseKey, allowPlaintext, mdns, interfaces }) {
       snapshotFn = snapshot;
       extrasFn = extras;
+      const advertise = mdns === false ? null : pickAdvertiseAddress(interfaces);
       dev = new DeviceClass({
         name: NODE,
         friendlyName: 'Strimmer',
         port,
         noiseKey: noiseKey || undefined,
         allowPlaintext: noiseKey ? Boolean(allowPlaintext) : undefined,
-        mdns,
+        // An explicit address unless the caller turned advertising off or chose one itself.
+        mdns: mdns === false ? false
+          : (mdns && typeof mdns === 'object') ? mdns
+          : (advertise ? { address: advertise } : true),
         project: { name: 'davidcoulson.strimmer', version },
         model: 'Add-on',
         manufacturer: 'Strimmer',
@@ -107,7 +144,8 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000, D
       await dev.start();
       log(`  ESPHome API: ${sensors.size} sensors, ${binary.size} binary sensor`
         + `${pause ? ' and 1 switch' : ''} on port ${dev.port}`
-        + `${noiseKey ? ' (encrypted)' : ' (PLAINTEXT — set esphome_key)'}`);
+        + `${noiseKey ? ' (encrypted)' : ' (PLAINTEXT — set esphome_key)'}`
+        + `${mdns === false ? '' : advertise ? `, advertised at ${advertise}` : ', advertised on every address'}`);
       publish();
       timer = setInterval(publish, intervalMs);
       timer.unref?.();

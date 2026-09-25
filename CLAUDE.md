@@ -271,7 +271,7 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   display name otherwise, so rewording a sensor would orphan its statistics); `dp` in the catalogue
   is the decimals a float32 reading is displayed to; and the node name `strimmer` is what the
   device's MAC — Home Assistant's unique id for it — is derived from, so changing it makes a new
-  device with no history. `esphome_port`/`esphome_key` are BOOTSTRAP_KEYS. Note the option test: a
+  device with no history. The mDNS announcement carries ONE address, chosen by `pickAdvertiseAddress` (LAN before Docker bridges, never Tailscale's 100.64/10): the library advertises every address by default, and Home Assistant stored the tailnet one, so HA reached a device on its own machine through Tailscale. `esphome_port`/`esphome_key` are BOOTSTRAP_KEYS. Note the option test: a
   DEFAULT-OFF option cannot use the `(OPT.x ?? true) !== false` shape the default-on ones use —
   written that way it is false for everyone and the listener never starts.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`

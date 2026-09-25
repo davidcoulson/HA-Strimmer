@@ -149,3 +149,44 @@ test('stop() closes the device', async () => {
   await pub.stop();
   assert.equal(dev.started, false);
 });
+
+// Which address Home Assistant is told to connect to. It stores whatever it discovers, so an
+// address that can vanish — Tailscale's — makes the device unavailable whenever that interface
+// goes, even though HA and the add-on share a machine. The interface list here is the real one
+// from the Home Assistant OS host this was found on.
+import { pickAdvertiseAddress } from '../esphome_api.mjs';
+const HOST = {
+  lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
+  enp6s18: [{ address: '10.2.3.6', family: 'IPv4', internal: false }],
+  enp6s19: [{ address: '10.2.4.6', family: 'IPv4', internal: false }],
+  hassio: [{ address: '172.30.32.1', family: 'IPv4', internal: false }],
+  docker0: [{ address: '172.30.232.1', family: 'IPv4', internal: false }],
+  tailscale0: [{ address: '100.86.127.109', family: 'IPv4', internal: false }],
+};
+
+test('advertises the LAN address, never Tailscale\'s', () => {
+  assert.equal(pickAdvertiseAddress(HOST), '10.2.3.6');
+});
+
+test('prefers a LAN address over a Docker bridge, and a bridge over nothing', () => {
+  const bridgesOnly = { hassio: HOST.hassio, tailscale0: HOST.tailscale0 };
+  assert.equal(pickAdvertiseAddress(bridgesOnly), '172.30.32.1');
+  const withHome = { docker0: HOST.docker0, wlan0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }] };
+  assert.equal(pickAdvertiseAddress(withHome), '192.168.1.20');
+});
+
+test('gives no answer rather than a bad one', () => {
+  // Carrier-grade NAT (Tailscale), link-local and loopback are never advertised; with nothing
+  // else left, the library's own default applies, which is no worse than before.
+  assert.equal(pickAdvertiseAddress({ lo: HOST.lo, tailscale0: HOST.tailscale0,
+    eth0: [{ address: '169.254.10.1', family: 'IPv4', internal: false }] }), null);
+});
+
+test('passes the chosen address to the device', async () => {
+  let dev;
+  class Captured extends FakeDevice { constructor(o) { super(o); dev = this; } }
+  const pub = createPublisher({ version: 'x', DeviceClass: Captured, intervalMs: 1e9 });
+  await pub.start({ snapshot: () => READY, extras: () => ({}), port: 6053, mdns: true, interfaces: HOST });
+  assert.deepEqual(dev.opts.mdns, { address: '10.2.3.6' });
+  await pub.stop();
+});

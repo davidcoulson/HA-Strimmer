@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026.09.25.10 — 2026-09-25
+
+**Home Assistant was reaching the add-on's sensors over Tailscale.** Its config entry for the device
+stored `100.86.127.109`, the tailnet address. The library advertises every non-loopback IPv4 address
+the machine has, which on a Home Assistant OS host includes the Supervisor and Docker bridges and,
+with the Tailscale add-on running, the tailnet — and Home Assistant picked that one. So a connection
+between two processes on the same machine ran through the tailnet interface, and the sensors and
+the admin switch would have gone unavailable whenever Tailscale stopped.
+
+Strimmer now chooses the address itself: a `10.x` or `192.168.x` LAN address first, then `172.16/12`,
+never `100.64/10` (carrier-grade NAT, where Tailscale lives) or link-local. The boot line says which:
+`advertised at 10.2.3.6`. Home Assistant updates the stored address on its own when it rediscovers a
+device it already knows by MAC, so nothing needs re-adding.
+
 ## 2026.09.25.9 — 2026-09-25
 
 **`esphome-device` 0.2.0.** A purely additive release of the library — nothing Strimmer uses
