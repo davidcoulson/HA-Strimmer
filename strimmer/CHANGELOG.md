@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.09.25.9 — 2026-09-25
+
+**`esphome-device` 0.2.0.** A purely additive release of the library — nothing Strimmer uses
+changed — verified here against `aioesphomeapi`, the client Home Assistant uses, over both Noise and
+plaintext: the same MAC as before, so Home Assistant keeps the device and its history; all 21
+entities with the right state classes; the admin switch round-trips.
+
+The bump is explicit because it has to be: a caret on a 0.x version allows only patch releases, so
+`^0.1.0` would never have resolved to 0.2.0 on its own.
+
+**The ESPHome tests now run on the library's own `FakeDevice`**, which 0.2.0 exports, instead of a
+stand-in written for them. It uses the library's real entity classes, so the tests assert what
+actually goes over the wire — `state_class` as the protocol's enum, the unit, the decimals — rather
+than echoing back the options passed in. A hand-written fake can agree with our code while both
+disagree with the library. It also made one test stronger: several display names derive to a
+different object id than the catalogue's (`Cold start (median)` would be `cold_start_median`, not
+`cold_start_ms`), so dropping the explicit ids now fails the suite, where before it could not.
+
+
 ## 2026.09.25.8 — 2026-09-25
 
 **The Home Assistant sensors no longer go `unknown` for a minute after every restart.** The ESPHome
