@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.09.25.2 — 2026-09-25
+
+**A switch the console owns can be handed back again.** When the booleans moved into the tile grid
+in `2026.09.20.4`, the **Use add-on config** button stayed behind in the row renderer — which
+booleans no longer have. So a setting adopted by one click on a tile could never be released, and
+from then on the add-on's own Configuration tab was shadowed for it, silently.
+
+Found the hard way: `esphome_api` switched on in the add-on's Configuration tab did nothing,
+because the console held it at off and there was no way in the UI to see that or undo it.
+
+- A tile the console owns now carries a **dot**, and its tooltip says so. That is what the rows
+  have said with their "set here" tag since ownership existed.
+- Under the grid, one line lists what the console owns with a button per setting to hand it back.
+- A test pins it: a boolean can be adopted with a click, so a release control has to exist in the
+  same place.
+
+**The log now says whether the ESPHome API is on.** With the option off the add-on said nothing
+about it at all, so "I turned it on, where is it?" had no answer in the log — which is the state
+this was found in.
+
+
 ## 2026.09.25.1 — 2026-09-25
 
 **The metrics can go to Home Assistant over ESPHome's native API, with no broker.** `esphome_api`

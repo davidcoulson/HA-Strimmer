@@ -417,6 +417,10 @@
   #cfg-intro details[open] summary { display: block; margin-bottom: 2px; }
   details.more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* A pill that does something says so. */
+  .cfgtile.owned { position: relative; }
+  .cfgtile.owned::after { content: ''; position: absolute; top: 6px; right: 6px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: .85; }
+  .cfgback { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .pausebar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
     margin: 0 0 12px; padding: 8px 12px; border-radius: var(--ha-card-border-radius, 12px);
     background: rgba(255, 166, 0, .16); color: var(--warn); font-size: 13px; font-weight: 500; }
@@ -2435,7 +2439,12 @@ function configTile(o, d, save) {
   b.setAttribute('aria-checked', String(Boolean(o.value)));
   b.disabled = !canEdit;
   // The full sentence and the key, which the caption no longer has room for.
-  b.title = `${o.label}\n${o.key} — ${o.value ? 'on' : 'off'}`;
+  b.title = `${o.label}\n${o.key} — ${o.value ? 'on' : 'off'}`
+    + (o.source === 'console' ? '\nSet here: this console owns it and the add-on Configuration tab no longer applies' : '');
+  // A dot when this console owns the option. Without it a tile cannot say what a row said with
+  // its "set here" tag, and a person who switches the option on in the add-on's Configuration
+  // tab has no way to see that the console is shadowing it — which is exactly what happened.
+  if (o.source === 'console') b.classList.add('owned');
   const path = TILE_ICONS[o.icon];
   if (path) {
     const i = document.createElement('i');
@@ -2633,6 +2642,27 @@ async function renderConfig() {
     grid.className = 'cfgtiles';
     for (const o of bools) grid.appendChild(configTile(o, d, save));
     box.append(h, blurb, grid);
+    // Handing a switch back to the add-on Configuration tab. Rows have carried this since
+    // ownership existed; tiles did not, so a boolean changed here could be adopted by a click and
+    // never released — and the add-on's own toggle then did nothing, silently. One line under the
+    // grid, only when there is something to hand back.
+    const owned = bools.filter((o) => o.source === 'console');
+    if (owned.length && d.editableHere && d.writable) {
+      const back = document.createElement('div');
+      back.className = 'note cfgback';
+      back.append('Set here, so the add-on Configuration tab no longer applies: ');
+      owned.forEach((o, i) => {
+        if (i) back.append(', ');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'cfgbtn';
+        btn.textContent = o.short || o.label;
+        btn.title = `Hand ${o.key} back to the add-on Configuration tab`;
+        btn.onclick = () => { btn.disabled = true; save(o, 'release'); };
+        back.append(btn);
+      });
+      box.appendChild(back);
+    }
     host.appendChild(box);
   }
 

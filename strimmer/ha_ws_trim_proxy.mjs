@@ -77,7 +77,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.25.1';
+const VERSION = '2026.09.25.2';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -5096,6 +5096,10 @@ server.listen(PORT, () => {
       onCommand: (on) => setAdminPause(!on, ADMIN_PAUSE_MS, 'the Home Assistant switch'),
     }).catch(() => {});
   }
+  // Say which way this is set, either way. With the option off the add-on said NOTHING about
+  // ESPHome, so "I turned it on, where is it?" had no answer in the log — and the answer that
+  // time was that the console owned the option and was shadowing the add-on's own toggle.
+  if (!ESPHOME_API) log('  ESPHome API: off (esphome_api) — MQTT sensors are unaffected');
   if (ESPHOME_API) {
     // Failure here must never touch the proxy. The commonest one is the port already being held
     // — the add-on runs with host networking, so 6053 is the HOST's 6053 — and a panel that
