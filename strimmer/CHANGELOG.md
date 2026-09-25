@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026.09.25.5 — 2026-09-25
+
+**The console now speaks Spatial Context's design language, which Sextant shares.** The rule at
+its centre: **no button carries text.** Every one is an icon, and its name is in a tooltip — and in
+`aria-label`, so a screen reader still announces it.
+
+- **The header is neutral**, the page's own surface with a divider under it, instead of the blue
+  bar. Identity on the left — the full-colour app icon, the name, and the version in the subtitle —
+  tabs dead centre in Home Assistant's underline style, round icon buttons on the right.
+- **Pause, theme and a ⋮ menu are popovers.** The pause control moved out of the status strip into
+  the header, and its icon carries a dot while a pause is running, with the time left in its
+  tooltip — visible from every tab without reading the banner. GitHub and the raw statistics
+  moved into the ⋮ menu; Auto/Light/Dark is a menu instead of three words in the bar.
+- **Twelve text buttons became icons**: pin an entity or a resource, resume, remove a value, delete
+  an override and confirm it, add an override, the wizard's next/back/cancel, hand an option back
+  to the add-on, and the range and column toggles in the card headings.
+- One tooltip element for the whole page, placed by script, so the scrolling table wrappers — where
+  most of these buttons live — cannot clip it the way a CSS tooltip on the button would be.
+- Card headings are sentence case in the text colour, Home Assistant's own style, rather than
+  Sextant's older small uppercase.
+- A new test fails if a button is built anywhere except `iconBtn()`, a menu row or a config tile,
+  or has text written into it.
+
+**Fixed:** with nothing paused, the console showed an **empty amber strip** at the top of every tab.
+The pause banner's `display: flex` overrode its `hidden` attribute — shipped in `2026.09.24.1` and
+only visible to someone looking at the page with no pause running.
+
+The config tiles keep their captions. They are labelled toggles rather than actions, and twelve
+near-identical glyphs with no words would be guesswork.
+
+
 ## 2026.09.25.4 — 2026-09-25
 
 **Fixes a crash loop in 2026.09.25.3 on any install that still had `mqtt_sensors` set.** The notice

@@ -107,19 +107,37 @@ Deliberately NOT renamed, and each for a reason a rename would have cost somethi
   resolving without being re-added. References to *GabrielGoldsteinAnidea*/HA-Websocket-Stripper
   are upstream's project and stay as they are, as does the LICENSE copyright.
 
-## The console and Sextant
+## The console, Spatial Context and Sextant
 
-The console is deliberately styled to match **Sextant**, the other HA panel in this house
-(`/config/custom_components/sextant/`, design system in `frontend/sextant-ui.js`), so the two read
-as one family of tool. It uses Home Assistant's own CSS token names with this panel's short ones
-aliased onto them.
+The console follows the design language of **Spatial Context**
+([Greminn/ha-spatial-context](https://github.com/Greminn/ha-spatial-context), `frontend/src/styles.ts`
+and `views/app-header.ts`), which **Sextant** — the other HA panel in this house — follows too, so
+all three read as one family of tool. Adopted 2026-09-25, replacing an earlier Sextant-only look.
+The rules that define it, all enforced or measured here:
 
-The constraint that shapes every such decision: **Sextant is a NATIVE panel and this console is an
-Ingress iframe.** Sextant inherits the user's theme and can use HA's web components; the iframe
-inherits nothing and has none of them. So a Sextant rule is copied by reproducing its VALUES, not
-by importing its mechanism — the tokens are defined locally, and `<ha-icon icon="mdi:grass">` in
-the brand mark is an inlined MDI path filled with `currentColor`, which is what `<ha-icon>` renders
-to anyway. Do not "fix" that to a real `<ha-icon>`; it would render nothing.
+- **Every button is an icon, named by a tooltip.** No text on any button; the name lives in
+  `data-tip` (shown by one JS-positioned `.tip` element, so the scrolling table wrappers cannot
+  clip it) and in `aria-label` (so it is still announced). Build buttons ONLY with
+  `iconBtn(icon, tip, onclick, cls)`. Text belongs inside a menu someone opened (`.menu-item`) and
+  on config tiles, which are labelled toggles rather than actions. `test/panel_buttons.test.mjs`
+  fails if a button is built anywhere else or has text written into it.
+- **Neutral header**, not an accent bar: the card surface with a 1px divider under it, as a
+  three-column grid (`minmax(0,1fr) auto minmax(0,1fr)` — a bare `1fr` grows to fit the identity
+  block and pushes the tabs off centre). Identity left (full-colour app icon, name, `v<version> ·
+  tagline` subtitle), tabs dead centre in HA's underline style, 48px round icon buttons right.
+  Below 600px the tabs take the leftover space instead, or they run over the action buttons.
+- **Popovers** for anything that is not a single action: pause, theme and the ⋮ menu each open a
+  floating menu of HA-style rows (icon + label, accent fill on the chosen one).
+- HA's own CSS token names, with this panel's short ones aliased onto them; card headings in
+  sentence case, primary text, 16px/500.
+
+The constraint behind every such decision: **Spatial Context and Sextant are NATIVE panels and this
+console is an Ingress iframe.** They inherit the user's theme and have HA's web components; the
+iframe inherits nothing and has none of them. So a rule is copied by reproducing its VALUES, not by
+importing its mechanism — tokens are defined locally, glyphs are MDI paths masked in the button's
+colour (`ICONS`), the tooltip is our own element, and the app icon is `assets/icon.svg` inlined as a
+data URI (its internal ids must not collide with the page). Do not "fix" any of that to
+`<ha-icon>` or `<ha-tooltip>`; they would render nothing.
 
 **Config tab shape, and why:** every boolean is hoisted out of its section into one tile grid at
 the top headed **Strimmers** (accent-filled = on — "blue means on in this language"), and only
@@ -127,7 +145,12 @@ options that hold a VALUE stay in their sections. A tile is right for on/off and
 do not tile the lists. A section left with nothing but hoisted booleans is SKIPPED rather than
 drawn empty, which is why `SECTIONS` still declares Trimming and Websocket but the page shows
 neither. Each boolean's wording comes from `OPTIONS[key].short` — one source, so the status pill
-and the tile cannot drift (six of twelve had, before `.3`).
+and the tile cannot drift (six of twelve had, before `.3`). A tile the console owns carries a dot,
+and the line under the grid hands it back — rows had that control, tiles lost it for five days.
+
+**The `hidden` attribute loses to any author `display` rule.** Every element this page toggles
+with `.hidden` needs a matching `[hidden] { display: none }` if its class sets `display` — the
+pause banner shipped without one and showed an empty amber strip whenever nothing was paused.
 
 ## Files
 
