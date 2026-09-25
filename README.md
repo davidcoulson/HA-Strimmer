@@ -75,7 +75,7 @@ way back there in time.
   than an IP address.
 - 🧯 **It tells you when it has gone too far.** If trimming would stop a card rendering, that is
   written to the log by name, rather than leaving you with a blank square and no explanation.
-- ✅ **Nothing ships untested.** Every change runs 398 automated tests, on the exact runtime the
+- ✅ **Nothing ships untested.** Every change runs 527 automated tests, on the exact runtime the
   add-on ships with.
 
 ---
