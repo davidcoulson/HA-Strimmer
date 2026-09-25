@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026.09.25.4 — 2026-09-25
+
+**Fixes a crash loop in 2026.09.25.3 on any install that still had `mqtt_sensors` set.** The notice
+telling you the option had been retired was written beside the option read at the top of the file,
+where `warn` — a `const` declared fifty lines further down — is in its temporal dead zone. The
+add-on died on boot with `ReferenceError: Cannot access 'warn' before initialization`, before it
+could serve anything.
+
+Two things let it through, and both are fixed:
+
+- **The file already had the right mechanism and I did not use it.** `CONFIG_WARNINGS` exists
+  precisely because logging is not configured yet that early; the notice goes through it now, with
+  every other config warning.
+- **No test could have caught it.** The suite configures the proxy through the ENVIRONMENT, so
+  nothing in it ever set `mqtt_sensors`, and the one code path that reads an options *file* was
+  reachable only on a real add-on. Options are now read from `CONFIG_DIR` (still `/data` wherever
+  that exists), so a test can boot the add-on with a real options file — and one now does, with a
+  retired option in it.
+
+
 ## 2026.09.25.3 — 2026-09-25
 
 **MQTT is gone; the metrics go to Home Assistant over ESPHome's native API.** Both transports ran

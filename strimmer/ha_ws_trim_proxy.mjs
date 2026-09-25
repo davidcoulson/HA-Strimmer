@@ -39,7 +39,7 @@ import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { certDaysLeft } from './metrics.mjs';
 import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
 import * as httpLog from './http_log.mjs';
-import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
+import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, REMOVED_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
 import { resourceInvariantProblems } from './resource_invariants.mjs';
 import { readPauses, writePauses, pauseUser, resumeUser, sweep as sweepPauses, pausedUntil, pausedForUser, anyActive as anyPauseActive, listPauses, msUntilEndOfDay, ADMINS, isRoleKey, MAX_PAUSE_MS } from './pause.mjs';
 
@@ -59,25 +59,37 @@ import { readPauses, writePauses, pauseUser, resumeUser, sweep as sweepPauses, p
 // normal exit, and the SIGTERM the Supervisor sends is not one.
 
 // ---- config (add-on options.json, overlaid by anything the panel owns) ----
+// `/data` on a real install; `CONFIG_DIR` otherwise, which is what lets a dev run — and the test
+// suite — boot with an options FILE rather than only with environment variables. That gap is not
+// academic: a boot-time notice about a retired option crashed every install that had one, and
+// could not have crashed anything here, because nothing here could set one.
+const CONFIG_DIR = fs.existsSync('/data') ? '/data' : (process.env.CONFIG_DIR || null);
 function loadOptions() {
-  try { if (fs.existsSync('/data/options.json')) return JSON.parse(fs.readFileSync('/data/options.json', 'utf8')); }
-  catch (e) { console.error('could not read /data/options.json:', e.message); }
+  const p = CONFIG_DIR ? `${CONFIG_DIR}/options.json` : null;
+  try { if (p && fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); }
+  catch (e) { console.error(`could not read ${p}:`, e.message); }
   return {};
 }
 const YAML_OPT = loadOptions();
 // Warnings are collected rather than logged here: log levels are derived from the options this
 // very call is producing, so nothing can be written through log()/warn() yet.
 const CONFIG_WARNINGS = [];
-const CONFIG_DIR = fs.existsSync('/data') ? '/data' : (process.env.CONFIG_DIR || null);
 let CONFIG_STORE = CONFIG_DIR
   ? readStore(CONFIG_DIR, (m) => CONFIG_WARNINGS.push(m))
   : { version: 1, managed: {}, history: [] };
 const OPT = effectiveOptions(YAML_OPT, CONFIG_STORE);
+// An option a past version had. Still accepted by the schema so an existing configuration stays
+// valid on update — Supervisor rejects a key it does not know — but nothing reads it, and someone
+// whose sensors have moved deserves to be told where. Through CONFIG_WARNINGS, which exists
+// precisely because logging is not configured yet at this point in the file.
+for (const [key, why] of REMOVED_KEYS) {
+  if (YAML_OPT[key] !== undefined) CONFIG_WARNINGS.push(`${key} no longer does anything: ${why}. Remove it from the add-on configuration.`);
+}
 const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.25.3';
+const VERSION = '2026.09.25.4';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -533,14 +545,6 @@ const CERT_HOST = String(OPT.cert_monitor_host ?? process.env.CERT_MONITOR_HOST 
 // NOT the two-clause shape used by the options above: those default ON, and their second clause
 // exists to let an explicit `false` win. Written that way here it read `(undefined ?? false) !==
 // false`, which is false for everyone, and the listener never started however the option was set.
-// MQTT discovery published these same metrics until 2026.09.25.3. The option is still ACCEPTED by
-// the schema so an existing configuration does not become invalid on update — Supervisor rejects
-// an unknown key — but it does nothing, and a config that still sets it deserves to be told once
-// rather than left wondering where its sensors went.
-if (OPT.mqtt_sensors !== undefined) {
-  warn('mqtt_sensors no longer does anything: metrics moved to the ESPHome API (esphome_api) in '
-    + '2026.09.25.3, which needs no broker. Remove it from the add-on configuration.');
-}
 const ESPHOME_API = OPT.esphome_api !== undefined
   ? Boolean(OPT.esphome_api)
   : String(process.env.ESPHOME_API ?? '0') !== '0';

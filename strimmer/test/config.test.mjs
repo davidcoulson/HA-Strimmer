@@ -402,3 +402,44 @@ test('every icon the catalogue names has a path in the panel', () => {
     assert.ok(table.includes(`'${m[1]}':`), `panel.html has no path for mdi:${m[1]}`);
   }
 });
+
+// The add-on must START with an options file from an older version still in it.
+//
+// This is the failure that took the add-on down on the one install that mattered: a boot-time
+// notice about the retired `mqtt_sensors` was written beside the option read at the top of the
+// file, where `warn` — a const declared fifty lines further down — is in its temporal dead zone.
+// Every test configured the proxy through the ENVIRONMENT, so nothing ever set that option and
+// the crash reached production instead. It boots from an options FILE here for that reason.
+test('boots with a retired option still in the options file, and says it does nothing', async () => {
+  const { startMockHa, getFreePort } = await import('./mock-ha.mjs');
+  const { spawn } = await import('node:child_process');
+  const os = await import('node:os');
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const mock = await startMockHa();
+  const port = await getFreePort(); const sp = await getFreePort();
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strimmer-retired-'));
+  fs.writeFileSync(path.join(dataDir, 'options.json'), JSON.stringify({
+    dashboards: ['test-dash'], mqtt_sensors: true,
+  }));
+  const proxy = spawn(process.execPath, [path.join(dir, '..', 'ha_ws_trim_proxy.mjs')], {
+    cwd: path.join(dir, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
+      PORT: String(port), STATS_PORT: String(sp), CONFIG_DIR: dataDir },
+  });
+  let out = '';
+  proxy.stdout.on('data', (b) => { out += b; });
+  proxy.stderr.on('data', (b) => { out += b; });
+  try {
+    const deadline = Date.now() + 25000;
+    while (!/for live allowlist updates/.test(out) && Date.now() < deadline) {
+      assert.doesNotMatch(out, /ReferenceError|Cannot access/, `the add-on crashed on boot:\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.match(out, /for live allowlist updates/, `never finished booting:\n${out}`);
+    assert.match(out, /mqtt_sensors no longer does anything/,
+      'a setting that has stopped working has to say so, or its sensors just vanish');
+  } finally {
+    proxy.kill(); await mock.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
