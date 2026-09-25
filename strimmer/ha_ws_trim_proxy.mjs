@@ -26,6 +26,7 @@
 //   ALLOW_WS_URL / ALLOW_TOKEN (override the allowlist-precompute connection).
 
 import http from 'node:http';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import dns from 'node:dns';
@@ -89,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.25.5';
+const VERSION = '2026.09.25.6';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -869,7 +870,7 @@ function allowlistFor(cfg, states, registries, renderedTemplates) {
     const names = new Map((registries?.devices || []).map((d) => [d.id, d.name_by_user || d.name || d.id]));
     for (const id of extracted.devices) {
       const rows = byDev.get(id) || [];
-      log(`    card names device "${names.get(id) ?? id}": +${deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES).length} entities ${describeDeviceSplit(rows)}`);
+      report(`    card names device "${names.get(id) ?? id}": +${deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES).length} entities ${describeDeviceSplit(rows)}`);
     }
   }
   const text = JSON.stringify(cfg);
@@ -926,7 +927,7 @@ async function renderTemplates(cfg, renderTemplate) {
     catch (e) { logThrottled(`tpl:${e.message}`, `  auto-entities template not rendered (${e.message})`); return null; }
   }));
   results.filter(Boolean).forEach(([t, r]) => out.set(t, r));
-  if (out.size) log(`  rendered ${out.size}/${tpls.length} auto-entities template filter(s)`);
+  if (out.size) report(`  rendered ${out.size}/${tpls.length} auto-entities template filter(s)`);
   return out;
 }
 
@@ -951,7 +952,76 @@ function applyOverrides(set, realIds, dash = null) {
 }
 
 // Build the per-dashboard allowlists (and their union) using an authed rpc().
+// ---- the rebuild report, and what a rebuild costs ------------------------------------------
+//
+// A rebuild used to write its whole working-out every time: each dashboard's count, each device a
+// card or a rule expanded, the registry reach, the override totals. About forty lines — for a
+// rebuild that changed nothing, which is most of them, since a registry event fires them. With a
+// handful an hour that was the bulk of the log, and it pushed everything else out of Supervisor's
+// buffer. The lines are collected instead and printed only when they differ from the last
+// rebuild's, the way the resource report already is. The one-line "allowlist recomputed … (+a -r)"
+// summary is still said every time: that line is the storm detector.
+let BUILD_REPORT = null;        // lines collected during a build; null outside one
+let LAST_BUILD_REPORT = null;   // the text last printed
+const report = (line) => { if (BUILD_REPORT) BUILD_REPORT.push(line); else log(line); };
+// What a rebuild costs, measured rather than guessed. The worst event-loop stall had climbed from
+// 46ms to 120ms as the instance grew from 9,751 to 10,901 entities, while p99 stayed near 1ms —
+// one long block, not a slow loop. The rebuild is the only thing here big enough to be it, but it
+// already yields between dashboards (every config fetch is an await), so the suspect is a single
+// huge JSON.parse on the control socket, which cannot be split. These say which.
+let BUILD_FRAMES = null;        // [{ bytes, ms }] for large frames parsed during a build
+let BUILD_DASH = null;          // { ms, slowest, slowestMs } — the allowlist computation itself
+
 async function buildAllow(rpc, renderTemplate) {
+  const t0 = performance.now();
+  // A histogram of its own, so "worst block during this rebuild" is not confused with the
+  // since-boot figure the console shows. The resolution is subtracted, as in stats.mjs, because
+  // the histogram records the whole interval between ticks.
+  const loop = monitorEventLoopDelay({ resolution: 10 });
+  loop.enable();
+  BUILD_REPORT = [];
+  BUILD_FRAMES = [];
+  BUILD_DASH = { ms: 0, slowest: null, slowestMs: 0 };
+  let ok = false;
+  // What the sets CONTAIN, not only how big they are. The detail lines are counts, so an edit
+  // that swaps one entity for another leaves every line identical — and "unchanged since the
+  // last rebuild" would then describe a rebuild that changed what a panel is served. Compared,
+  // never printed.
+  let sig = '';
+  try {
+    const out = await buildAllowOnce(rpc, renderTemplate);
+    ok = true;
+    const h = crypto.createHash('sha1');
+    for (const [dash, set] of [...out.perDash].sort(([a], [b]) => a.localeCompare(b))) {
+      h.update(`${dash}:${[...set].sort().join(',')}\n`);
+    }
+    h.update(`union:${[...out.union].sort().join(',')}`);
+    sig = h.digest('hex');
+    return out;
+  } finally {
+    loop.disable();
+    const lines = BUILD_REPORT;
+    BUILD_REPORT = null;
+    const text = lines.join('\n') + '\n' + sig;
+    // A failed build always prints everything it got as far as: that is the one worth reading.
+    if (!ok || text !== LAST_BUILD_REPORT) {
+      for (const l of lines) log(l);
+      if (ok) LAST_BUILD_REPORT = text;
+    } else {
+      log(`  rebuild detail unchanged since the last rebuild (${lines.length} lines) — not repeated`);
+    }
+    const big = BUILD_FRAMES.reduce((a, f) => (f.bytes > (a?.bytes ?? 0) ? f : a), null);
+    const worst = Math.max(0, Math.round(loop.max / 1e6 - 10));
+    log(`  rebuild took ${Math.round(performance.now() - t0)}ms: worst event-loop block ${worst}ms`
+      + (big ? `, largest frame ${(big.bytes / 1048576).toFixed(1)}MB parsed in ${Math.round(big.ms)}ms` : '')
+      + `, dashboards ${Math.round(BUILD_DASH.ms)}ms`
+      + (BUILD_DASH.slowest ? ` (slowest ${BUILD_DASH.slowest} ${Math.round(BUILD_DASH.slowestMs)}ms)` : ''));
+    BUILD_FRAMES = null;
+    BUILD_DASH = null;
+  }
+}
+
+async function buildAllowOnce(rpc, renderTemplate) {
   // Counted where the cost is paid — a rebuild that later fails still pulled the instance from
   // Home Assistant. This was declared, published as a sensor and never incremented, so the one
   // sensor built to show a rebuild storm read 0 straight through one.
@@ -1050,8 +1120,14 @@ async function buildAllow(rpc, renderTemplate) {
     try {
       const cfg = await rpc({ type: 'lovelace/config', url_path: p });
       const tpls = await renderTemplates(cfg, renderTemplate);
+      const c0 = performance.now();
       const set = allowlistFor(cfg, states, registries, tpls);
-      log(`  ${p}: ${set.size} entities`);
+      const cMs = performance.now() - c0;
+      if (BUILD_DASH) {
+        BUILD_DASH.ms += cMs;
+        if (cMs > BUILD_DASH.slowestMs) { BUILD_DASH.slowestMs = cMs; BUILD_DASH.slowest = p; }
+      }
+      report(`  ${p}: ${set.size} entities`);
       perDash.set(p, set);
       cfgByDash.set(p, cfg);
       // Theme names this dashboard asks for. A `theme:` can sit on the dashboard, on a view or
@@ -1110,12 +1186,12 @@ async function buildAllow(rpc, renderTemplate) {
   // another, and a device row wrongly dropped costs a name with no bandwidth saving worth it.
   if (TRIM_REGISTRIES) {
     rebuildRegCache(registries, withOverrides);
-    log(`  registry reach: ${REG_CACHE.devices.size} device(s), ${REG_CACHE.areas.size} area(s)`);
+    report(`  registry reach: ${REG_CACHE.devices.size} device(s), ${REG_CACHE.areas.size} area(s)`);
   }
   await buildResources(rpc, keysByDash);
   const afterAlways = new Set([...union, ...withOverrides]).size;
-  log(`overrides: base ${baseN}, +always ${afterAlways - baseN}, -never ${afterAlways - withOverrides.size}`);
-  if (PER_DASH) log(`  per-dashboard: ${[...perDash].map(([p, s]) => `${p}=${s.size}`).join(', ')} (union ${withOverrides.size})`);
+  report(`overrides: base ${baseN}, +always ${afterAlways - baseN}, -never ${afterAlways - withOverrides.size}`);
+  if (PER_DASH) report(`  per-dashboard: ${[...perDash].map(([p, s]) => `${p}=${s.size}`).join(', ')} (union ${withOverrides.size})`);
   // Here as well as in runRecompute: the boot and reconnect builds do not go through it, and a
   // registry event arriving seconds after either is exactly what the floor is for.
   LAST_REBUILD_AT = Date.now();
@@ -1336,7 +1412,11 @@ function startController() {
         // Guarded: this handler is async, so a throw here becomes an unhandled rejection —
         // i.e. a process-level crash — and a restarting HA/supervisor can answer with
         // something that isn't JSON.
+        const pt0 = performance.now();
         let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+        // Timed only during a build and only when large: a parse is one synchronous call, so a
+        // multi-megabyte registry frame is a block nothing else can run beside.
+        if (BUILD_FRAMES && raw.length > 256 * 1024) BUILD_FRAMES.push({ bytes: raw.length, ms: performance.now() - pt0 });
         if (m.type === 'auth_required') return ws.send(JSON.stringify({ type: 'auth', access_token: ALLOW_TOKEN }));
         // A bad token is a config error, not a transient one — but exiting would just hand the
         // Supervisor a restart loop, so say so loudly and keep retrying. Retry SLOWLY though:
@@ -2691,7 +2771,7 @@ async function resolveConnRules(registries) {
     const viaMdns = discovery.resolve(r.client);
     if (viaMdns) {
       r.ips.add(normalizeIp(viaMdns));
-      log(`  client rule ${r.client} -> ${viaMdns} (via mDNS)`);
+      report(`  client rule ${r.client} -> ${viaMdns} (via mDNS)`);
       return;
     }
     // A hostname. Resolving it is best-effort by design: a panel that is powered off has no
@@ -2700,7 +2780,7 @@ async function resolveConnRules(registries) {
       const { lookup } = await import('node:dns/promises');
       const hits = await lookup(r.client, { all: true });
       hits.forEach((h) => r.ips.add(normalizeIp(h.address)));
-      log(`  client rule ${r.client} -> ${[...r.ips].join(', ')}`);
+      report(`  client rule ${r.client} -> ${[...r.ips].join(', ')}`);
     } catch (e) {
       logThrottled(`client-dns:${r.client}`,
         `  client rule ${r.client}: DNS lookup failed (${e.code || e.message}) — rule inactive until it resolves. `
@@ -2712,17 +2792,25 @@ async function resolveConnRules(registries) {
     r.deviceEntities = [];
     for (const want of r.devices) {
       const ids = byId.has(want) ? [want] : (idsByName.get(want.trim().toLowerCase()) || []);
-      if (!ids.length) { log(`  ${ruleLabel(r)}: no device named "${want}"`); continue; }
+      if (!ids.length) {
+        const msg = `  ${ruleLabel(r)}: no device named "${want}"`;
+        if (onceOnly(`no-device:${want}`)) warn(msg); else debug(msg);
+        continue;
+      }
       if (ids.length > 1) {
-        warn(`  ${ids.length} devices are named "${want}" — the rule expands all of them;`
-          + ' name one by its device id to pick just that one');
+        // Advice, not news: said once per name, then at debug. It was repeated on every rebuild,
+        // and a rebuild runs on every registry event. Often it is not even a mistake — one
+        // tablet can be a voice satellite AND a Kiosk Satellite device under the same name.
+        const msg = `  ${ids.length} devices are named "${want}" — the rule expands all of them;`
+          + ' name one by its device id to pick just that one';
+        if (onceOnly(`dupe-device:${want}:${ids.length}`)) warn(msg); else debug(msg);
       }
       const rows = ids.flatMap((id) => entsFor.get(id) || []);
       const kept = deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES);
       r.deviceEntities.push(...kept);
       // Named by the rule's own wording rather than by a device id: `want` is what someone
       // wrote, and when it matched several devices there is no single id to name here.
-      log(`  ${ruleLabel(r)}: device "${want}"`
+      report(`  ${ruleLabel(r)}: device "${want}"`
         + (ids.length > 1 ? ` (${ids.length} devices)` : '')
         + ` -> ${kept.length} entities ${describeDeviceSplit(rows)}`);
     }
@@ -3687,8 +3775,11 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
           // (cachedOrForward), so none should have been taken — but that was once untrue, and
           // silently, so reset rather than depend on the ordering.
           allowSigReset();
-          log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
-            + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`);
+          // Once per user, dashboard and size, then at debug. A phone on cellular reconnects every
+          // few minutes, and this line — the same answer each time — was about 500 a day.
+          const msg = `user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
+            + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`;
+          if (onceOnly(`user-rules:${user.id}:${dash ?? ''}:${allow.size}`)) log(msg); else debug(msg);
         }
         // The pause, if this user has one. Checked HERE rather than at the upgrade because the
         // token is the only thing that names the person, and it is not read until now. The gate

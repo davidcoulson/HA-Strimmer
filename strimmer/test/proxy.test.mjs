@@ -1060,3 +1060,55 @@ describe('registry-triggered rebuilds have a floor; a dashboard edit does not', 
     assert.equal(rebuilds(), 1, `an edit someone is watching must not wait; log:\n${out}`);
   });
 });
+
+// A rebuild writes its working-out only when it changed, and always says what it cost.
+//
+// Measured on a live instance: a rebuild that changed nothing (+0 -0) still wrote about forty
+// lines — every dashboard's count, every device a rule expanded — and a registry event triggers
+// one, so with a handful an hour they were most of the log. The summary line is still said every
+// time (it is the storm detector); the detail is said when it differs. And every rebuild reports
+// its duration and the worst event-loop block inside it, because the console's since-boot worst
+// stall had climbed from 46ms to 120ms with nothing to say which operation it was.
+describe('the rebuild report', () => {
+  let mock, proxy, port;
+  before(async () => {
+    mock = await startMockHa();
+    port = await getFreePort();
+    proxy = spawnProxy({ mock, dashPaths: 'test-dash,auto-dash', port });
+    await proxy.waitForLog(READY);
+  });
+  after(async () => { proxy.kill(); await mock.close(); });
+
+  it('says what the rebuild cost, every time', async () => {
+    assert.match(proxy.out, /rebuild took \d+ms: worst event-loop block \d+ms[^\n]*dashboards \d+ms/,
+      'the boot build must report its duration and its worst block');
+  });
+
+  it('does not repeat an unchanged rebuild\'s detail', async () => {
+    const marker = proxy.out.length;
+    mock.fireLovelaceUpdated('test-dash');
+    // The summary is written just AFTER the build returns, so wait for it rather than for the
+    // "unchanged" line — slicing the log the moment that appears misses the summary behind it.
+    const seen = () => /rebuild detail unchanged since the last rebuild \(\d+ lines\)[\s\S]*allowlist recomputed/
+      .test(proxy.out.slice(marker));
+    const deadline = Date.now() + 15000;
+    while (!seen() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    const out = proxy.out.slice(marker);
+    assert.doesNotMatch(out, /^\S+\s+ {2}test-dash: \d+ entities$/m,
+      'the per-dashboard lines must not be printed again when nothing about them changed');
+    assert.match(out, /allowlist recomputed/, 'the one-line summary is still said every time');
+    assert.match(out, /rebuild took \d+ms/, 'and so is the cost');
+  });
+
+  it('prints the detail again as soon as it differs', async () => {
+    const marker = proxy.out.length;
+    mock.setConfig('auto-dash', { views: [{ path: 'main', cards: [
+      { type: 'entities', entities: ['light.living_room', 'light.decoy'] },
+    ] }] });
+    mock.fireLovelaceUpdated('auto-dash');
+    await proxy.waitForLog(/allowlist recomputed \(auto-dash\)/, 15000);
+    const out = proxy.out.slice(marker);
+    assert.match(out, /auto-dash: \d+ entities/, 'a changed rebuild must show its working');
+    assert.doesNotMatch(out, /rebuild detail unchanged/);
+  });
+});

@@ -257,6 +257,16 @@ describe('per-user always_forward', () => {
     assert.ok(!got.has('sensor.decoy_power'), 'a test-dash rule must not apply on auto-dash');
   });
 
+  it('says the same answer once, not on every reconnect', async () => {
+    // A phone on cellular reconnects every few minutes. This line, identical each time, was
+    // about 500 a day on a live instance — the same failure as the satellite announce lines.
+    await injectedForToken('david-token');
+    await injectedForToken('david-token');
+    await injectedForToken('david-token');
+    const said = (proxy.out.match(/user rules applied for David: \d+ entities on test-dash/g) || []).length;
+    assert.equal(said, 1, `said ${said} times for one unchanged answer`);
+  });
+
   it('applies no rules when the user is unknown', async () => {
     const other = await injectedForToken('some-other-token');
     assert.ok(!other.has('sensor.decoy_power'));

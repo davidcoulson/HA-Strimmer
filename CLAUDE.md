@@ -362,8 +362,16 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   `scheduleRecompute(why, floorMs)` takes the LOWEST floor among debounced requests, so an edit is
   never held behind a registry event — keep that property if this is touched.
 - **Logging that recurs slower than the 10s throttle window uses `onceOnly(key)`**, not
-  `logThrottled` (satellite announces every 30s; "no user rule matched" every 5 min). The resource
-  report is buffered in `buildResources` and printed only when its text changed.
+  `logThrottled` (satellite announces every 30s; "no user rule matched" every 5 min; "user rules
+  applied" on every phone reconnect; "N devices are named" on every rebuild). The resource report
+  is buffered in `buildResources` and printed only when its text changed, and since 2026.09.25.6
+  so is the whole rebuild's detail: inside a build, informational lines go through `report()`,
+  not `log()`. The comparison includes a hash of what each set CONTAINS — the lines are counts,
+  and a swapped entity leaves every count the same. Errors and warnings still use `log`/`warn`.
+- **Every rebuild logs its cost** (`rebuild took …ms: worst event-loop block …ms, largest frame
+  …MB parsed in …ms, dashboards …ms`). Read that line before optimising the rebuild: it already
+  yields between dashboards (each config fetch is an await), so the likely long block is one
+  `JSON.parse` of a multi-megabyte registry frame, which no amount of yielding can split.
 - **Every socket the proxy opens to HA carries `X-Forwarded-*`** — bridge, identity probe
   (`resolveUser(token, fwd)`), and the `serveDashboardPage` fetch. HA's failed-login ban keys on
   the address it sees; a bare probe made a rejected token the PROXY's failed login.

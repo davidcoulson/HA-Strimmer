@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026.09.25.6 — 2026-09-25
+
+**A rebuild that changed nothing no longer writes forty lines about it.** Measured on a live
+instance: every rebuild printed each dashboard's count, each device a card or a rule expanded,
+the registry reach and the override totals — and a registry event triggers one, so with a handful
+an hour they were most of the log. The detail is now printed only when it differs from the last
+rebuild's, the way the resource report already was. The one-line `allowlist recomputed … (+a -r)`
+summary is still said every time; that line is the storm detector.
+
+"Differs" means what the sets **contain**, not just their sizes. The detail lines are counts, so an
+edit that swaps one entity for another leaves every line identical — and the first version of this
+said "unchanged since the last rebuild" about a rebuild that had changed what a panel is served.
+A test that swaps an entity caught it.
+
+**Every rebuild now says what it cost:** `rebuild took 812ms: worst event-loop block 97ms, largest
+frame 11.8MB parsed in 94ms, dashboards 38ms (slowest lovelace 17ms)`. The console's since-boot worst
+stall had crept from 46ms to 120ms as the instance grew, while p99 stayed near 1ms — one long
+block, not a slow loop. The rebuild already yields between dashboards, so the suspect is a single
+large `JSON.parse` on the control socket, which cannot be split. This line says which, so the fix
+can follow the measurement.
+
+Two more lines said once instead of every time:
+
+- `user rules applied for …` — repeated on every reconnect, and a phone on cellular reconnects
+  every few minutes: about 500 identical lines a day. Now once per user, dashboard and answer.
+- `N devices are named "…"` — repeated on every rebuild. Often not even a mistake: one tablet is
+  commonly a voice satellite *and* a Kiosk Satellite or ha-paneld device under the same name.
+
+
 ## 2026.09.25.5 — 2026-09-25
 
 **The console now speaks Spatial Context's design language, which Sextant shares.** The rule at
