@@ -6,7 +6,7 @@
 // decides whether the recorder summarises them at all.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload, brokerFromSupervisor, SENSORS } from '../mqtt_sensors.mjs';
+import { buildPayload, brokerFromSupervisor, SENSORS, BINARY_SENSORS } from '../mqtt_sensors.mjs';
 
 const snap = {
   clients: { open: 4, total: 128, list: [
@@ -110,4 +110,46 @@ test('a snapshot taken before the allowlist is ready is not publishable', () => 
   assert.equal(warm.allowlist.ready, true);
   // And the payload built from a warm snapshot carries the real numbers, not zeros.
   assert.equal(buildPayload(warm).entities_union, 418);
+});
+
+// The switch and the binary sensor answer two different questions, and conflating them was the
+// bug waiting to happen: a pause for one PERSON must not make the admin switch read as off, or
+// turning it back on would appear to do nothing.
+test('the trimming sensors distinguish "anything paused" from "admins paused"', () => {
+  const base = { allowlist: { ready: true } };
+
+  const idle = buildPayload({ ...base, pauses: [] }, { trimming: true });
+  assert.equal(idle.trimming, 'on');
+  assert.equal(idle.admin_trimming, 'on');
+  assert.equal(idle.trim_paused_min, 0);
+
+  const person = buildPayload({ ...base, pauses: [{ user: 'u-david', role: null, msLeft: 40 * 60000 }] },
+    { trimming: true });
+  assert.equal(person.trimming, 'off', 'something IS paused');
+  assert.equal(person.admin_trimming, 'on', 'but the admin switch is not what paused it');
+  assert.equal(person.trim_paused_min, 40);
+
+  const admins = buildPayload({ ...base, pauses: [{ user: 'role:admin', role: 'admin', msLeft: 59 * 60000 }] },
+    { trimming: true });
+  assert.equal(admins.trimming, 'off');
+  assert.equal(admins.admin_trimming, 'off');
+
+  // Trimming switched off in the options is not a pause, but it is still "not trimming" — a
+  // sidebar badge that ignored this would claim the app was working when it was a passthrough.
+  const off = buildPayload({ ...base, pauses: [] }, { trimming: false });
+  assert.equal(off.trimming, 'off');
+  assert.equal(off.admin_trimming, 'off');
+});
+
+test('the countdown reports the longest pause, not the first one found', () => {
+  const p = buildPayload({ allowlist: { ready: true }, pauses: [
+    { user: 'a', msLeft: 5 * 60000 }, { user: 'b', msLeft: 90 * 60000 },
+  ] }, { trimming: true });
+  assert.equal(p.trim_paused_min, 90);
+});
+
+test('the binary sensor declares a device class and an icon', () => {
+  for (const b of BINARY_SENSORS) {
+    assert.ok(b.id && b.name && b.icon && b.dc, `${b.id} is missing a field`);
+  }
 });

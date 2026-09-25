@@ -35,7 +35,15 @@ const filePath = (dataDir) => `${dataDir.replace(/\/$/, '')}/${PAUSE_FILE}`;
 // Identity is matched on the HA user ID, never the display name. A name is editable in the HA UI
 // and two people can share one; the id is what `auth/current_user` returns and what the console's
 // Ingress headers carry, so both ends of this agree without a lookup.
+//
+// One reserved key stands for a ROLE rather than a person: every administrator at once. It exists
+// because a switch in Home Assistant has no user — MQTT delivers a payload, not who published it
+// — so a switch can only pause a GROUP. Administrators is the right group: they are the people
+// who troubleshoot, and it leaves every kiosk and wall panel trimmed. A colon cannot appear in a
+// Home Assistant user id (they are 32 hex characters), so this can never collide with one.
 const keyOf = (user) => String(user ?? '').trim().toLowerCase();
+export const ADMINS = 'role:admin';
+export const isRoleKey = (k) => keyOf(k) === ADMINS;
 
 export function emptyPauses() { return { pauses: {} }; }
 
@@ -122,6 +130,17 @@ export function pausedUntil(state, user, now = Date.now()) {
   return hit.until;
 }
 
+// The question the bridge actually asks: is THIS person's trim paused, by name or by role?
+// Returns the expiry, or null. `is_admin` comes from `auth/current_user`, the same field the
+// `role: admin` override matcher already uses — so "admin" means exactly what it means everywhere
+// else in this add-on, rather than a second definition that could drift from it.
+export function pausedForUser(state, user, now = Date.now()) {
+  if (!user) return null;
+  const own = pausedUntil(state, user.id, now) ?? pausedUntil(state, user.name, now);
+  if (own) return own;
+  return user.is_admin ? pausedUntil(state, ADMINS, now) : null;
+}
+
 export const anyActive = (state, now = Date.now()) =>
   Object.values(state.pauses).some((p) => p.until > now);
 
@@ -129,7 +148,14 @@ export const anyActive = (state, now = Date.now()) =>
 export function listPauses(state, now = Date.now()) {
   return Object.entries(state.pauses)
     .filter(([, p]) => p.until > now)
-    .map(([user, p]) => ({ user, name: p.name, by: p.by, at: p.at, until: p.until, msLeft: p.until - now }))
+    .map(([user, p]) => ({
+      user,
+      role: isRoleKey(user) ? 'admin' : null,
+      // The role pause has no person to name, so it carries its own label rather than leaving the
+      // console to special-case a key it should not have to know about.
+      name: isRoleKey(user) ? 'administrators' : p.name,
+      by: p.by, at: p.at, until: p.until, msLeft: p.until - now,
+    }))
     .sort((a, b) => a.until - b.until);
 }
 

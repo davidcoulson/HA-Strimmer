@@ -82,6 +82,9 @@ const topicFor = (id) => `${DISCOVERY_PREFIX}/sensor/${NODE}/${id}/config`;
 // Binary sensors live under their own component path in the discovery tree, which is why this is
 // a second function rather than an argument.
 const binaryTopicFor = (id) => `${DISCOVERY_PREFIX}/binary_sensor/${NODE}/${id}/config`;
+// The one control this add-on exposes to Home Assistant, rather than another reading.
+const switchTopicFor = (id) => `${DISCOVERY_PREFIX}/switch/${NODE}/${id}/config`;
+const cmdTopic = `${DISCOVERY_PREFIX}/switch/${NODE}/set`;
 const stateTopic = `${DISCOVERY_PREFIX}/sensor/${NODE}/state`;
 const availTopic = `${DISCOVERY_PREFIX}/sensor/${NODE}/availability`;
 
@@ -147,6 +150,10 @@ export function buildPayload(snap, extra = {}) {
     // Is the trim actually doing anything right now? Off when the option is off, and off while
     // any user's pause is running — the state a sidebar badge or a conditional card asks for.
     trimming: extra.trimming === false || (snap?.pauses?.length ?? 0) > 0 ? 'off' : 'on',
+    // The switch's own state: on unless ADMIN trimming is paused. Separate from `trimming` above,
+    // which answers the broader "is anything trimmed right now" — a pause for one person must not
+    // make the switch read as off, or flipping it on would appear to do nothing.
+    admin_trimming: extra.trimming === false || (snap?.pauses ?? []).some((p) => p.role === 'admin') ? 'off' : 'on',
     // Minutes until the longest-running pause ends, 0 when nothing is paused, so a template can
     // count down without parsing a timestamp.
     trim_paused_min: (snap?.pauses?.length ?? 0)
@@ -233,12 +240,36 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000 } 
       };
       try { client.publish(binaryTopicFor(b.id), JSON.stringify(cfg), { retain: true, qos: 0 }); } catch {}
     }
+    // A switch, so trimming can be turned off from the Home Assistant app — which is where you
+    // already are when a dashboard is missing the entity you need to look at, and which works
+    // over Cloudflare from anywhere.
+    //
+    // It pauses for ADMIN USERS, not everyone and not one person. MQTT carries a payload and not
+    // an identity, so a switch cannot know who flipped it; the honest scope for an anonymous
+    // control is a role. Administrators is the one that matches the purpose — they are who
+    // troubleshoots — and it leaves every kiosk and wall panel trimmed and undisturbed.
+    try {
+      client.publish(switchTopicFor('trim_pause'), JSON.stringify({
+        name: 'Trimming (admins)',
+        unique_id: `${NODE}_trim_pause`,
+        state_topic: stateTopic,
+        command_topic: cmdTopic,
+        availability_topic: availTopic,
+        value_template: '{{ value_json.admin_trimming }}',
+        state_on: 'on',
+        state_off: 'off',
+        payload_on: 'ON',
+        payload_off: 'OFF',
+        icon: 'mdi:content-cut',
+        device,
+      }), { retain: true, qos: 0 });
+    } catch {}
     announced = true;
-    log(`  MQTT: announced ${SENSORS.length} sensors and ${BINARY_SENSORS.length} binary sensor`);
+    log(`  MQTT: announced ${SENSORS.length} sensors, ${BINARY_SENSORS.length} binary sensor and 1 switch`);
   };
 
   return {
-    async start({ token, snapshot, extras }) {
+    async start({ token, snapshot, extras, onCommand }) {
       const broker = await brokerFromSupervisor(token);
       if (!broker) { log('  MQTT: no broker from Supervisor — long-term sensors disabled'); return false; }
 
@@ -256,8 +287,30 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000 } 
         log(`  MQTT: connected to ${broker.url}`);
         try { client.publish(availTopic, 'online', { retain: true }); } catch {}
         if (!announced) announce();
+        // Re-subscribed on every connect, not once at start: a reconnect gives a fresh session
+        // and the broker keeps no subscription for us, so a switch that worked before a broker
+        // restart would quietly stop working after one.
+        if (onCommand) {
+          client.subscribe(cmdTopic, { qos: 0 }, (e) => {
+            if (e) log(`  MQTT: could not subscribe to the switch topic (${e.message})`);
+          });
+        }
         // Publish immediately now that the socket is actually up. Doing this only from start()
         // raced the connection and was skipped every time.
+        publish();
+      });
+      // The only inbound path. Deliberately narrow: one topic, two payloads, and anything else is
+      // ignored rather than interpreted. Anyone who can publish to this broker can already
+      // command every MQTT device in the house, and what this grants is the trim going off for
+      // administrators for an hour — a performance change, not an access one, and one that
+      // expires by itself.
+      client.on('message', (topic, buf) => {
+        if (topic !== cmdTopic || !onCommand) return;
+        const want = String(buf).trim().toUpperCase();
+        if (want !== 'ON' && want !== 'OFF') { log(`  MQTT: ignoring switch payload ${JSON.stringify(String(buf).slice(0, 20))}`); return; }
+        try { onCommand(want === 'ON'); } catch (e) { log(`  MQTT: switch command failed (${e.message})`); }
+        // Answer immediately rather than waiting for the interval, so the toggle in the app does
+        // not spring back for up to a minute before settling where it was put.
         publish();
       });
       client.on('error', (e) => {

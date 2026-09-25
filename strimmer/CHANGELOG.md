@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026.09.24.2 — 2026-09-24
+
+**A switch in Home Assistant turns the trim off for administrators.** `switch.strimmer_trimming_admins`
+pauses it for an hour from wherever you already are — the app, a dashboard, an automation, a voice
+command — which is the point: when a dashboard is missing the entity you need, you are holding a
+phone, not sitting at the console.
+
+It pauses a **role** rather than a person because MQTT delivers a payload and not an identity, so a
+switch cannot know who flipped it. Administrators is the scope that matches the purpose — they are
+who troubleshoots — and **every kiosk and wall panel keeps its trim** and is never reconnected.
+`ADMIN_PAUSE_MINUTES` changes the hour. The console offers the same under **pause trimming → all
+admins, 1 hour**, so there is one feature and not two.
+
+`admin_trimming` is a separate field from `trimming` on purpose: a pause for one person turns the
+binary sensor off but leaves the switch on, so flipping the switch can never look like a no-op.
+
+
 ## 2026.09.24.1 — 2026-09-24
 
 **You can pause the trimming while you troubleshoot.** The add-on serves a panel only the entities

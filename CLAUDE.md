@@ -229,6 +229,13 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   at and slow as well. Pauses expire (1h / rest of day, 24h ceiling) because one left on is
   invisible: panels just load slowly. WHO is paused is redacted off-Ingress like every other
   identity; THAT something is paused is not, because a health check should see it.
+  **The reserved key `role:admin`** (`ADMINS`) pauses every administrator at once, which is what
+  the MQTT switch `switch.strimmer_trimming_admins` does — MQTT carries a payload and not an
+  identity, so an anonymous control can only scope to a role. `is_admin` comes from
+  `auth/current_user`, the same field the `role: admin` override matcher uses; do not introduce a
+  second definition. A colon cannot occur in an HA user id, so the key cannot collide. The switch's
+  own state field is `admin_trimming`, separate from `trimming`: a pause for one PERSON must not
+  make the switch read as off, or turning it on would appear to do nothing.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
   is now set (for trusted-network login, below), which can break the internal
   `homeassistant`/`supervisor` DNS names — the `ha_base` / `allow_ws_url` options pin them

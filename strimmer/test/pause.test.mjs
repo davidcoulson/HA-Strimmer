@@ -15,8 +15,8 @@ import os from 'node:os';
 import http from 'node:http';
 import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 import {
-  emptyPauses, sanitize, pauseUser, resumeUser, sweep, pausedUntil, anyActive,
-  listPauses, msUntilEndOfDay, readPauses, writePauses, MAX_PAUSE_MS,
+  emptyPauses, sanitize, pauseUser, resumeUser, sweep, pausedUntil, pausedForUser, anyActive,
+  listPauses, msUntilEndOfDay, readPauses, writePauses, ADMINS, isRoleKey, MAX_PAUSE_MS,
 } from '../pause.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -61,6 +61,36 @@ describe('the pause store', () => {
   it('caps a pause at a day, however long it was asked for', () => {
     const s = pauseUser(emptyPauses(), 'u-david', 99 * 24 * 3600000, { now: NOW });
     assert.equal(pausedUntil(s, 'u-david', NOW), NOW + MAX_PAUSE_MS);
+  });
+
+  // The switch in Home Assistant has no user behind it, so what it can pause is a ROLE. These
+  // pin that it reaches every administrator and nobody else.
+  it('pauses every administrator at once, and only administrators', () => {
+    const s = pauseUser(emptyPauses(), ADMINS, 3600000, { now: NOW });
+    const admin = { id: 'u-david', name: 'David', is_admin: true };
+    const kiosk = { id: 'u-kiosk', name: 'Kiosk', is_admin: false };
+    assert.ok(pausedForUser(s, admin, NOW), 'an admin is paused by the role');
+    assert.equal(pausedForUser(s, kiosk, NOW), null, 'a wall panel keeps its trim');
+    assert.equal(pausedForUser(s, null, NOW), null, 'an unresolved user is never paused');
+  });
+
+  it('keeps a personal pause working for a non-admin', () => {
+    const s = pauseUser(emptyPauses(), 'u-kiosk', 3600000, { now: NOW });
+    assert.ok(pausedForUser(s, { id: 'u-kiosk', is_admin: false }, NOW));
+  });
+
+  it('cannot collide with a real user id', () => {
+    // HA user ids are 32 hex characters, so a colon cannot appear in one.
+    assert.ok(isRoleKey(ADMINS));
+    assert.ok(!isRoleKey('0123456789abcdef0123456789abcdef'));
+    assert.match(ADMINS, /:/);
+  });
+
+  it('labels the role pause for the console, which should not know the key', () => {
+    const s = pauseUser(emptyPauses(), ADMINS, 60000, { now: NOW });
+    const [row] = listPauses(s, NOW);
+    assert.equal(row.role, 'admin');
+    assert.equal(row.name, 'administrators');
   });
 
   it('resumes early', () => {
@@ -286,7 +316,31 @@ describe('a paused user is served untrimmed', () => {
     c.close();
   });
 
+  it('pauses admins as a group, leaving the kiosk user trimmed', async () => {
+    // What the Home Assistant switch does. david-token is an admin in the mock; kiosk-token is
+    // not, which is exactly the wall-panel case this scope exists to protect.
+    // Clear BOTH kinds first. The previous test leaves David paused personally, and a personal
+    // pause outlives the role one — which is correct, and would otherwise make this test look
+    // like the role resume had failed.
+    await post('/resume', { user: 'role:admin' }, asUser('u-david', 'David'));
+    await post('/resume', {}, asUser('u-david', 'David'));
+    const res = await post('/pause', { preset: 'hour', scope: 'admins' }, asUser('u-david', 'David'));
+    assert.equal(res.status, 200);
+    assert.equal(res.json.user, 'role:admin');
+
+    assert.equal(await injectedFor('david-token'), null, 'an admin is untrimmed');
+    const kiosk = await injectedFor('kiosk-token');
+    assert.ok(Array.isArray(kiosk) && kiosk.length, 'a non-admin panel keeps its allowlist');
+
+    await post('/resume', { user: 'role:admin' }, asUser('u-david', 'David'));
+    const back = await injectedFor('david-token');
+    assert.ok(Array.isArray(back) && back.length, 'and it goes back afterwards');
+  });
+
   it('puts the trim back when the pause is ended early', async () => {
+    // Sets up its own pause rather than inheriting one from the test above: state that leaks
+    // between tests makes whichever one runs second lie about what it is checking.
+    await post('/pause', { preset: 'hour' }, asUser('u-david', 'David'));
     const res = await post('/resume', {}, asUser('u-david', 'David'));
     assert.equal(res.status, 200);
     assert.equal(res.json.wasPaused, true);

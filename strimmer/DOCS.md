@@ -320,14 +320,33 @@ performance, which is why it expires.
 The console shows a banner for as long as one is running, with **Resume now**. Two sensors report
 it as well, so it is visible from outside the console (see below).
 
+#### The switch in Home Assistant
+
+`switch.strimmer_trimming_admins` turns the trim off **for every administrator, for an hour**, from
+anywhere you can reach Home Assistant — the app, a dashboard button, an automation, or a voice
+command. It is the one-tap path for the case where you are away and stuck; the console is where you
+go when you want to choose the duration.
+
+It pauses a **role**, not a person, because MQTT delivers a payload and not an identity — a switch
+cannot know who flipped it. Administrators is the scope that matches the purpose: they are who
+troubleshoots, and **every kiosk and wall panel keeps its trim** and is never disturbed. The switch
+returns to `on` by itself when the hour is up. `ADMIN_PAUSE_MINUTES` (env) changes the span.
+
+The console offers the same thing under **pause trimming → all admins, 1 hour**, so the two paths
+are one feature.
+
 ### Knowing whether it is on, from anywhere
 
 With `mqtt_sensors` on, two entities answer "is this thing trimming right now":
 
 | Entity | What |
 |---|---|
-| `binary_sensor.strimmer_trimming` | `on` while trimming, `off` while paused — or if `trim_entities` is off entirely |
-| `sensor.strimmer_trim_paused_for` | Minutes until the pause ends, `0` when nothing is paused |
+| `binary_sensor.strimmer_trimming` | `on` while trimming, `off` while **anything** is paused — or if `trim_entities` is off entirely |
+| `switch.strimmer_trimming_admins` | `off` while **administrators** are paused; flip it to pause or resume them |
+| `sensor.strimmer_trim_paused_for` | Minutes until the longest pause ends, `0` when nothing is paused |
+
+The sensor and the switch answer different questions on purpose: a pause for one person turns the
+binary sensor off but leaves the switch on, so flipping the switch cannot look like a no-op.
 
 That makes a paused trim visible without opening this panel — a badge in
 [custom-sidebar](https://github.com/elchininet/custom-sidebar), a conditional card, or an

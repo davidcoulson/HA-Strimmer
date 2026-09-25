@@ -40,7 +40,7 @@ import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
 import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
 import { resourceInvariantProblems } from './resource_invariants.mjs';
-import { readPauses, writePauses, pauseUser, resumeUser, sweep as sweepPauses, pausedUntil, anyActive as anyPauseActive, listPauses, msUntilEndOfDay, MAX_PAUSE_MS } from './pause.mjs';
+import { readPauses, writePauses, pauseUser, resumeUser, sweep as sweepPauses, pausedUntil, pausedForUser, anyActive as anyPauseActive, listPauses, msUntilEndOfDay, ADMINS, isRoleKey, MAX_PAUSE_MS } from './pause.mjs';
 
 // Compiled bytecode is cached between runs, which is worth having because this add-on restarts
 // far more often than a typical service — every config change, every rebuild — and each restart
@@ -76,7 +76,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.24.1';
+const VERSION = '2026.09.24.2';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -670,6 +670,12 @@ const openBridges = new Map();
 // is. Loaded from /data so a restart mid-pause does not silently re-trim, and swept on a timer so
 // it ends on its own.
 let PAUSES = readPauses(CONFIG_DIR);
+// How long the Home Assistant switch pauses for. Env-only: the console offers a choice, the
+// switch is the one-tap path and does not stop to ask.
+const ADMIN_PAUSE_MS = Math.min(
+  Math.max(parseInt(process.env.ADMIN_PAUSE_MINUTES || '60', 10) || 60, 1) * 60000,
+  MAX_PAUSE_MS,
+);
 const pauseKey = (u) => String(u ?? '').trim().toLowerCase();
 
 // Drop every open connection belonging to one user, so it re-subscribes under the new answer.
@@ -679,12 +685,35 @@ const pauseKey = (u) => String(u ?? '').trim().toLowerCase();
 // keeps its trimmed subscription, and ending one has to put the trim back without a manual
 // reload.
 function recycleUser(userKey, why) {
-  const victims = [...openBridges].filter(([, b]) => pauseKey(b.user) === userKey);
+  // The admin pause is not a user id — it matches whoever is an administrator, which is a fact
+  // about the connection rather than a name to compare against.
+  const hit = isRoleKey(userKey)
+    ? ([, b]) => b.isAdmin
+    : ([, b]) => pauseKey(b.user) === userKey;
+  const victims = [...openBridges].filter(hit);
   if (!victims.length) return 0;
   log(`  reconnecting ${victims.length} connection(s) for ${userKey} (${why}): `
     + victims.map(([, b]) => `${b.ip ?? '?'} (${b.dash ?? 'union'})`).join(', '));
   for (const [close] of victims) { try { close(); } catch {} }
   return victims.length;
+}
+
+// Start or end the ADMIN pause. The switch in Home Assistant has no user behind it — MQTT
+// delivers a payload, not who published it — so what it can offer is a role, and administrators
+// is the right one: they are the people who troubleshoot, and every kiosk keeps its trim.
+function setAdminPause(on, ms, by) {
+  if (on) {
+    PAUSES = pauseUser(PAUSES, ADMINS, ms, { name: 'administrators', by });
+    const until = pausedUntil(PAUSES, ADMINS);
+    log(`trim PAUSED for ADMIN users until ${new Date(until).toISOString()} `
+      + `(${Math.round(ms / 60000)} min, via ${by})`);
+  } else {
+    if (!pausedUntil(PAUSES, ADMINS)) return 0;
+    PAUSES = resumeUser(PAUSES, ADMINS);
+    log(`trim resumed for admin users (via ${by})`);
+  }
+  try { writePauses(CONFIG_DIR, PAUSES); } catch (e) { warn(`pause: could not persist (${e.message})`); }
+  return recycleUser(ADMINS, on ? 'admin trim paused' : 'admin pause ended');
 }
 
 // Ending a pause is as important as starting one, and nothing else would do it: the person who
@@ -3465,7 +3494,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // What openBridges holds for this connection: which set it is on, who is behind it, and where
   // it came from. A live object rather than a snapshot, because the user is not known until the
   // token resolves and a pause arriving later has to be able to find it.
-  const bridgeInfo = { dash, ip: meta.ip ?? null, user: null };
+  const bridgeInfo = { dash, ip: meta.ip ?? null, user: null, isAdmin: false };
   let timedInitial = false;
   const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0, headers: meta.fwd || {} });
   const connId = stats.connOpen({
@@ -3644,7 +3673,8 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         // the same ordering the user rules above depend on.
         if (user) {
           bridgeInfo.user = user.id ?? user.name ?? null;
-          const until = pausedUntil(PAUSES, user.id) ?? pausedUntil(PAUSES, user.name);
+          bridgeInfo.isAdmin = Boolean(user.is_admin);
+          const until = pausedForUser(PAUSES, user);
           if (until) {
             trimming = false;
             log(`trim PAUSED for ${user.name ?? user.id} on this connection `
@@ -3670,6 +3700,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         .then((user) => {
           if (!user) return;
           bridgeInfo.user = user.id ?? user.name ?? null;
+          bridgeInfo.isAdmin = Boolean(user.is_admin);
           stats.connIdentity(connId, { user: user.name ?? user.id });
         })
         .catch(() => {});
@@ -4751,21 +4782,30 @@ const statsServer = http.createServer((req, res) => {
           res.writeHead(400, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ error: 'Home Assistant did not say who you are — open the panel from the sidebar' }));
         }
-        const { preset, tzOffset } = JSON.parse(body || '{}');
+        const { preset, tzOffset, scope } = JSON.parse(body || '{}');
         const ms = preset === 'day' ? msUntilEndOfDay(tzOffset) : 3600000;
-        PAUSES = pauseUser(PAUSES, id, ms, { name, by: name || id });
+        // `scope: 'admins'` pauses the role instead of the person — the same thing the Home
+        // Assistant switch does, offered here so the two paths cannot drift apart. It is not a
+        // privilege check: what it grants is what Home Assistant would already hand those tokens,
+        // minus this app's filtering, for an hour.
+        const target = scope === 'admins' ? ADMINS : id;
+        PAUSES = pauseUser(PAUSES, target, ms, {
+          name: scope === 'admins' ? 'administrators' : name,
+          by: name || id,
+        });
         try { writePauses(CONFIG_DIR, PAUSES); } catch (e) { warn(`pause: could not persist (${e.message}) — it will not survive a restart`); }
-        const until = pausedUntil(PAUSES, id);
+        const until = pausedUntil(PAUSES, target);
         // Said at info, with an end time, because this is the add-on being asked to stop doing
         // the thing it exists for. Anyone reading the log later should find out why a panel was
         // slow for an hour without having to reason about it.
-        log(`trim PAUSED for ${name || id} until ${new Date(until).toISOString()} `
-          + `(${Math.round(ms / 60000)} min, requested from the console)`);
+        log(`trim PAUSED for ${scope === 'admins' ? 'ADMIN users' : (name || id)} `
+          + `until ${new Date(until).toISOString()} `
+          + `(${Math.round(ms / 60000)} min, requested from the console by ${name || id})`);
         // Their open connections are still on a trimmed subscription, and HA cannot amend one.
         // Dropping them is what makes the pause take effect on the page they are looking at.
-        const dropped = recycleUser(pauseKey(id), 'trim paused');
+        const dropped = recycleUser(pauseKey(target), 'trim paused');
         res.writeHead(200, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, user: id, name, until, msLeft: until - Date.now(), reconnected: dropped }));
+        return res.end(JSON.stringify({ ok: true, user: target, name, until, msLeft: until - Date.now(), reconnected: dropped }));
       } catch (e) {
         res.writeHead(400, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
@@ -5031,6 +5071,11 @@ server.listen(PORT, () => {
       token: ALLOW_TOKEN,
       snapshot: () => stats.snapshot(statsExtras()),
       extras: () => ({ rebuilds: REBUILD_COUNT, certDaysLeft: CERT_DAYS, trimming: STRIP }),
+      // The switch in Home Assistant. OFF pauses the trim for administrators for an hour; ON
+      // ends it early. An hour rather than a configurable span because this is the one-tap
+      // control — the console is where you go when you want to choose — and because a switch
+      // with no clock on it is one that gets left off.
+      onCommand: (on) => setAdminPause(!on, ADMIN_PAUSE_MS, 'the Home Assistant switch'),
     }).catch(() => {});
   }
   if (CERT_HOST) {

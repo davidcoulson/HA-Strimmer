@@ -1314,7 +1314,7 @@ async function searchEntities(q) {
 // no way to aim it at somebody else.
 const paused = (s) => (s.pauses || []).filter((p) => (p.msLeft ?? 0) > 0);
 
-async function postPause(preset, btn) {
+async function postPause(preset, btn, scope) {
   const was = btn.textContent;
   btn.disabled = true; btn.textContent = 'pausing…';
   try {
@@ -1323,11 +1323,12 @@ async function postPause(preset, btn) {
     // a timezone that would then have to be kept in step with the person.
     const r = await fetch('./pause', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ preset, tzOffset: new Date().getTimezoneOffset() }),
+      body: JSON.stringify({ preset, scope, tzOffset: new Date().getTimezoneOffset() }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    toast(`Trimming paused for you until ${new Date(j.until).toLocaleTimeString()}`
+    toast(`Trimming paused for ${scope === 'admins' ? 'administrators' : 'you'} `
+      + `until ${new Date(j.until).toLocaleTimeString()}`
       + (j.reconnected ? ` — ${j.reconnected} connection${j.reconnected === 1 ? '' : 's'} reconnecting` : '')
       + '. Reload the dashboard you are troubleshooting.');
     tick();
@@ -1365,7 +1366,8 @@ function renderPause(s, sub) {
     // Off Ingress the user is redacted, so say what IS known rather than rendering "undefined".
     who.textContent = p.name || p.user || 'someone';
     const txt = document.createElement('span');
-    txt.append('Trimming is paused for ', who, ` — ${mins} min left, then it resumes on its own.`);
+    txt.append('Trimming is paused for ', who, ` — ${mins} min left, then it resumes on its own.`
+      + (p.role === 'admin' ? ' Wall panels are unaffected.' : ''));
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = 'Resume now';
@@ -1388,16 +1390,19 @@ function renderPause(s, sub) {
     + 'Applies to your Home Assistant user on every device, and ends by itself.';
   const expand = () => {
     const wrap = document.createElement('span');
-    const mk = (label, preset) => {
+    const mk = (label, preset, scope) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = label;
       b.style.fontSize = '11px';
       b.style.padding = '2px 8px';
-      b.onclick = () => postPause(preset, b);
+      b.onclick = () => postPause(preset, b, scope);
       return b;
     };
-    wrap.append('pause for ', mk('1 hour', 'hour'), ' ', mk('rest of day', 'day'));
+    // "all admins" is the same thing the Home Assistant switch does, offered here so the two are
+    // one feature rather than two that drift. Wall panels are unaffected either way.
+    wrap.append('pause for ', mk('1 hour', 'hour'), ' ', mk('rest of day', 'day'), ' ',
+      mk('all admins, 1 hour', 'hour', 'admins'));
     pill.replaceWith(wrap);
   };
   pill.onclick = expand;
