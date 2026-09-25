@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026.09.25.1 — 2026-09-25
+
+**The metrics can go to Home Assistant over ESPHome's native API, with no broker.** `esphome_api`
+makes this add-on look like an ESPHome device: Home Assistant's own integration connects to it, and
+the 19 sensors, the trimming binary sensor and the admin switch appear on a device page with
+long-term statistics and a working control. Off by default, and it runs **beside** the MQTT
+publisher rather than instead of it — one catalogue feeds both, so they cannot drift, and running
+both is how you compare them before dropping one.
+
+Verified against `aioesphomeapi`, the client Home Assistant itself uses: 21 entities listed with
+the right units, state classes and decimals, states streaming, and the switch pausing and resuming
+the trim for administrators over both a plaintext and an encrypted connection.
+
+- `esphome_port` (default 6053, the host's port under host networking) and `esphome_key` (a Noise
+  pre-shared key — `openssl rand -base64 32`). Both stay in add-on options rather than the console,
+  like the other listener settings: they have to be fixable from Home Assistant when the console is
+  what is broken.
+- The device is advertised over mDNS, so Home Assistant offers it rather than asking you to type an
+  address.
+- A failure here never reaches the proxy. The likeliest one is port 6053 already being held on the
+  host; the add-on says so and carries on serving dashboards.
+- Sensor values cross as float32, so the catalogue now carries the decimals each reading should be
+  displayed to — `74.30000305175781` is what an untold `74.3` looks like on the other side.
+- Entity ids are declared explicitly rather than derived from display names, so rewording a sensor
+  cannot orphan its statistics.
+
+Built on **[esphome-device](https://github.com/davidcoulson/esphome-device)**, which does the
+protocol: Noise, framing, the entity messages and mDNS, with no dependencies of its own.
+
+
 ## 2026.09.24.2 — 2026-09-24
 
 **A switch in Home Assistant turns the trim off for administrators.** `switch.strimmer_trimming_admins`

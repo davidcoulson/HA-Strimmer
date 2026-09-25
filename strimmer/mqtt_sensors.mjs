@@ -27,6 +27,11 @@ import tls from 'node:tls';
 const DISCOVERY_PREFIX = 'homeassistant';
 const NODE = 'strimmer';
 
+// `dp` is how many decimals a reader should see. MQTT does not need it — a JSON number carries its
+// own precision — but the ESPHome native API sends float32, so 74.3 arrives as 74.30000305175781
+// and the transport has to be told where to cut it. It lives here rather than in that module so
+// there is one catalogue, not two lists that drift.
+//
 // device_class + state_class are what make the recorder build long-term statistics. `measurement`
 // keeps min/max/mean per hour; `total_increasing` keeps a sum that survives counter resets.
 // Anything without a state_class is stored but never summarised, which for most of these would
@@ -40,9 +45,9 @@ const SENSORS = [
   // --- what the trimming is doing --------------------------------------------------------
   { id: 'entities_union',     name: 'Entities forwarded',     unit: 'entities', icon: 'mdi:filter-check', sc: 'measurement' },
   { id: 'entities_instance',  name: 'Entities in instance',   unit: 'entities', icon: 'mdi:database', sc: 'measurement' },
-  { id: 'trim_ratio',         name: 'Trim ratio',             unit: '%',        icon: 'mdi:percent', sc: 'measurement' },
-  { id: 'payload_before_mb',  name: 'Payload before trim',    unit: 'MB',       icon: 'mdi:download', sc: 'measurement' },
-  { id: 'payload_after_mb',   name: 'Payload after trim',     unit: 'MB',       icon: 'mdi:download-outline', sc: 'measurement' },
+  { id: 'trim_ratio',         name: 'Trim ratio',             unit: '%',        icon: 'mdi:percent', sc: 'measurement', dp: 1 },
+  { id: 'payload_before_mb',  name: 'Payload before trim',    unit: 'MB',       icon: 'mdi:download', sc: 'measurement', dp: 2 },
+  { id: 'payload_after_mb',   name: 'Payload after trim',     unit: 'MB',       icon: 'mdi:download-outline', sc: 'measurement', dp: 2 },
 
   // --- how it is behaving ----------------------------------------------------------------
   { id: 'event_rate_kb_min',  name: 'Event stream rate',      unit: 'kB/min',   icon: 'mdi:pulse', sc: 'measurement' },
@@ -57,15 +62,15 @@ const SENSORS = [
   // A rate rather than a count, because the count only ever rises and says nothing on its own.
   // This one falls when the allowlist keeps changing — a recompute retires the cache — so it is
   // the long-term signature of churn.
-  { id: 'cache_hit_rate',     name: 'Registry cache hit rate', unit: '%',       icon: 'mdi:speedometer', sc: 'measurement' },
+  { id: 'cache_hit_rate',     name: 'Registry cache hit rate', unit: '%',       icon: 'mdi:speedometer', sc: 'measurement', dp: 1 },
 
   // Worst event-loop stall since boot. Everything this proxy does to a frame happens on that one
   // loop, so this is the honest answer to "can one client hold up the others" — and the figure
   // docs/CLUSTERING.md turns on: single-digit milliseconds means a second process would buy
   // nothing. It belongs in long-term statistics rather than only the console, because the stall
   // worth catching is the one that happened at 3am a fortnight ago.
-  { id: 'loop_delay_p99_ms',  name: 'Event loop delay (p99)', unit: 'ms',       icon: 'mdi:timer-sand', sc: 'measurement' },
-  { id: 'loop_delay_max_ms',  name: 'Event loop delay (max)', unit: 'ms',       icon: 'mdi:timer-alert-outline', sc: 'measurement' },
+  { id: 'loop_delay_p99_ms',  name: 'Event loop delay (p99)', unit: 'ms',       icon: 'mdi:timer-sand', sc: 'measurement', dp: 1 },
+  { id: 'loop_delay_max_ms',  name: 'Event loop delay (max)', unit: 'ms',       icon: 'mdi:timer-alert-outline', sc: 'measurement', dp: 1 },
 
   // How much longer the trim is paused for, 0 when it is not. See BINARY_SENSORS below for the
   // yes/no half of this. `measurement` like everything else here rather than an exemption from

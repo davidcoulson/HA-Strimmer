@@ -168,6 +168,31 @@ configuration:
       Note that mDNS/.local names usually do NOT resolve from inside a container; use a real DNS
       record. `devices` names whole DEVICES by registry name or id and pulls in every entity that
       device owns, which keeps working when an integration adds entities in a later release.
+  esphome_api:
+    name: Publish metrics over the ESPHome API
+    description: >-
+      Publish the same metrics as the MQTT option, but over ESPHome's native API instead of a
+      broker: Home Assistant's own ESPHome integration connects to this add-on and the entities
+      appear on a device page, with long-term statistics and a switch that pauses trimming for
+      administrators. Needs no Mosquitto and no custom integration. Both transports can run at
+      once, which is how you compare them before dropping one. After turning it on, add it in
+      Settings -> Devices & services -> Add integration -> ESPHome, with this host and the port
+      below - or accept the discovered device, since the add-on advertises itself over mDNS.
+  esphome_port:
+    name: ESPHome API port
+    description: >-
+      The port Home Assistant connects to for the option above (default 6053, ESPHome's own). The
+      add-on runs with host networking and so shares the host's ports; move this if something else
+      on the Home Assistant machine already listens on 6053. The add-on logs and keeps running if
+      the port is taken, so the proxy is never affected by a collision here.
+  esphome_key:
+    name: ESPHome API encryption key
+    description: >-
+      The Noise pre-shared key for the ESPHome API, base64 and 32 bytes - the same format as
+      `api: encryption: key:` in an ESPHome device's YAML. Generate one with
+      `openssl rand -base64 32` and paste the same value into Home Assistant when it asks. Leave
+      empty for an unencrypted connection, which is acceptable only on a network you trust: the
+      metrics are unauthenticated and the switch is reachable by anything that can open the port.
   mqtt_sensors:
     name: Publish long-term metrics over MQTT
     description: >-

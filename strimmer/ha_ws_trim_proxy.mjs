@@ -37,6 +37,7 @@ import * as history from './history.mjs';
 import { classify, normalizeIp, isPrivate } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
+import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
 import * as httpLog from './http_log.mjs';
 import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
 import { resourceInvariantProblems } from './resource_invariants.mjs';
@@ -76,7 +77,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.24.2';
+const VERSION = '2026.09.25.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -531,6 +532,19 @@ const MQTT_SENSORS = String(OPT.mqtt_sensors ?? process.env.MQTT_SENSORS ?? '1')
 // renewal that succeeded into the wrong directory looks perfect on disk and still breaks clients.
 const CERT_HOST = String(OPT.cert_monitor_host ?? process.env.CERT_MONITOR_HOST ?? '').trim();
 const mqttSensors = createPublisher({ version: VERSION, log: (...a) => log(...a) });
+// The same metrics over ESPHome's native API: Home Assistant's own integration connects to this
+// port and the entities appear with no broker in between. Off by default, and deliberately able
+// to run BESIDE the MQTT publisher — one catalogue feeds both (see esphome_api.mjs), so the two
+// can be compared on a live instance before either is dropped.
+// NOT the two-clause shape used by the options above: those default ON, and their second clause
+// exists to let an explicit `false` win. Written that way here it read `(undefined ?? false) !==
+// false`, which is false for everyone, and the listener never started however the option was set.
+const ESPHOME_API = OPT.esphome_api !== undefined
+  ? Boolean(OPT.esphome_api)
+  : String(process.env.ESPHOME_API ?? '0') !== '0';
+const ESPHOME_PORT = parseInt(OPT.esphome_port ?? process.env.ESPHOME_PORT ?? '6053', 10) || 6053;
+const ESPHOME_KEY = String(OPT.esphome_key ?? process.env.ESPHOME_KEY ?? '').trim();
+const esphomeSensors = createEsphomePublisher({ version: VERSION, log: (...a) => log(...a) });
 // Counted for the rebuilds sensor: a steadily climbing number is the rebuild storm this add-on
 // has already had once, and it is invisible in any single snapshot.
 let REBUILD_COUNT = 0;
@@ -713,6 +727,9 @@ function setAdminPause(on, ms, by) {
     log(`trim resumed for admin users (via ${by})`);
   }
   try { writePauses(CONFIG_DIR, PAUSES); } catch (e) { warn(`pause: could not persist (${e.message})`); }
+  // Tell the transports now rather than at the next sample: the person who flipped the switch is
+  // watching it, and a toggle that takes a minute to agree with itself reads as broken.
+  esphomeSensors.push();
   return recycleUser(ADMINS, on ? 'admin trim paused' : 'admin pause ended');
 }
 
@@ -4381,6 +4398,7 @@ function statsExtras() {
       // Found by the guard test the moment it was written: these two had been missing since they
       // shipped, so the panel never showed whether MQTT or mDNS was actually on.
       mqtt_sensors: MQTT_SENSORS,
+      esphome_api: ESPHOME_API,
       mdns_discovery: MDNS_ENABLED,
       client_api_access: CLIENT_API_ACCESS,
       proxy_port: PORT,
@@ -5077,6 +5095,25 @@ server.listen(PORT, () => {
       // with no clock on it is one that gets left off.
       onCommand: (on) => setAdminPause(!on, ADMIN_PAUSE_MS, 'the Home Assistant switch'),
     }).catch(() => {});
+  }
+  if (ESPHOME_API) {
+    // Failure here must never touch the proxy. The commonest one is the port already being held
+    // — the add-on runs with host networking, so 6053 is the HOST's 6053 — and a panel that
+    // stops loading dashboards because a metrics transport could not bind would be an absurd
+    // trade. Say what happened, keep serving.
+    esphomeSensors.start({
+      snapshot: () => stats.snapshot(statsExtras()),
+      extras: () => ({ rebuilds: REBUILD_COUNT, certDaysLeft: CERT_DAYS, trimming: STRIP }),
+      onCommand: (on) => setAdminPause(!on, ADMIN_PAUSE_MS, 'the ESPHome switch'),
+      port: ESPHOME_PORT,
+      noiseKey: ESPHOME_KEY,
+      // Advertised, because the add-on shares the host's network segment with Home Assistant, so
+      // multicast reaches it and the device is offered rather than typed in.
+      mdns: true,
+    }).catch((e) => {
+      log(`  ESPHome API: not started (${e.message})`
+        + (/EADDRINUSE/.test(String(e.message)) ? ` — something else holds port ${ESPHOME_PORT}; set esphome_port` : ''));
+    });
   }
   if (CERT_HOST) {
     // Hourly is plenty for a number measured in days, and it keeps a TLS handshake off the

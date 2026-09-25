@@ -1,5 +1,5 @@
 name: Strimmer
-version: "2026.09.24.2"
+version: "2026.09.25.1"
 slug: strimmer
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -104,6 +104,9 @@ options:
   client_overrides: []
   exclude_device_categories: []
   mqtt_sensors: true
+  esphome_api: false
+  esphome_port: 6053
+  esphome_key: ""
   cert_monitor_host: ""
   mdns_discovery: true
   mdns_services: []
@@ -202,6 +205,9 @@ schema:
       never_forward:
         - str?
   mqtt_sensors: "bool?"
+  esphome_api: "bool?"
+  esphome_port: "int(1,65535)?"
+  esphome_key: "str?"
   cert_monitor_host: "str?"
   mdns_discovery: "bool?"
   mdns_services:

@@ -236,6 +236,19 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   second definition. A colon cannot occur in an HA user id, so the key cannot collide. The switch's
   own state field is `admin_trimming`, separate from `trimming`: a pause for one PERSON must not
   make the switch read as off, or turning it on would appear to do nothing.
+- **Two metrics transports, one catalogue.** `mqtt_sensors.mjs` (MQTT discovery, on by default) and
+  `esphome_api.mjs` (ESPHome native API via the `esphome-device` package, off by default) both build
+  their entities from `SENSORS` / `BINARY_SENSORS` and their values from `buildPayload` in
+  mqtt_sensors.mjs. Add a metric there and both transports get it; never grow a second list. They
+  can run at once and are meant to, so the pair can be compared on a live instance. Three things
+  the ESPHome side must keep: entity `id`s are passed EXPLICITLY (the library derives one from the
+  display name otherwise, so rewording a sensor would orphan its statistics); `dp` in the catalogue
+  is the decimals a float32 reading is displayed to; and the node name `strimmer` is what the
+  device's MAC — Home Assistant's unique id for it — is derived from, so changing it makes a new
+  device with no history. `esphome_port`/`esphome_key` are BOOTSTRAP_KEYS: a listener's address and
+  key belong where they are fixable when the console is broken. Note the option test: a DEFAULT-OFF
+  option cannot use the `(OPT.x ?? true) !== false` shape the default-on ones use — written that
+  way it is false for everyone and the listener never starts.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
   is now set (for trusted-network login, below), which can break the internal
   `homeassistant`/`supervisor` DNS names — the `ha_base` / `allow_ws_url` options pin them

@@ -335,6 +335,31 @@ returns to `on` by itself when the hour is up. `ADMIN_PAUSE_MINUTES` (env) chang
 The console offers the same thing under **pause trimming → all admins, 1 hour**, so the two paths
 are one feature.
 
+### Publishing over ESPHome instead of MQTT
+
+`esphome_api` publishes the same entities over **ESPHome's native API**: Home Assistant's own
+ESPHome integration connects to this add-on, and the device appears with its sensors, the trimming
+binary sensor and the admin switch — no broker, no custom integration, no YAML.
+
+It is **off by default and can run beside MQTT**, which is how the two get compared before either
+is dropped. One catalogue feeds both transports, so they cannot disagree about what exists or what
+a number says.
+
+| Option | What |
+|---|---|
+| `esphome_api` | Off by default. On, the add-on listens for Home Assistant's ESPHome integration |
+| `esphome_port` | Default `6053`. The add-on runs with host networking, so this is the **host's** port — move it if something else there already listens |
+| `esphome_key` | Noise pre-shared key, base64 and 32 bytes, the same format as `api: encryption: key:` in an ESPHome device. Make one with `openssl rand -base64 32`. Empty means an unencrypted connection, which is acceptable only on a network you trust |
+
+Add it in **Settings → Devices & services → Add integration → ESPHome** with this host and port, or
+accept the discovered device — the add-on advertises `_esphomelib._tcp` over mDNS. Entity ids are
+`sensor.strimmer_*`, `binary_sensor.strimmer_trimming` and `switch.strimmer_trim_pause`.
+
+Two things worth knowing. Home Assistant identifies the device by a MAC derived from the node name
+`strimmer`, so entity history survives restarts and upgrades — but it would not survive that name
+changing. And a failure here never touches the proxy: if the port is held, the add-on logs it and
+carries on serving dashboards.
+
 ### Knowing whether it is on, from anywhere
 
 With `mqtt_sensors` on, two entities answer "is this thing trimming right now":

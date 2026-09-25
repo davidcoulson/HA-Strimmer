@@ -36,6 +36,10 @@ export const STORE_VERSION = 1;
 // the port the console is served on is the one change that can make the console unreachable.
 export const BOOTSTRAP_KEYS = new Set([
   'log_level', 'proxy_port', 'port', 'mgmt_port', 'stats_port', 'ha_base', 'allow_ws_url',
+  // How the ESPHome listener binds and how Home Assistant authenticates to it. Same class as the
+  // ports above: a listener's address and key belong where they can be fixed from Home Assistant
+  // when this console is what is broken.
+  'esphome_port', 'esphome_key',
 ]);
 
 // Old name -> the name that replaced it.
@@ -142,6 +146,7 @@ export const OPTIONS = {
 
   // Monitoring
   mqtt_sensors: { type: 'bool', section: 'monitoring', label: 'Publish metrics over MQTT', short: 'MQTT', icon: 'chart-line' },
+  esphome_api: { type: 'bool', section: 'monitoring', label: 'Publish metrics over the ESPHome API', short: 'ESPHome', icon: 'chip' },
   cert_monitor_host: { type: 'str', section: 'monitoring', label: 'Certificate to watch' },
 
   // Websocket
