@@ -373,20 +373,26 @@ With `esphome_api` on, these answer "is this thing trimming right now":
 The sensor and the switch answer different questions on purpose: a pause for one person turns the
 binary sensor off but leaves the switch on, so flipping the switch cannot look like a no-op.
 
-That makes a paused trim visible without opening this panel — a badge in
+That makes a paused trim visible without opening this panel — in
 [custom-sidebar](https://github.com/elchininet/custom-sidebar), a conditional card, or an
-automation that tells you at bedtime that you left it off. A sidebar badge on the Strimmer item:
+automation that tells you at bedtime that you left it off. As the Strimmer item's status line in
+custom-sidebar:
 
 ```yaml
 order:
   - item: Strimmer
-    notification: |
-      [[[
-        return states('binary_sensor.strimmer_trimming') === 'off'
-          ? states('sensor.strimmer_trim_paused_for') + 'm'
-          : '';
-      ]]]
+    info: >-
+      {% set t = states('binary_sensor.strimmer_trimming') %}{% set m = states('sensor.strimmer_trim_paused_for') | int(0) %}{{ 'Offline' if t in ['unavailable', 'unknown'] else ('Paused · ' ~ m ~ 'm' if m > 0 else ('Trimming' if t == 'on' else 'Off')) }}
 ```
+
+It reads **Trimming**, **Paused · 42m**, **Off** or **Offline**. Two details that matter:
+
+- **Jinja, not a `[[[ JavaScript ]]]` template.** custom-sidebar renders Jinja through Home
+  Assistant, which re-renders only when the two entities named here change. A JavaScript template
+  runs in the browser, so custom-sidebar subscribes to *every* state change to keep it fresh — the
+  whole-house firehose this add-on exists to cut, delivered to every page for one line of text.
+- **One line.** A Jinja block spread over several lines emits each newline between its tags, and
+  the sidebar renders them as blank lines above the value.
 
 ### What the console will and will not serve
 
