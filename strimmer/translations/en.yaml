@@ -194,17 +194,11 @@ configuration:
       empty for an unencrypted connection, which is acceptable only on a network you trust: the
       metrics are unauthenticated and the switch is reachable by anything that can open the port.
   mqtt_sensors:
-    name: Publish long-term metrics over MQTT
+    name: Publish metrics over MQTT (removed)
     description: >-
-      Publishes about fifteen high-level metrics as real Home Assistant sensors, so the recorder
-      builds long-term statistics for them and you can graph months rather than minutes. Broker
-      credentials come from Supervisor automatically when the Mosquitto app is installed —
-      nothing to configure. The stats panel answers "what is happening right now"; these answer
-      "what has been happening since June", which is a different question: a slowly climbing
-      entity count means a dashboard picked up a broad filter, and a rebuild counter that never
-      stops rising is the kind of fault that is invisible in any single snapshot. Uses MQTT
-      discovery rather than the REST API deliberately — states pushed over REST are not
-      registered entities, vanish on restart, and the recorder will not summarise them.
+      Removed in 2026.09.25.3. The metrics are published over the ESPHome API now, which needs no
+      broker - turn on "Publish metrics over the ESPHome API" above. This option is still accepted
+      so an existing configuration stays valid on update, but it does nothing; delete it.
   cert_monitor_host:
     name: Certificate to watch
     description: >-

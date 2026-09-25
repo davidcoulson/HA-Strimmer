@@ -36,7 +36,7 @@ import * as stats from './stats.mjs';
 import * as history from './history.mjs';
 import { classify, normalizeIp, isPrivate } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
-import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
+import { certDaysLeft } from './metrics.mjs';
 import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
 import * as httpLog from './http_log.mjs';
 import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
@@ -77,7 +77,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.25.2';
+const VERSION = '2026.09.25.3';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -523,22 +523,24 @@ const MDNS_SERVICES = (() => {
 // its config block before the logger exists.
 const discovery = createDiscovery({ services: MDNS_SERVICES, log: (...a) => log(...a) });
 
-// Long-term metrics, published over MQTT discovery so the recorder builds statistics for them.
-// The stats panel answers "what is happening now"; these answer "what has been happening for six
-// months", and only real registered entities get statistics.
-const MQTT_SENSORS = String(OPT.mqtt_sensors ?? process.env.MQTT_SENSORS ?? '1') !== '0'
-  && (OPT.mqtt_sensors ?? true) !== false;
+
 // Host whose SERVED certificate to watch. Measured by connecting, not by reading a file: a
 // renewal that succeeded into the wrong directory looks perfect on disk and still breaks clients.
 const CERT_HOST = String(OPT.cert_monitor_host ?? process.env.CERT_MONITOR_HOST ?? '').trim();
-const mqttSensors = createPublisher({ version: VERSION, log: (...a) => log(...a) });
-// The same metrics over ESPHome's native API: Home Assistant's own integration connects to this
-// port and the entities appear with no broker in between. Off by default, and deliberately able
-// to run BESIDE the MQTT publisher — one catalogue feeds both (see esphome_api.mjs), so the two
-// can be compared on a live instance before either is dropped.
+// Metrics over ESPHome's native API: Home Assistant's own integration connects to this port and
+// the entities appear with no broker in between. This replaced MQTT discovery in 2026.09.25.3 —
+// the catalogue that describes them lives in metrics.mjs, which knows about no transport at all.
 // NOT the two-clause shape used by the options above: those default ON, and their second clause
 // exists to let an explicit `false` win. Written that way here it read `(undefined ?? false) !==
 // false`, which is false for everyone, and the listener never started however the option was set.
+// MQTT discovery published these same metrics until 2026.09.25.3. The option is still ACCEPTED by
+// the schema so an existing configuration does not become invalid on update — Supervisor rejects
+// an unknown key — but it does nothing, and a config that still sets it deserves to be told once
+// rather than left wondering where its sensors went.
+if (OPT.mqtt_sensors !== undefined) {
+  warn('mqtt_sensors no longer does anything: metrics moved to the ESPHome API (esphome_api) in '
+    + '2026.09.25.3, which needs no broker. Remove it from the add-on configuration.');
+}
 const ESPHOME_API = OPT.esphome_api !== undefined
   ? Boolean(OPT.esphome_api)
   : String(process.env.ESPHOME_API ?? '0') !== '0';
@@ -712,9 +714,9 @@ function recycleUser(userKey, why) {
   return victims.length;
 }
 
-// Start or end the ADMIN pause. The switch in Home Assistant has no user behind it — MQTT
-// delivers a payload, not who published it — so what it can offer is a role, and administrators
-// is the right one: they are the people who troubleshoot, and every kiosk keeps its trim.
+// Start or end the ADMIN pause. The switch in Home Assistant has no user behind it — the API
+// delivers a command, not who sent it — so what it can offer is a role, and administrators is
+// the right one: they are the people who troubleshoot, and every kiosk keeps its trim.
 function setAdminPause(on, ms, by) {
   if (on) {
     PAUSES = pauseUser(PAUSES, ADMINS, ms, { name: 'administrators', by });
@@ -947,7 +949,7 @@ function applyOverrides(set, realIds, dash = null) {
 // Build the per-dashboard allowlists (and their union) using an authed rpc().
 async function buildAllow(rpc, renderTemplate) {
   // Counted where the cost is paid — a rebuild that later fails still pulled the instance from
-  // Home Assistant. This was declared, published over MQTT and never incremented, so the one
+  // Home Assistant. This was declared, published as a sensor and never incremented, so the one
   // sensor built to show a rebuild storm read 0 straight through one.
   REBUILD_COUNT++;
   const states = await rpc({ type: 'get_states' });
@@ -4396,8 +4398,7 @@ function statsExtras() {
       trim_translations: TRIM_TRANSLATIONS,
       log_level: Object.keys(LEVELS).find((k) => LEVELS[k] === LOG_LEVEL) ?? 'info',
       // Found by the guard test the moment it was written: these two had been missing since they
-      // shipped, so the panel never showed whether MQTT or mDNS was actually on.
-      mqtt_sensors: MQTT_SENSORS,
+      // shipped, so the panel never showed whether a given feature was actually on.
       esphome_api: ESPHOME_API,
       mdns_discovery: MDNS_ENABLED,
       client_api_access: CLIENT_API_ACCESS,
@@ -4514,7 +4515,7 @@ function redactForNetwork(snap) {
 // standalone container, where everything comes from the environment, every switch rendered off
 // while `trim_entities` was plainly on. Add-on installs are only partly spared: Supervisor fills
 // in defaults for required keys but omits the optional ones (`bool?` in the schema), so
-// `mqtt_sensors` and `mdns_discovery` showed off on every install that had never touched them.
+// `mdns_discovery` and its kind showed off on every install that had never touched them.
 // These are the same constants the proxy runs on, so what the console shows is what is true.
 function effectiveFallback() {
   const envJson = (name) => { try { return process.env[name] ? JSON.parse(process.env[name]) : []; } catch { return []; } };
@@ -4523,7 +4524,7 @@ function effectiveFallback() {
     compress_websocket: COMPRESS_WS, trim_resources: TRIM_RESOURCES,
     trim_extra_modules: TRIM_EXTRA_MODULES, trim_services: TRIM_SERVICES, trim_repairs: TRIM_REPAIRS,
     trim_themes: TRIM_THEMES, trim_translations: TRIM_TRANSLATIONS,
-    mqtt_sensors: MQTT_SENSORS, mdns_discovery: MDNS_ENABLED, client_api_access: CLIENT_API_ACCESS,
+    mdns_discovery: MDNS_ENABLED, esphome_api: ESPHOME_API, client_api_access: CLIENT_API_ACCESS,
     dashboards: DASH_PATHS,
     always_forward: toList(process.env.ALWAYS_FORWARD),
     never_forward: toList(process.env.NEVER_FORWARD),
@@ -5084,22 +5085,10 @@ server.listen(PORT, () => {
   // Started after listen, never awaited: discovery is beside the request path, so a network
   // that filters multicast costs us a label and nothing else.
   if (MDNS_ENABLED) { discovery.start(); log(`  mDNS discovery on for ${MDNS_SERVICES.length} service type(s)`); }
-  if (MQTT_SENSORS) {
-    mqttSensors.start({
-      token: ALLOW_TOKEN,
-      snapshot: () => stats.snapshot(statsExtras()),
-      extras: () => ({ rebuilds: REBUILD_COUNT, certDaysLeft: CERT_DAYS, trimming: STRIP }),
-      // The switch in Home Assistant. OFF pauses the trim for administrators for an hour; ON
-      // ends it early. An hour rather than a configurable span because this is the one-tap
-      // control — the console is where you go when you want to choose — and because a switch
-      // with no clock on it is one that gets left off.
-      onCommand: (on) => setAdminPause(!on, ADMIN_PAUSE_MS, 'the Home Assistant switch'),
-    }).catch(() => {});
-  }
   // Say which way this is set, either way. With the option off the add-on said NOTHING about
   // ESPHome, so "I turned it on, where is it?" had no answer in the log — and the answer that
   // time was that the console owned the option and was shadowing the add-on's own toggle.
-  if (!ESPHOME_API) log('  ESPHome API: off (esphome_api) — MQTT sensors are unaffected');
+  if (!ESPHOME_API) log('  ESPHome API: off (esphome_api) — no long-term metrics are published');
   if (ESPHOME_API) {
     // Failure here must never touch the proxy. The commonest one is the port already being held
     // — the add-on runs with host networking, so 6053 is the HOST's 6053 — and a panel that
@@ -5181,7 +5170,6 @@ function shutdown(sig) {
   // go with the process.
   try { server.close(); statsServer.close(); } catch { /* already down */ }
   if (MDNS_ENABLED) { try { discovery.stop(); } catch { /* already down */ } }
-  if (MQTT_SENSORS) { try { mqttSensors.stop(); } catch { /* already down */ } }
 
   // Unref'd: if the event loop empties first, exit then instead of sitting out the delay.
   setTimeout(() => process.exit(0), 250).unref?.();

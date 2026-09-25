@@ -230,25 +230,27 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   invisible: panels just load slowly. WHO is paused is redacted off-Ingress like every other
   identity; THAT something is paused is not, because a health check should see it.
   **The reserved key `role:admin`** (`ADMINS`) pauses every administrator at once, which is what
-  the MQTT switch `switch.strimmer_trimming_admins` does — MQTT carries a payload and not an
+  the switch `switch.strimmer_trimming_admins` does — the transport carries a command and not an
   identity, so an anonymous control can only scope to a role. `is_admin` comes from
   `auth/current_user`, the same field the `role: admin` override matcher uses; do not introduce a
   second definition. A colon cannot occur in an HA user id, so the key cannot collide. The switch's
   own state field is `admin_trimming`, separate from `trimming`: a pause for one PERSON must not
   make the switch read as off, or turning it on would appear to do nothing.
-- **Two metrics transports, one catalogue.** `mqtt_sensors.mjs` (MQTT discovery, on by default) and
-  `esphome_api.mjs` (ESPHome native API via the `esphome-device` package, off by default) both build
-  their entities from `SENSORS` / `BINARY_SENSORS` and their values from `buildPayload` in
-  mqtt_sensors.mjs. Add a metric there and both transports get it; never grow a second list. They
-  can run at once and are meant to, so the pair can be compared on a live instance. Three things
-  the ESPHome side must keep: entity `id`s are passed EXPLICITLY (the library derives one from the
+- **Metrics: one catalogue, one transport.** `metrics.mjs` declares WHAT exists (`SENSORS`,
+  `BINARY_SENSORS`) and computes the values (`buildPayload`); `esphome_api.mjs` is the only thing
+  that puts them on a wire, via the `esphome-device` package. Add a metric to the catalogue and it
+  appears for free; never declare one in the transport. **MQTT discovery was removed in
+  2026.09.25.3** after running beside ESPHome long enough to compare them — same numbers, and the
+  cost of keeping both was two copies of every entity in Home Assistant (the second suffixed `_2`)
+  plus a Mosquitto dependency. `mqtt_sensors` stays in the schema as a REMOVED_KEYS entry so an
+  existing config is still valid; it does nothing and the boot log says so. Three things the
+  ESPHome side must keep: entity `id`s are passed EXPLICITLY (the library derives one from the
   display name otherwise, so rewording a sensor would orphan its statistics); `dp` in the catalogue
   is the decimals a float32 reading is displayed to; and the node name `strimmer` is what the
   device's MAC — Home Assistant's unique id for it — is derived from, so changing it makes a new
-  device with no history. `esphome_port`/`esphome_key` are BOOTSTRAP_KEYS: a listener's address and
-  key belong where they are fixable when the console is broken. Note the option test: a DEFAULT-OFF
-  option cannot use the `(OPT.x ?? true) !== false` shape the default-on ones use — written that
-  way it is false for everyone and the listener never starts.
+  device with no history. `esphome_port`/`esphome_key` are BOOTSTRAP_KEYS. Note the option test: a
+  DEFAULT-OFF option cannot use the `(OPT.x ?? true) !== false` shape the default-on ones use —
+  written that way it is false for everyone and the listener never starts.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
   is now set (for trusted-network login, below), which can break the internal
   `homeassistant`/`supervisor` DNS names — the `ha_base` / `allow_ws_url` options pin them
@@ -330,8 +332,8 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   `device_registry_updated`, all `+0 -0`. A device row reaches an allowlist only via `id`,
   `area_id`, `name`, `name_by_user`, `via_device_id`. `manufacturer`/`model`/`model_id` are
   ignorable ONLY while auto-entities' `device_manufacturer`/`device_model` stay unsupported — take
-  them out of the set if those filters are added. `allowlist.rebuilds` in stats.json (and the MQTT
-  `rebuilds_total`) is the storm detector; it was never incremented before 2026.09.19.1.
+  them out of the set if those filters are added. `allowlist.rebuilds` in stats.json (and the
+  `rebuilds_total` sensor) is the storm detector; it was never incremented before 2026.09.19.1.
 - **Registry-triggered rebuilds also have a time floor** (`REGISTRY_REBUILD_MIN_MS`, 30s,
   env-only). Tests that fire registry events seconds apart and COUNT rebuilds must set it to `0`.
   `scheduleRecompute(why, floorMs)` takes the LOWEST floor among debounced requests, so an edit is

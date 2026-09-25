@@ -254,7 +254,7 @@ Options can be changed from the console instead of the add-on's Configuration ta
 **Everything that is on or off is one grid at the top, headed Strimmers** — twelve icon tiles,
 filled blue for on and outlined for off, so "what is this app currently doing to my dashboards"
 is a glance rather than a scroll. A tile's caption has room for about a word; its tooltip carries
-the full sentence and the option's config key. Three of the twelve — mDNS, MQTT and compression —
+the full sentence and the option's config key. Three of the twelve — mDNS, metrics and compression —
 are not trims; they are in the grid because the question the grid answers is *what is switched
 on*, not *what is cut*.
 
@@ -327,23 +327,23 @@ anywhere you can reach Home Assistant — the app, a dashboard button, an automa
 command. It is the one-tap path for the case where you are away and stuck; the console is where you
 go when you want to choose the duration.
 
-It pauses a **role**, not a person, because MQTT delivers a payload and not an identity — a switch
-cannot know who flipped it. Administrators is the scope that matches the purpose: they are who
+It pauses a **role**, not a person, because the API delivers a command and not an identity — a
+switch cannot know who flipped it. Administrators is the scope that matches the purpose: they are who
 troubleshoots, and **every kiosk and wall panel keeps its trim** and is never disturbed. The switch
 returns to `on` by itself when the hour is up. `ADMIN_PAUSE_MINUTES` (env) changes the span.
 
 The console offers the same thing under **pause trimming → all admins, 1 hour**, so the two paths
 are one feature.
 
-### Publishing over ESPHome instead of MQTT
+### Publishing the metrics to Home Assistant
 
-`esphome_api` publishes the same entities over **ESPHome's native API**: Home Assistant's own
-ESPHome integration connects to this add-on, and the device appears with its sensors, the trimming
-binary sensor and the admin switch — no broker, no custom integration, no YAML.
+`esphome_api` publishes them over **ESPHome's native API**: Home Assistant's own ESPHome
+integration connects to this add-on, and the device appears with its sensors, the trimming binary
+sensor and the admin switch — no broker, no custom integration, no YAML.
 
-It is **off by default and can run beside MQTT**, which is how the two get compared before either
-is dropped. One catalogue feeds both transports, so they cannot disagree about what exists or what
-a number says.
+It is **off by default**. MQTT discovery did this job until 2026.09.25.3 and needed Mosquitto to do
+it; the two ran side by side long enough to compare, and MQTT was removed. An existing
+`mqtt_sensors` setting is still accepted so a configuration stays valid, but it does nothing.
 
 | Option | What |
 |---|---|
@@ -362,7 +362,7 @@ carries on serving dashboards.
 
 ### Knowing whether it is on, from anywhere
 
-With `mqtt_sensors` on, two entities answer "is this thing trimming right now":
+With `esphome_api` on, these answer "is this thing trimming right now":
 
 | Entity | What |
 |---|---|

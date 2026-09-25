@@ -1,21 +1,20 @@
-// The same metrics as mqtt_sensors.mjs, published over ESPHome's native API instead of a broker.
+// The metrics, published over ESPHome's native API.
 //
-// Why a second transport rather than a replacement. MQTT works and needs Mosquitto; the native
-// API needs nothing but a port — Home Assistant's own `esphome` integration connects to us and
-// the entities appear with history, statistics and a working switch. On an instance where
-// everything else already speaks ESPHome (wall panels, sensors, Kiosk Satellite) that is one
-// fewer moving part between this add-on and the entities it publishes. Neither is the default:
-// both are options, and both can run at once, which is also how they get compared.
+// This is now the ONLY transport. MQTT discovery did the same job until 2026.09.25.3 and needed
+// Mosquitto to do it; the native API needs nothing but a port — Home Assistant's own `esphome`
+// integration connects to us and the entities appear with history, statistics and a working
+// switch. Running both was how they were compared, and it also showed the cost of keeping both:
+// two copies of every entity in Home Assistant, the second suffixed `_2`.
 //
-// THE CATALOGUE IS SHARED. Entities are built from `SENSORS` / `BINARY_SENSORS` in
-// mqtt_sensors.mjs and values from its `buildPayload`, so the two transports cannot disagree
-// about what exists or what a number says. A sensor added there appears here for free.
+// Entities are built from `SENSORS` / `BINARY_SENSORS` in metrics.mjs and their values from its
+// `buildPayload`. A metric added to that catalogue appears here for free; nothing about a metric
+// is declared in this file.
 //
 // `esphome-device` does the protocol: Noise, framing, the entity messages, mDNS. It is a plain
 // ESM package with no native bindings, which is the rule for anything this image takes.
 
 import { Device } from 'esphome-device';
-import { SENSORS, BINARY_SENSORS, buildPayload } from './mqtt_sensors.mjs';
+import { SENSORS, BINARY_SENSORS, buildPayload } from './metrics.mjs';
 
 // The node name. Entity ids are `<node>_<object id>`, and the MAC Home Assistant identifies the
 // device by is derived from it — so this string is the thing that must never change casually:

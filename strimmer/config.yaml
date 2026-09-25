@@ -1,5 +1,5 @@
 name: Strimmer
-version: "2026.09.25.2"
+version: "2026.09.25.3"
 slug: strimmer
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -38,10 +38,6 @@ panel_admin: false
 # SUPERVISOR_TOKEN + core API access (used only to precompute the dashboard allowlists).
 homeassistant_api: true
 hassio_api: true
-# Supervisor hands over broker credentials only to an app that declares it wants them.
-# `want`, not `need`: with no broker installed the app must still start and proxy.
-services:
-  - mqtt:want
 # No `ports:` mapping: with host_network the app binds the host port directly, so a
 # Docker port map is inert. The single source of truth for the listen port is the `port`
 # option below (default 9123). Reach the app at http://<host>:<port>.
@@ -103,7 +99,6 @@ options:
   dashboard_overrides: []
   client_overrides: []
   exclude_device_categories: []
-  mqtt_sensors: true
   esphome_api: false
   esphome_port: 6053
   esphome_key: ""
@@ -204,6 +199,8 @@ schema:
         - str?
       never_forward:
         - str?
+  # Removed in 2026.09.25.3 (metrics moved to the ESPHome API). Still accepted so an existing
+  # configuration stays valid on update — Supervisor refuses a key its schema does not know.
   mqtt_sensors: "bool?"
   esphome_api: "bool?"
   esphome_port: "int(1,65535)?"

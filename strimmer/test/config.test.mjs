@@ -81,7 +81,7 @@ test('translations/en.yaml describes no option that does not exist', () => {
 // panel then reported them as absent, which reads identically to "Supervisor never passed this"
 // — the precise question that block exists to answer. So the list is pinned to the schema.
 test('the stats options block reports every simple option the schema declares', async () => {
-  const { LEGACY_KEYS: LEGACY } = await import('../config_store.mjs');
+  const { LEGACY_KEYS: LEGACY, REMOVED_KEYS } = await import('../config_store.mjs');
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const cfg = fs.readFileSync(path.join(dir, '..', 'config.yaml'), 'utf8');
   const src = fs.readFileSync(path.join(dir, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
@@ -92,7 +92,7 @@ test('the stats options block reports every simple option the schema declares', 
     .map((m) => m[1])
     // A renamed option is reported under its new name only; the stats block has one field per
     // setting, not one per spelling.
-    .filter((k) => !LEGACY.has(k));
+    .filter((k) => !LEGACY.has(k) && !REMOVED_KEYS.has(k));
   assert.ok(simple.length >= 6, `expected several simple options, found ${simple.length}`);
 
   const block = src.slice(src.indexOf('    options: {'), src.indexOf('    allowlist: {'));
@@ -182,14 +182,17 @@ test('the proxy still reads the pre-rename port option names', () => {
 // someone opens the console to set — deriving the list would hide it. A declared list drifts,
 // though: the stats options block silently fell behind the schema three times. So it is pinned.
 test('EDITABLE_KEYS covers every schema option that is not a setup option', async () => {
-  const { EDITABLE_KEYS, BOOTSTRAP_KEYS, LEGACY_KEYS } = await import('../config_store.mjs');
+  const { EDITABLE_KEYS, BOOTSTRAP_KEYS, LEGACY_KEYS, REMOVED_KEYS } = await import('../config_store.mjs');
   const schema = cfg.slice(cfg.indexOf('\nschema:'));
   const declared = [...schema.matchAll(/^ {2}([a-z_]+):/gm)].map((m) => m[1]);
   assert.ok(declared.length >= 20, `expected the full schema, parsed ${declared.length}`);
 
   // Renamed options stay in the schema so Supervisor does not discard them, but the console
   // deliberately does not offer them — the canonical name is the row.
-  const missing = declared.filter((k) => !BOOTSTRAP_KEYS.has(k) && !LEGACY_KEYS.has(k) && !EDITABLE_KEYS[k]);
+  // A RETIRED option stays in the schema so an existing config survives the update, and is
+  // deliberately absent from the console: a switch that does nothing is worse than no switch.
+  const missing = declared.filter((k) => !BOOTSTRAP_KEYS.has(k) && !LEGACY_KEYS.has(k)
+    && !REMOVED_KEYS.has(k) && !EDITABLE_KEYS[k]);
   assert.deepEqual(missing, [], `schema options the console cannot see: ${missing.join(', ')}`);
 
   // And nothing invented: a key here that is not in the schema is a setting that would be
@@ -371,7 +374,7 @@ test('by_dashboard is grouped with trimming despite its name', async () => {
   assert.equal(OPTIONS.by_dashboard.section, 'trim');
   assert.equal(OPTIONS.trim_entities.section, 'trim');
   assert.equal(OPTIONS.mdns_discovery.section, 'discovery', 'mDNS stays out of the trim count');
-  assert.equal(OPTIONS.mqtt_sensors.section, 'monitoring');
+  assert.equal(OPTIONS.esphome_api.section, 'monitoring');
   assert.equal(OPTIONS.compress_websocket.section, 'websocket');
 });
 

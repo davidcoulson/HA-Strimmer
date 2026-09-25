@@ -937,7 +937,7 @@ describe('config values fall back to what the proxy resolved', () => {
     const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash,auto-dash',
         PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1',
-        TRIM_THEMES: '1', ALWAYS_FORWARD: 'light.kitchen,/^sensor\\./', MQTT_SENSORS: '0' } });
+        TRIM_THEMES: '1', ALWAYS_FORWARD: 'light.kitchen,/^sensor\\./', ESPHOME_API: '0' } });
     try {
       let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
       const deadline = Date.now() + 15000;
@@ -954,7 +954,7 @@ describe('config values fall back to what the proxy resolved', () => {
       const val = (k) => d.options.find((o) => o.key === k)?.value;
       assert.equal(val('trim_entities'), true, 'on by default, and must say so');
       assert.equal(val('trim_themes'), true, 'set through the environment');
-      assert.equal(val('mqtt_sensors'), false, 'switched off through the environment');
+      assert.equal(val('esphome_api'), false, 'off by default, and must say so');
       assert.equal(val('mdns_discovery'), true, 'an optional key Supervisor would omit, at its default');
       assert.deepEqual(val('dashboards'), ['test-dash', 'auto-dash']);
       assert.deepEqual(val('always_forward'), ['light.kitchen', '/^sensor\\./'], 'lists keep their written form');

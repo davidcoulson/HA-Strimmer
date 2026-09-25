@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPublisher, NODE } from '../esphome_api.mjs';
-import { SENSORS, BINARY_SENSORS } from '../mqtt_sensors.mjs';
+import { SENSORS, BINARY_SENSORS } from '../metrics.mjs';
 
 // A stand-in for the library, so these tests are about the mapping and not about TCP. It records
 // what was declared and what was set.

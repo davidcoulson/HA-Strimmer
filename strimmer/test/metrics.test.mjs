@@ -6,7 +6,7 @@
 // decides whether the recorder summarises them at all.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload, brokerFromSupervisor, SENSORS, BINARY_SENSORS } from '../mqtt_sensors.mjs';
+import { buildPayload, SENSORS, BINARY_SENSORS } from '../metrics.mjs';
 
 const snap = {
   clients: { open: 4, total: 128, list: [
@@ -82,21 +82,6 @@ test('counters are total_increasing so a restart cannot corrupt the sum', () => 
 
 test('sensor ids are unique', () => {
   assert.equal(new Set(SENSORS.map((s) => s.id)).size, SENSORS.length);
-});
-
-test('no broker is a quiet no, not a crash', async () => {
-  assert.equal(await brokerFromSupervisor(null), null, 'no token -> no broker');
-  const failing = async () => { throw new Error('connect ECONNREFUSED'); };
-  assert.equal(await brokerFromSupervisor('tok', failing), null, 'an unreachable supervisor is survivable');
-  const notOk = async () => ({ ok: false });
-  assert.equal(await brokerFromSupervisor('tok', notOk), null, 'a 404 (mosquitto not installed) is survivable');
-});
-
-test('builds a broker url from what Supervisor returns', async () => {
-  const fake = async () => ({ ok: true, json: async () => ({ data: { host: 'core-mosquitto', port: 1883, username: 'u', password: 'p', ssl: false } }) });
-  assert.deepEqual(await brokerFromSupervisor('tok', fake), { url: 'mqtt://core-mosquitto:1883', username: 'u', password: 'p' });
-  const tls = async () => ({ ok: true, json: async () => ({ data: { host: 'h', port: 8883, ssl: true } }) });
-  assert.equal((await brokerFromSupervisor('tok', tls)).url, 'mqtts://h:8883');
 });
 
 test('a snapshot taken before the allowlist is ready is not publishable', () => {

@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026.09.25.3 — 2026-09-25
+
+**MQTT is gone; the metrics go to Home Assistant over ESPHome's native API.** Both transports ran
+side by side yesterday and reported the same numbers, which is what the comparison was for. Keeping
+the pair cost two copies of every entity in Home Assistant — the second suffixed `_2` — and a
+Mosquitto dependency for something that needs no broker.
+
+- `mqtt_sensors` is **still accepted** so an existing configuration stays valid on update — an
+  unknown key is an error to Supervisor, and an upgrade should not require editing the config
+  first. It does nothing, the add-on says so once at boot, and the Configuration tab marks it
+  removed.
+- The `mqtt` package and the `mqtt:want` service declaration are gone with it.
+- **`mqtt_sensors.mjs` is now `metrics.mjs`** and knows about no transport at all: it declares what
+  exists and computes the values, and `esphome_api.mjs` is the one thing that puts them on a wire.
+  That split is what kept the two honest while both were running.
+- `REMOVED_KEYS` is a new idea in the config store, beside the existing renames: an option a past
+  version had, still accepted by the schema, absent from the console. A switch that does nothing is
+  worse than no switch.
+
+**If you are upgrading:** the MQTT entities will go unavailable and their retained discovery topics
+stay on the broker until they are cleared, which is a one-off cleanup — publish an empty retained
+payload to each `homeassistant/*/strimmer/*/config` topic. The ESPHome entities are the ones to keep.
+
+
 ## 2026.09.25.2 — 2026-09-25
 
 **A switch the console owns can be handed back again.** When the booleans moved into the tile grid

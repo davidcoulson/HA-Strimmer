@@ -68,8 +68,9 @@ way back there in time.
   Entity and device fields search as you type.
 - 🖨️ **Cards set up with a device just work** — including devices made of other devices, like a
   3D printer with its filament units, or a hub with its sensors.
-- 📈 **Months of history, not minutes.** Around fifteen measurements are published as ordinary
-  Home Assistant sensors, so you can graph them like anything else in your house.
+- 📈 **Months of history, not minutes.** Around twenty measurements are published as ordinary
+  Home Assistant sensors — over ESPHome's own API, so there is no broker to run — and you can graph
+  them like anything else in your house.
 - 🔎 **Panels name themselves** on the statistics page — "Office Panel (Kiosk Satellite)" rather
   than an IP address.
 - 🧯 **It tells you when it has gone too far.** If trimming would stop a card rendering, that is

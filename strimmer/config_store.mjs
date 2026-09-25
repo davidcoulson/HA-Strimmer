@@ -42,6 +42,16 @@ export const BOOTSTRAP_KEYS = new Set([
   'esphome_port', 'esphome_key',
 ]);
 
+// Options a past version had and this one does not.
+//
+// They stay in config.yaml's schema so an existing configuration survives an update — Supervisor
+// refuses a key its schema does not know, and an upgrade must not require editing the config
+// first — but nothing reads them, and the console does not offer a switch that would do nothing.
+// The add-on says so once at boot when one is still set.
+export const REMOVED_KEYS = new Map([
+  ['mqtt_sensors', 'metrics moved to the ESPHome API (esphome_api) in 2026.09.25.3'],
+]);
+
 // Old name -> the name that replaced it.
 //
 // Each old name is still READ, so an existing config keeps working, but none of them gets a row in
@@ -145,7 +155,6 @@ export const OPTIONS = {
     emptyMeans: 'the built-in set' },
 
   // Monitoring
-  mqtt_sensors: { type: 'bool', section: 'monitoring', label: 'Publish metrics over MQTT', short: 'MQTT', icon: 'chart-line' },
   esphome_api: { type: 'bool', section: 'monitoring', label: 'Publish metrics over the ESPHome API', short: 'ESPHome', icon: 'chip' },
   cert_monitor_host: { type: 'str', section: 'monitoring', label: 'Certificate to watch' },
 
