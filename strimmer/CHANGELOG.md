@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.09.25.8 — 2026-09-25
+
+**The Home Assistant sensors no longer go `unknown` for a minute after every restart.** The ESPHome
+publisher starts before any allowlist exists, rightly refuses to publish zeros until one does, and
+then waited for its next sampling tick — so each restart put an `unknown` gap of up to a minute into
+every history graph. MQTT's retained state had hidden that; the native API has none, so the first
+real values now go out the moment the allowlist is ready.
+
+
 ## 2026.09.25.7 — 2026-09-25
 
 **The worst-stall figure now measures running, not starting.** The first timed rebuild answered the

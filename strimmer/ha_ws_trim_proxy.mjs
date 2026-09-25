@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.25.7';
+const VERSION = '2026.09.25.8';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1442,6 +1442,12 @@ function startController() {
               // long enough for every panel's reconnect burst to have passed. See
               // settleLoopDelay() for why the since-boot figure misled.
               setTimeout(() => stats.settleLoopDelay(), LOOP_SETTLE_MS).unref?.();
+              // Publish now rather than at the next sampling tick. The ESPHome publisher starts
+              // before any allowlist exists and rightly refuses to publish zeros until one does —
+              // so every restart left the sensors `unknown` for up to a minute, a blip in every
+              // history graph. MQTT's retained state used to hide that gap; the native API has no
+              // retained state, so the first real values have to go out the moment they exist.
+              esphomeSensors.push();
             }
             else applyAllow(next, 'recomputed (reconnect)', { merge: true });
             // lovelace_updated -> a dashboard's cards changed. The *_registry_updated
