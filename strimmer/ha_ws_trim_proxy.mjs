@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.25.6';
+const VERSION = '2026.09.25.7';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -961,6 +961,9 @@ function applyOverrides(set, realIds, dash = null) {
 // buffer. The lines are collected instead and printed only when they differ from the last
 // rebuild's, the way the resource report already is. The one-line "allowlist recomputed … (+a -r)"
 // summary is still said every time: that line is the storm detector.
+// How long after the first allowlist the event-loop metric starts counting. Env-only; a test
+// sets it to milliseconds to see the reset without waiting a minute.
+const LOOP_SETTLE_MS = parseInt(process.env.LOOP_SETTLE_MS || '60000', 10);
 let BUILD_REPORT = null;        // lines collected during a build; null outside one
 let LAST_BUILD_REPORT = null;   // the text last printed
 const report = (line) => { if (BUILD_REPORT) BUILD_REPORT.push(line); else log(line); };
@@ -1435,6 +1438,10 @@ function startController() {
             if (!settled) {
               ALLOW = next.union; ALLOW_BY_DASH = next.perDash; ALLOW_VERSION++; REG_RESPONSE_CACHE.clear();
               settled = true; ALLOW_READY = true; resolve(ALLOW);
+              // Stop counting startup as operation: the first allowlist is in, and a minute is
+              // long enough for every panel's reconnect burst to have passed. See
+              // settleLoopDelay() for why the since-boot figure misled.
+              setTimeout(() => stats.settleLoopDelay(), LOOP_SETTLE_MS).unref?.();
             }
             else applyAllow(next, 'recomputed (reconnect)', { merge: true });
             // lovelace_updated -> a dashboard's cards changed. The *_registry_updated

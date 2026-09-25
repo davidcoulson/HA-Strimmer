@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026.09.25.7 — 2026-09-25
+
+**The worst-stall figure now measures running, not starting.** The first timed rebuild answered the
+question `2026.09.25.6` was built to ask: its own worst event-loop block was **55ms** — the 10.9MB
+registry frame parsed in 29ms, the dashboards took 23ms — while the console already showed a
+worst of **114ms** fourteen seconds after boot. The histogram was enabled when the stats module
+loaded, so "worst since boot" always included startup itself: compiling the proxy, the first
+build, and every panel reconnecting in the same few seconds. The creep from 46ms to 120ms over a
+week read like the proxy getting slower, and was only startup growing with the instance.
+
+It now starts counting a minute after the first allowlist is in (`LOOP_SETTLE_MS`), and reports
+the moment in `since`. So `sensor.strimmer_event_loop_delay_max` answers what it was put there to:
+can one client hold up the others while the proxy runs. `docs/CLUSTERING.md`'s 100ms threshold is
+about that, not about boot.
+
 ## 2026.09.25.6 — 2026-09-25
 
 **A rebuild that changed nothing no longer writes forty lines about it.** Measured on a live

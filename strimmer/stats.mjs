@@ -524,11 +524,29 @@ LOOP.unref?.();
 // `resolution` — 20ms of "delay" that is not delay at all. Subtracting it is what makes an idle
 // process report 0 and a blocked one report how long it was blocked, which is the only reading
 // anyone can act on. Measured to confirm: idle 0.0ms, a deliberate 150ms block -> max 150.
+// Since when. 'boot' until settleLoopDelay() is called, then the moment it was.
+let LOOP_SINCE = 'boot';
 const loopDelay = () => {
   const ms = (n) => Math.max(0, Math.round((n / 1e6 - LOOP_RES_MS) * 10) / 10);
   return { mean: ms(LOOP.mean || 0), p50: ms(LOOP.percentile(50)), p99: ms(LOOP.percentile(99)),
-    max: ms(LOOP.max || 0), since: 'boot' };
+    max: ms(LOOP.max || 0), since: LOOP_SINCE };
 };
+
+// Start counting from now, once startup is over.
+//
+// The histogram is enabled when this module is imported, so "worst since boot" always included
+// startup itself: compiling a five-thousand-line proxy, the first allowlist build, and every
+// panel reconnecting in the same few seconds. Measured on a live instance, that figure was 114ms
+// fourteen seconds after a start, while the rebuild's own worst block was 55ms and p99 settled back
+// near 1ms. The worst-stall number crept from 46ms to 120ms over a week — which read like the
+// proxy getting slower, and was only startup getting bigger with the instance. The question this
+// metric exists to answer is whether one client can hold up the others while it RUNS, and a boot
+// that happens once is not that. Called by the proxy once the first allowlist is in and the
+// reconnect burst has had time to pass.
+export function settleLoopDelay(now = new Date()) {
+  LOOP.reset();
+  LOOP_SINCE = now.toISOString();
+}
 
 // Test seam: the counters are module-level, so a test that wants a clean slate says so.
 export function reset() {

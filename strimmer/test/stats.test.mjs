@@ -1148,3 +1148,23 @@ describe('event-loop delay', () => {
     assert.ok(after.max >= after.p99 && after.p99 >= after.p50, 'percentiles must be ordered');
   });
 });
+
+// The worst-stall figure measures operation, not startup. It used to count from module import, so
+// it always included compiling the proxy, the first allowlist build and every panel reconnecting
+// at once — and a number that grew with the instance read like the proxy getting slower.
+describe('event-loop delay after boot settles', () => {
+  it('starts counting afresh, and says since when', async () => {
+    const { snapshot, settleLoopDelay } = stats;
+    assert.equal(snapshot().loopDelayMs.since, 'boot');
+    // Let the histogram's own sampling timer run first: a block before it is armed is not seen.
+    await new Promise((r) => setTimeout(r, 100));
+    // A deliberate block, so there is something for the reset to clear.
+    const until = Date.now() + 80; while (Date.now() < until) { /* spin */ }
+    await new Promise((r) => setTimeout(r, 100));
+    assert.ok(snapshot().loopDelayMs.max >= 40, 'the block is seen before the reset');
+    const at = new Date('2026-09-25T20:00:00Z');
+    settleLoopDelay(at);
+    assert.equal(snapshot().loopDelayMs.since, at.toISOString());
+    assert.ok(snapshot().loopDelayMs.max < 40, 'and forgotten after it');
+  });
+});

@@ -1,5 +1,5 @@
 name: Strimmer
-version: "2026.09.25.6"
+version: "2026.09.25.7"
 slug: strimmer
 stage: stable
 description: Serves your real HA dashboards but trims the entity websocket to only what each dashboard uses — fast kiosk loads, full fidelity.
@@ -199,7 +199,7 @@ schema:
         - str?
       never_forward:
         - str?
-  # Removed in 2026.09.25.6 (metrics moved to the ESPHome API). Still accepted so an existing
+  # Removed in 2026.09.25.7 (metrics moved to the ESPHome API). Still accepted so an existing
   # configuration stays valid on update — Supervisor refuses a key its schema does not know.
   mqtt_sensors: "bool?"
   esphome_api: "bool?"

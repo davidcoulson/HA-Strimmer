@@ -370,8 +370,14 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   and a swapped entity leaves every count the same. Errors and warnings still use `log`/`warn`.
 - **Every rebuild logs its cost** (`rebuild took …ms: worst event-loop block …ms, largest frame
   …MB parsed in …ms, dashboards …ms`). Read that line before optimising the rebuild: it already
-  yields between dashboards (each config fetch is an await), so the likely long block is one
-  `JSON.parse` of a multi-megabyte registry frame, which no amount of yielding can split.
+  yields between dashboards (each config fetch is an await). Measured 2026-09-25 on 10,901
+  entities: rebuild 962ms wall, worst block 55ms, the 10.9MB registry frame parsed in 29ms,
+  dashboards 23ms. Not worth optimising at that size.
+- **The event-loop "worst" counts from a minute after the first allowlist** (`settleLoopDelay`,
+  `LOOP_SETTLE_MS`), not from import. Before 2026.09.25.7 it included startup — compile, first
+  build, every panel reconnecting at once — and read 114ms at 14s uptime while the rebuild's own
+  worst was 55ms. The week-long "creep" from 46ms to 120ms was startup growing with the instance,
+  not the proxy slowing. Do not read a since-boot figure as an operational one.
 - **Every socket the proxy opens to HA carries `X-Forwarded-*`** — bridge, identity probe
   (`resolveUser(token, fwd)`), and the `serveDashboardPage` fetch. HA's failed-login ban keys on
   the address it sees; a bare probe made a rejected token the PROXY's failed login.
