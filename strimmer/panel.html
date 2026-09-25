@@ -417,6 +417,11 @@
   #cfg-intro details[open] summary { display: block; margin-bottom: 2px; }
   details.more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* A pill that does something says so. */
+  .pausebar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin: 0 0 12px; padding: 8px 12px; border-radius: var(--ha-card-border-radius, 12px);
+    background: rgba(255, 166, 0, .16); color: var(--warn); font-size: 13px; font-weight: 500; }
+  .pausebar .who { color: var(--fg); font-weight: 600; }
+  .pausebar button { font-size: 12px; padding: 3px 10px; }
   .pill.btn { cursor: pointer; }
   .pill.btn:hover { color: var(--accent); }
   /* A cell repeating the one above it, so several connections from one client read as a group. */
@@ -459,6 +464,10 @@
     </a>
   </div>
   <div class="sub" id="sub">loading…</div>
+  <!-- Shown only while a pause is running. Deliberately loud and deliberately not dismissable:
+       a trim that is off is otherwise invisible — panels just load slowly — so the one thing
+       this bar must do is be impossible to miss on the page somebody is already looking at. -->
+  <div class="pausebar" id="pausebar" hidden></div>
 
   <div class="card" data-tab="overview">
     <div class="grid">
@@ -1292,6 +1301,110 @@ async function searchEntities(q) {
   } else { msg.style.display = 'none'; }
 }
 
+// ---- pausing the trim -----------------------------------------------------------------
+//
+// Why this is in the console at all: the add-on serves a panel only the entities its dashboard
+// names, which is exactly wrong when somebody is trying to TROUBLESHOOT — an entity that no card
+// mentions is not there to look at. The case this was built for was an admin away from home, on a
+// phone through Cloudflare, with no way to turn the trim off from where they were standing.
+//
+// It pauses for the Home Assistant USER, not this browser or this address: a phone on cellular
+// behind Cloudflare has no stable address, and the person is the thing that is actually constant.
+// The server reads who that is from Supervisor's Ingress headers, so there is nothing to type and
+// no way to aim it at somebody else.
+const paused = (s) => (s.pauses || []).filter((p) => (p.msLeft ?? 0) > 0);
+
+async function postPause(preset, btn) {
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'pausing…';
+  try {
+    // The offset goes with it because "rest of the day" is a question about the VIEWER's midnight
+    // and the container runs UTC. Sending the answer is cheaper and more honest than configuring
+    // a timezone that would then have to be kept in step with the person.
+    const r = await fetch('./pause', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ preset, tzOffset: new Date().getTimezoneOffset() }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    toast(`Trimming paused for you until ${new Date(j.until).toLocaleTimeString()}`
+      + (j.reconnected ? ` — ${j.reconnected} connection${j.reconnected === 1 ? '' : 's'} reconnecting` : '')
+      + '. Reload the dashboard you are troubleshooting.');
+    tick();
+  } catch (e) {
+    toast('Could not pause: ' + e.message, 'err');
+  } finally { btn.disabled = false; btn.textContent = was; }
+}
+
+async function postResume(user, btn) {
+  btn.disabled = true; btn.textContent = 'resuming…';
+  try {
+    const r = await fetch('./resume', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ user }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    toast('Trimming resumed.');
+    tick();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Resume now';
+    toast('Could not resume: ' + e.message, 'err');
+  }
+}
+
+function renderPause(s, sub) {
+  const bar = $('pausebar');
+  const live = paused(s);
+  bar.textContent = '';
+  bar.hidden = !live.length;
+  for (const p of live) {
+    const mins = Math.max(1, Math.round(p.msLeft / 60000));
+    const who = document.createElement('span');
+    who.className = 'who';
+    // Off Ingress the user is redacted, so say what IS known rather than rendering "undefined".
+    who.textContent = p.name || p.user || 'someone';
+    const txt = document.createElement('span');
+    txt.append('Trimming is paused for ', who, ` — ${mins} min left, then it resumes on its own.`);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Resume now';
+    btn.onclick = () => postResume(p.user, btn);
+    const row = document.createElement('span');
+    row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '10px';
+    row.append(txt, btn);
+    bar.append(row);
+  }
+  // The control itself lives in the status strip, in the same pill language as everything else
+  // there, and only expands into the two durations when asked — a settings-shaped control on the
+  // header for something used twice a year would be clutter the rest of the time.
+  if (!sub || live.length) return;
+  const pill = document.createElement('span');
+  pill.className = 'pill btn';
+  pill.setAttribute('role', 'button');
+  pill.tabIndex = 0;
+  pill.textContent = 'pause trimming ▾';
+  pill.title = 'Serve yourself every entity for a while, to troubleshoot.\n'
+    + 'Applies to your Home Assistant user on every device, and ends by itself.';
+  const expand = () => {
+    const wrap = document.createElement('span');
+    const mk = (label, preset) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.style.fontSize = '11px';
+      b.style.padding = '2px 8px';
+      b.onclick = () => postPause(preset, b);
+      return b;
+    };
+    wrap.append('pause for ', mk('1 hour', 'hour'), ' ', mk('rest of day', 'day'));
+    pill.replaceWith(wrap);
+  };
+  pill.onclick = expand;
+  pill.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } };
+  sub.append(pill, ' ');
+}
+
 async function pinEntity(id, btn) {
   const msg = $('ent-msg');
   btn.disabled = true; btn.textContent = 'pinning…';
@@ -1527,6 +1640,7 @@ async function tick() {
     sub.append(count, ' ');
   }
   for (const [k, v] of others) sub.append(pillFor(k, v), ' ');
+  renderPause(s, sub);
 
   $('savedPct').textContent = (s.savings.savedPct || 0) + '%';
   $('savedAbs').textContent = kb(s.savings.saved) + ' of ' + kb(s.savings.before) + ' not sent';

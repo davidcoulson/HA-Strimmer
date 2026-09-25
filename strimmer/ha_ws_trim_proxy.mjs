@@ -40,6 +40,7 @@ import { createPublisher, certDaysLeft } from './mqtt_sensors.mjs';
 import * as httpLog from './http_log.mjs';
 import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
 import { resourceInvariantProblems } from './resource_invariants.mjs';
+import { readPauses, writePauses, pauseUser, resumeUser, sweep as sweepPauses, pausedUntil, anyActive as anyPauseActive, listPauses, msUntilEndOfDay, MAX_PAUSE_MS } from './pause.mjs';
 
 // Compiled bytecode is cached between runs, which is worth having because this add-on restarts
 // far more often than a typical service — every config change, every rebuild — and each restart
@@ -75,7 +76,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.09.21.1';
+const VERSION = '2026.09.24.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -663,6 +664,45 @@ const TRIM_REGISTRIES = OPT.trim_registries !== undefined ? !!OPT.trim_registrie
 // can recycle only the connections whose set actually grew, and the client address, so the log
 // can say WHICH ones it recycled. See refreshOpenConnections().
 const openBridges = new Map();
+// Trimming paused for one Home Assistant user, until a timestamp. See pause.mjs for why this is
+// keyed on the user rather than the device: the case it exists for is a person troubleshooting
+// from a phone on cellular behind Cloudflare, where no address is stable and the token's identity
+// is. Loaded from /data so a restart mid-pause does not silently re-trim, and swept on a timer so
+// it ends on its own.
+let PAUSES = readPauses(CONFIG_DIR);
+const pauseKey = (u) => String(u ?? '').trim().toLowerCase();
+
+// Drop every open connection belonging to one user, so it re-subscribes under the new answer.
+// Same mechanism as a grown allowlist (see refreshOpenConnections) and for the same reason: HA
+// cannot amend a live `subscribe_entities`, so a pause that started or ended only reaches a
+// connection that opens again. Both directions matter — starting one is useless if the phone
+// keeps its trimmed subscription, and ending one has to put the trim back without a manual
+// reload.
+function recycleUser(userKey, why) {
+  const victims = [...openBridges].filter(([, b]) => pauseKey(b.user) === userKey);
+  if (!victims.length) return 0;
+  log(`  reconnecting ${victims.length} connection(s) for ${userKey} (${why}): `
+    + victims.map(([, b]) => `${b.ip ?? '?'} (${b.dash ?? 'union'})`).join(', '));
+  for (const [close] of victims) { try { close(); } catch {} }
+  return victims.length;
+}
+
+// Ending a pause is as important as starting one, and nothing else would do it: the person who
+// paused is by definition busy with something else. Checked on a timer rather than scheduled per
+// pause so a clock jump or a restart cannot leave one armed forever.
+const PAUSE_SWEEP_MS = 15000;
+const pauseSweeper = setInterval(() => {
+  const [next, expired] = sweepPauses(PAUSES);
+  if (!expired.length) return;
+  PAUSES = next;
+  try { writePauses(CONFIG_DIR, PAUSES); } catch (e) { warn(`pause: could not persist expiry (${e.message})`); }
+  for (const k of expired) {
+    log(`trim pause expired for ${k} — trimming again`);
+    recycleUser(k, 'pause expired');
+  }
+}, PAUSE_SWEEP_MS);
+pauseSweeper.unref?.();
+
 // False until the first allowlist lands. HA may still be booting when we start, and injecting
 // an EMPTY allowlist would render every card "unavailable" until a manual reload — so until
 // this flips we refuse /api/websocket upgrades instead (the frontend just keeps retrying).
@@ -3413,6 +3453,19 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // When this connection was accepted, i.e. the moment the client started waiting. Everything
   // the timing report says is relative to this.
   const tOpen = Date.now();
+  // Does THIS connection get trimmed? Starts as the global setting and is turned off for the
+  // life of the connection when the user behind the token has an active pause (see pause.mjs).
+  // Per connection rather than global because a pause is one person troubleshooting, and the
+  // wall panels have no part in it — they keep their trim and are never disturbed.
+  //
+  // Every trim below reads this instead of STRIP, so "paused" means the entity stream, the
+  // registries, services, translations, themes and repairs all pass through whole. A partial
+  // pause would be the worst of both: still missing what you came to look for, and slow.
+  let trimming = STRIP;
+  // What openBridges holds for this connection: which set it is on, who is behind it, and where
+  // it came from. A live object rather than a snapshot, because the user is not known until the
+  // token resolves and a pause arriving later has to be able to find it.
+  const bridgeInfo = { dash, ip: meta.ip ?? null, user: null };
   let timedInitial = false;
   const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0, headers: meta.fwd || {} });
   const connId = stats.connOpen({
@@ -3554,7 +3607,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     try { m = JSON.parse(s); } catch { return toHA(s); }
     // The auth message carries the identity. Forward it immediately (HA is waiting for it),
     // then hold everything after it until the user is known.
-    if (userRulesCouldApply(dash) && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
+    if ((userRulesCouldApply(dash) || anyPauseActive(PAUSES)) && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
       userChecked = true;
       toHA(s);
       gateQueue = [];
@@ -3585,9 +3638,23 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
           log(`user rules applied for ${user.name ?? user.id}: ${allow.size} entities`
             + `${dash ? ` on ${dash}` : ''} (was ${baseAllow.size})`);
         }
+        // The pause, if this user has one. Checked HERE rather than at the upgrade because the
+        // token is the only thing that names the person, and it is not read until now. The gate
+        // holds every later message, so the first subscribe_entities is still stamped correctly —
+        // the same ordering the user rules above depend on.
+        if (user) {
+          bridgeInfo.user = user.id ?? user.name ?? null;
+          const until = pausedUntil(PAUSES, user.id) ?? pausedUntil(PAUSES, user.name);
+          if (until) {
+            trimming = false;
+            log(`trim PAUSED for ${user.name ?? user.id} on this connection `
+              + `(${meta.ip ?? '?'}${dash ? `, ${dash}` : ''}) — serving everything until `
+              + `${new Date(until).toISOString()}`);
+          }
+        }
         // Tell the panel who this is and what it ended up with, so a widened connection stops
         // reporting the size it had before the rules ran.
-        if (user) stats.connIdentity(connId, { allowSize: allow.size, user: user.name ?? user.id });
+        if (user) stats.connIdentity(connId, { allowSize: allow.size, user: user.name ?? user.id, paused: !trimming });
       }).catch(() => {}).finally(openGate);
       return;
     }
@@ -3597,10 +3664,14 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // Resolve it for reporting only: no gate, no queue, nothing waits. The answer arrives when it
     // arrives and updates the row in place, so this cannot add a millisecond to a page load.
     // Cached per token like the gated path, so a panel that reconnects hourly asks HA once.
-    if (!userChecked && m && m.type === 'auth' && m.access_token && !userRulesCouldApply(dash)) {
+    if (!userChecked && m && m.type === 'auth' && m.access_token && !userRulesCouldApply(dash) && !anyPauseActive(PAUSES)) {
       userChecked = true;
       resolveUser(m.access_token, meta.fwd)
-        .then((user) => { if (user) stats.connIdentity(connId, { user: user.name ?? user.id }); })
+        .then((user) => {
+          if (!user) return;
+          bridgeInfo.user = user.id ?? user.name ?? null;
+          stats.connIdentity(connId, { user: user.name ?? user.id });
+        })
         .catch(() => {});
       // Deliberately falls through: the auth message still has to reach HA the normal way.
     }
@@ -3608,13 +3679,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       if (pendingTypes.size > 500) pendingTypes.clear();
       pendingTypes.set(m.id, m.type);
     }
-    if (STRIP && m && m.type === 'get_states') getStatesIds.add(m.id);
+    if (trimming && m && m.type === 'get_states') getStatesIds.add(m.id);
     // A request the shared cache may be able to answer. The lookup itself is deferred to the
     // thunk below — see cachedOrForward — so it runs at FLUSH time, after any user rule has
     // settled the allowlist. Only what to look up is decided here.
     let cacheKind = null;
-    if (STRIP && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) cacheKind = REGISTRY_TYPES.get(m.type);
-    if (STRIP && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
+    if (trimming && TRIM_REGISTRIES && m && REGISTRY_TYPES.has(m.type)) cacheKind = REGISTRY_TYPES.get(m.type);
+    if (trimming && TRIM_RESOURCES && m && m.type === 'lovelace/resources') resourceIds.add(m.id);
     // get_services is every service of every integration, sent on every page load, and — like
     // the registries — identical for every client on a given allowlist. It was the last of the
     // big instance-wide payloads still being rebuilt by HA and re-parsed here once per
@@ -3630,11 +3701,11 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // a filter keyed on entity domain, which renders raw keys — so nothing else gets trimmed on
     // the strength of what its API "probably" returns.
     if (m && SHAPE_TYPES.has(m.type)) shapeIds.set(m.id, m.type);
-    if (STRIP && TRIM_THEMES && m && m.type === 'frontend/get_themes') themeIds.add(m.id);
-    if (STRIP && TRIM_REPAIRS && m && m.type === 'repairs/list_issues') repairIds.add(m.id);
-    if (STRIP && TRIM_SERVICES && m && m.type === 'get_services') cacheKind = 'services';
+    if (trimming && TRIM_THEMES && m && m.type === 'frontend/get_themes') themeIds.add(m.id);
+    if (trimming && TRIM_REPAIRS && m && m.type === 'repairs/list_issues') repairIds.add(m.id);
+    if (trimming && TRIM_SERVICES && m && m.type === 'get_services') cacheKind = 'services';
     // No event_type means "every event", which includes state_changed.
-    if (STRIP && m && m.type === 'subscribe_events'
+    if (trimming && m && m.type === 'subscribe_events'
         && (!m.event_type || m.event_type === 'state_changed')) {
       stateChangedSubs.add(m.id);
       debug(`subscribe_events(${m.event_type ?? 'ALL EVENTS'}) id=${m.id} from ${meta.ip ?? '?'} dash=${dash ?? '(union)'}`);
@@ -3645,7 +3716,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // for every one of the instance's entities — measured at 91,873 bytes per frame and 14.3%
     // of all websocket traffic, for entities that connection cannot see and has no row for,
     // because the registry it was given was already trimmed to its allowlist.
-    if (STRIP && TRIM_REGISTRIES && m && m.type === 'subscribe_events'
+    if (trimming && TRIM_REGISTRIES && m && m.type === 'subscribe_events'
         && m.event_type === 'entity_registry_updated') {
       registrySubs.add(m.id);
       debug(`subscribe_events(entity_registry_updated) id=${m.id} from ${meta.ip ?? '?'}`);
@@ -3656,7 +3727,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // reservation, and no configuration.
     //
     // Strictly additive. It can only widen this client's allowlist, never narrow it.
-    if (STRIP && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
+    if (trimming && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
         && typeof m.entity_id === 'string' && m.entity_id.startsWith('assist_satellite.')) {
       const added = learnClientEntity(meta.ip, m.entity_id);
       // Log the announcement itself, not only the case where it changed something. A panel whose
@@ -3688,7 +3759,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // Deferred to send time rather than done here — see the gate note above for why stamping
     // at this point silently dropped per-user rules.
     let stampAllow = false;
-    if (STRIP && m && m.type === 'subscribe_entities' && !m.entity_ids) {
+    if (trimming && m && m.type === 'subscribe_entities' && !m.entity_ids) {
       subEntityIds.add(m.id);              // remember it, to defensively re-filter its events
       stampAllow = true;
     }
@@ -3804,13 +3875,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // holds no row for it, so the update has nothing to apply to. Entities that are ADDED and
   // later become relevant are not lost — a new entity changes the allowlist, which triggers
   // a recompute and reconnects open dashboards.
-  const dropRegistryEvent = (x) => STRIP && TRIM_REGISTRIES
+  const dropRegistryEvent = (x) => trimming && TRIM_REGISTRIES
     && x && x.type === 'event'
     && registrySubs.has(x.id)
     && typeof x.event?.data?.entity_id === 'string'
     && !allow.has(x.event.data.entity_id);
 
-  const dropStateChanged = (x) => STRIP
+  const dropStateChanged = (x) => trimming
     && x && x.type === 'event'
     && stateChangedSubs.has(x.id)
     && typeof x.event?.data?.entity_id === 'string'
@@ -3928,7 +3999,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       if (dropStateChanged(msg)) return null;
       if (dropRegistryEvent(msg)) return null;
 
-      if (STRIP && msg.type === 'result' && getStatesIds.has(msg.id) && Array.isArray(msg.result)) {
+      if (trimming && msg.type === 'result' && getStatesIds.has(msg.id) && Array.isArray(msg.result)) {
         const beforeB = sized(msg.result);
         const before = msg.result.length;
         msg.result = msg.result.filter((e) => allow.has(e.entity_id));
@@ -3939,7 +4010,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         if (before > INSTANCE_ENTITIES) INSTANCE_ENTITIES = before;
         log(`get_states trimmed ${before} -> ${msg.result.length}${dash ? ` (${dash})` : ''}`);
       }
-    if (STRIP && TRIM_REGISTRIES && msg && msg.type === 'result' && registryIds.has(msg.id) && msg.result && typeof msg.result === 'object') {
+    if (trimming && TRIM_REGISTRIES && msg && msg.type === 'result' && registryIds.has(msg.id) && msg.result && typeof msg.result === 'object') {
       const kind = registryIds.get(msg.id);
       registryIds.delete(msg.id);
       const rowsOf = (r) => (Array.isArray(r) ? r.length : (Array.isArray(r?.entities) ? r.entities.length : -1));
@@ -3958,7 +4029,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // once here saves doing it per hit, and nothing downstream can mutate a string.
       regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
     }
-    if (STRIP && TRIM_THEMES && msg && msg.type === 'result' && themeIds.has(msg.id)
+    if (trimming && TRIM_THEMES && msg && msg.type === 'result' && themeIds.has(msg.id)
         && msg.result && typeof msg.result.themes === 'object') {
       themeIds.delete(msg.id);
       // The two defaults are read from the REPLY, not from config: they are whatever HA says
@@ -4049,7 +4120,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // Emptied rather than dropped. The frontend asks for this and waits; a missing reply would
     // leave that request pending forever, while an empty issue list is a perfectly valid answer
     // meaning "nothing to report".
-    if (STRIP && TRIM_REPAIRS && msg && msg.type === 'result' && repairIds.has(msg.id)
+    if (trimming && TRIM_REPAIRS && msg && msg.type === 'result' && repairIds.has(msg.id)
         && msg.result && typeof msg.result === 'object') {
       repairIds.delete(msg.id);
       const beforeB = sized(msg.result);
@@ -4062,7 +4133,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       cat = 'repairs';
       frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
     }
-    if (STRIP && TRIM_SERVICES && msg && msg.type === 'result' && serviceIds.has(msg.id)
+    if (trimming && TRIM_SERVICES && msg && msg.type === 'result' && serviceIds.has(msg.id)
         && msg.result && typeof msg.result === 'object' && !Array.isArray(msg.result)) {
       serviceIds.delete(msg.id);
       const keep = new Set(['homeassistant']);
@@ -4086,7 +4157,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // empty one.
       regCacheSet(regCacheKey('services', dash, cacheSig()), JSON.stringify(msg.result));
     }
-    if (STRIP && TRIM_RESOURCES && msg && msg.type === 'result' && resourceIds.has(msg.id) && Array.isArray(msg.result)) {
+    if (trimming && TRIM_RESOURCES && msg && msg.type === 'result' && resourceIds.has(msg.id) && Array.isArray(msg.result)) {
       resourceIds.delete(msg.id);
       const keep = dash ? RESOURCES_BY_DASH.get(dash) : null;
       if (keep?.size || resRules.always.length || resRules.never.length) {
@@ -4101,7 +4172,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         frameTrims.push({ cat, before: beforeB, after: sized(msg.result) });
       }
     }
-    if (STRIP && msg && msg.type === 'event' && subEntityIds.has(msg.id) && msg.event) {
+    if (trimming && msg && msg.type === 'event' && subEntityIds.has(msg.id) && msg.event) {
       // NB: sets the OUTER `changed`. A local one here would shadow it, the frame would
       // never be re-serialised, and this filter would silently do nothing.
       const ev = msg.event;
@@ -4172,7 +4243,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     if (bpTimer) { clearInterval(bpTimer); bpTimer = null; }
     try { browserWs.close(); } catch {} try { haWs.close(); } catch {}
   };
-  openBridges.set(close, { dash, ip: meta.ip ?? null });   // so a grown allowlist can recycle this connection (#7)
+  openBridges.set(close, bridgeInfo);   // so a grown allowlist — or a pause — can recycle this connection (#7)
   browserWs.on('close', (code) => {
     // 1009 is `ws` refusing a frame bigger than maxPayload. Worth a line: from the panel's side it
     // is an unexplained disconnect, and the cause is a limit this proxy chose.
@@ -4242,6 +4313,10 @@ function hopNameFor(ip) {
 function statsExtras() {
   return {
     version: VERSION,
+    // Who is currently untrimmed, and until when. In the snapshot rather than an endpoint of its
+    // own so the console's ordinary poll carries it: a pause has to be visible on the page you
+    // are already looking at, or it is a state nobody notices is still on.
+    pauses: listPauses(PAUSES),
     // Same reasoning as deviceFor: resolved per snapshot, because the first lookup is still in
     // flight when the connection that triggered it is recorded.
     hopNameFor,
@@ -4357,6 +4432,10 @@ function redactForNetwork(snap) {
     list: [],
     recent: [],
   };
+  // Active pauses name a Home Assistant user, so they follow the same rule as every other
+  // identity here. That trimming is paused at all is NOT hidden — a health check should be able
+  // to see it, and it is the whole point of the reminder — only who it is for.
+  if (Array.isArray(snap.pauses)) out.pauses = snap.pauses.map((p) => ({ until: p.until, msLeft: p.msLeft }));
   // Discovered devices are names and addresses of things on the network, by definition.
   if (out.mdns) out.mdns = { available: snap.mdns.available, services: [], devices: [] };
   // Hop names resolve to internal hostnames.
@@ -4644,6 +4723,91 @@ const statsServer = http.createServer((req, res) => {
 
   // Take over an option, change one already taken over, or hand it back. Ingress only, exactly
   // like the pins below: this writes configuration.
+  // ---- pause / resume the trim, for the Home Assistant user asking ----
+  //
+  // WHO is taken from Supervisor's Ingress headers, never from the request body. Supervisor
+  // authenticates the Home Assistant user and stamps `X-Remote-User-Id` before this add-on sees
+  // anything, so a person can only ever pause their OWN trim — there is no field to put someone
+  // else's id in. Resume accepts a named user because ending a pause early is the safe
+  // direction, and a pause left running by someone who has gone out should be stoppable.
+  //
+  // The id, not the display name: the bridge resolves identity through `auth/current_user`,
+  // which returns the same id, and a display name is editable and can collide.
+  if (path.endsWith('/pause') && req.method === 'POST') {
+    if (!viaIngress(req)) {
+      logThrottled('pause-denied', `refused a pause from ${clientIp(req) ?? '?'} — writes are Ingress-only`);
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
+    }
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 2048) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const id = String(req.headers['x-remote-user-id'] || '').trim();
+        const name = String(req.headers['x-remote-user-display-name'] || req.headers['x-remote-user-name'] || '').trim() || null;
+        if (!id) {
+          // Supervisor supplies these; their absence means this did not arrive the way it looks
+          // like it did. Refuse rather than guess an identity.
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Home Assistant did not say who you are — open the panel from the sidebar' }));
+        }
+        const { preset, tzOffset } = JSON.parse(body || '{}');
+        const ms = preset === 'day' ? msUntilEndOfDay(tzOffset) : 3600000;
+        PAUSES = pauseUser(PAUSES, id, ms, { name, by: name || id });
+        try { writePauses(CONFIG_DIR, PAUSES); } catch (e) { warn(`pause: could not persist (${e.message}) — it will not survive a restart`); }
+        const until = pausedUntil(PAUSES, id);
+        // Said at info, with an end time, because this is the add-on being asked to stop doing
+        // the thing it exists for. Anyone reading the log later should find out why a panel was
+        // slow for an hour without having to reason about it.
+        log(`trim PAUSED for ${name || id} until ${new Date(until).toISOString()} `
+          + `(${Math.round(ms / 60000)} min, requested from the console)`);
+        // Their open connections are still on a trimmed subscription, and HA cannot amend one.
+        // Dropping them is what makes the pause take effect on the page they are looking at.
+        const dropped = recycleUser(pauseKey(id), 'trim paused');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, user: id, name, until, msLeft: until - Date.now(), reconnected: dropped }));
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  if (path.endsWith('/resume') && req.method === 'POST') {
+    if (!viaIngress(req)) {
+      logThrottled('resume-denied', `refused a resume from ${clientIp(req) ?? '?'} — writes are Ingress-only`);
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
+    }
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 2048) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const asked = JSON.parse(body || '{}');
+        const id = String(asked.user || req.headers['x-remote-user-id'] || '').trim();
+        if (!id) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'no user to resume' }));
+        }
+        const had = pausedUntil(PAUSES, id);
+        PAUSES = resumeUser(PAUSES, id);
+        try { writePauses(CONFIG_DIR, PAUSES); } catch (e) { warn(`pause: could not persist resume (${e.message})`); }
+        let dropped = 0;
+        if (had) {
+          log(`trim resumed for ${id} (ended early from the console)`);
+          dropped = recycleUser(pauseKey(id), 'pause ended');
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, user: id, wasPaused: Boolean(had), reconnected: dropped }));
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
   if (path.endsWith('/config') && req.method === 'POST') {
     if (!viaIngress(req)) {
       logThrottled('config-denied', `refused a config write from ${clientIp(req) ?? '?'} — writes are Ingress-only`);
@@ -4866,7 +5030,7 @@ server.listen(PORT, () => {
     mqttSensors.start({
       token: ALLOW_TOKEN,
       snapshot: () => stats.snapshot(statsExtras()),
-      extras: () => ({ rebuilds: REBUILD_COUNT, certDaysLeft: CERT_DAYS }),
+      extras: () => ({ rebuilds: REBUILD_COUNT, certDaysLeft: CERT_DAYS, trimming: STRIP }),
     }).catch(() => {});
   }
   if (CERT_HOST) {

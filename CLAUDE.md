@@ -215,6 +215,20 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
     widens all of them or none and the collision case never arises. Use two USERS instead —
     that is what `two users on one dashboard never share each other's cached registry` does,
     and dropping the signature from the key must make it fail.
+- **Trimming can be PAUSED per Home Assistant user** (`pause.mjs`, `/data/pauses.json`, console
+  status strip). Keyed on the USER, not the device: the case it exists for is troubleshooting from
+  a phone on cellular behind Cloudflare, where no address is stable. Three properties to keep if
+  this is touched. (1) It is applied **inside the auth gate**, beside the user rules, because that
+  is the only moment the token has been resolved and still before the first `subscribe_entities` —
+  applying it later cannot work, since HA will not amend a live subscription. (2) Any active pause
+  forces the gate ON for every connection (`userRulesCouldApply(dash) || anyPauseActive`), or a
+  connection that no user rule could match would sail past the lookup and stay trimmed. (3)
+  Starting and ending one **recycles that user's bridges** (`recycleUser`), which is what makes it
+  reach the page in their hand. Inside `bridge()` every trim reads the per-connection `trimming`
+  flag, never `STRIP` — a partial pause is the worst outcome, still missing what you came to look
+  at and slow as well. Pauses expire (1h / rest of day, 24h ceiling) because one left on is
+  invisible: panels just load slowly. WHO is paused is redacted off-Ingress like every other
+  identity; THAT something is paused is not, because a health check should see it.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
   is now set (for trusted-network login, below), which can break the internal
   `homeassistant`/`supervisor` DNS names — the `ha_base` / `allow_ws_url` options pin them

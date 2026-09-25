@@ -292,6 +292,58 @@ search as you type — and still accept anything typed, because an `always_forwa
 routinely a `/regex/`, which no list of entity ids can suggest. Deleting a rule takes two clicks,
 since the rows look alike and the deletion cannot be undone from the console.
 
+### Pausing the trim while you troubleshoot
+
+The add-on serves a panel only the entities its dashboard names, which is exactly wrong when you
+are trying to find out why something is broken: an entity no card mentions is not there to look
+at. **Pause trimming** in the console's status strip turns it off for **one hour** or for the
+**rest of the day**, and it ends by itself.
+
+It pauses for a **Home Assistant user**, not a browser or an address:
+
+- It follows you from phone to laptop, and through Cloudflare, a VPN or a changed DHCP lease. A
+  phone on cellular has no stable address to pin a pause to.
+- **Everyone else keeps their trim.** The wall panels are not disturbed and do not reload.
+- Who is asking comes from Supervisor's Ingress headers, which are stamped after Home Assistant
+  has authenticated the user — there is no field to put somebody else's name in, so you can only
+  pause your own.
+
+While it runs, that user's connections are served **everything**: states, registries, services,
+translations, themes and repairs all pass through whole. Your open connections are dropped when it
+starts and again when it ends, because Home Assistant cannot amend a live `subscribe_entities` —
+the page reconnects on its own, so in practice you reload the dashboard you are looking at.
+
+A pause is **not** an access control. It does not hand out anything Home Assistant would refuse
+that same token; it stops this add-on filtering what HA is already willing to send. The cost is
+performance, which is why it expires.
+
+The console shows a banner for as long as one is running, with **Resume now**. Two sensors report
+it as well, so it is visible from outside the console (see below).
+
+### Knowing whether it is on, from anywhere
+
+With `mqtt_sensors` on, two entities answer "is this thing trimming right now":
+
+| Entity | What |
+|---|---|
+| `binary_sensor.strimmer_trimming` | `on` while trimming, `off` while paused — or if `trim_entities` is off entirely |
+| `sensor.strimmer_trim_paused_for` | Minutes until the pause ends, `0` when nothing is paused |
+
+That makes a paused trim visible without opening this panel — a badge in
+[custom-sidebar](https://github.com/elchininet/custom-sidebar), a conditional card, or an
+automation that tells you at bedtime that you left it off. A sidebar badge on the Strimmer item:
+
+```yaml
+order:
+  - item: Strimmer
+    notification: |
+      [[[
+        return states('binary_sensor.strimmer_trimming') === 'off'
+          ? states('sensor.strimmer_trim_paused_for') + 'm'
+          : '';
+      ]]]
+```
+
 ### What the console will and will not serve
 
 The console's port is reachable by anything on your network and has no authentication in front of

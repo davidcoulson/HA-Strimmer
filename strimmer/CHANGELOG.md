@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026.09.24.1 — 2026-09-24
+
+**You can pause the trimming while you troubleshoot.** The add-on serves a panel only the entities
+its dashboard names, which is exactly wrong when you are trying to find out why something is
+broken: the entity you need to look at is the one no card mentions. Reported from the case that
+makes it worst — away from home, on a phone through Cloudflare, unable to see anything the
+dashboard does not already show, and no way to turn it off from there.
+
+**Pause trimming** in the console's status strip now gives you everything for **an hour** or the
+**rest of the day**, and it ends by itself.
+
+- **It pauses for a Home Assistant USER, not a device.** A phone on cellular behind Cloudflare has
+  no stable address to pin anything to — the leftmost `X-Forwarded-For` entry is supplied by the
+  caller and `CF-Connecting-IP` moves with the tower. The user behind the token does not move, it
+  is the identity `user_overrides` already matches on, and it follows you from phone to laptop.
+- **Everyone else keeps their trim.** Only that user's connections are recycled; the wall panels
+  are untouched and do not reload.
+- **Who is asking comes from Supervisor's Ingress headers**, stamped after Home Assistant has
+  authenticated the user, so there is no field to put somebody else's name in. Resume accepts one,
+  because ending a pause early is the safe direction.
+- **It expires.** A pause that has to be turned off by hand is one that gets left on, and a trim
+  that is off is invisible — panels just load slowly again until somebody notices. One hour, the
+  rest of your day (computed from the console's own timezone, since the container runs UTC), and a
+  24-hour ceiling on anything hand-written into `/data/pauses.json`.
+- It is applied **inside the auth gate**, which is the only moment the token has resolved and
+  still before the first `subscribe_entities` — Home Assistant cannot amend a live subscription,
+  so anything later would not work at all. Open connections are dropped when it starts and when it
+  ends, which is what makes it reach the page in your hand.
+
+A pause is **not** an access control. It does not hand out anything Home Assistant would refuse
+that same token; it stops this app filtering what HA is already willing to send. The cost is
+performance, which is why it has a clock on it.
+
+**Two new entities say whether it is on, from anywhere.** `binary_sensor.strimmer_trimming` is
+`off` while paused (or if `trim_entities` is off), and `sensor.strimmer_trim_paused_for` counts the
+minutes down. That puts the state where it can be seen without opening this panel — a
+[custom-sidebar](https://github.com/elchininet/custom-sidebar) badge on the Strimmer item, a
+conditional card, or an automation that tells you at bedtime that you left it off. DOCS has the
+sidebar snippet.
+
+The console shows a banner with **Resume now** for as long as one is running, and the Clients table
+marks a paused connection. Off Ingress, *who* is paused is redacted like every other identity;
+*that* something is paused is not, so a health check can still see it.
+
+
 ## 2026.09.21.1 — 2026-09-21
 
 **The recycle log now says which connections it recycled.** When a rebuild grows a dashboard,

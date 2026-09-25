@@ -58,6 +58,10 @@ way back there in time.
   the top — blue is on — so what the app is doing reads at a glance; every list is a list you add
   to and remove from. No YAML unless you want it. It takes over an option only when you actually
   change one there, so anything you already set keeps working exactly as it did.
+- ⏸️ **Pause the trimming while you troubleshoot.** One tap in the console gives *you* every
+  entity for an hour, or the rest of the day, and it ends by itself. It follows your Home
+  Assistant user rather than a device, so it works from a phone on cellular through Cloudflare —
+  and every wall panel keeps its trim while you do it.
 - 🧩 **Override rules you build with a wizard**, not by hand. Match on a dashboard, a person, a
   **role** ("administrators see software updates, whoever they are"), how someone signed in, the
   kind of device a panel announces itself as, or which address it arrived on — and combine them.

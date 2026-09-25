@@ -67,11 +67,21 @@ const SENSORS = [
   { id: 'loop_delay_p99_ms',  name: 'Event loop delay (p99)', unit: 'ms',       icon: 'mdi:timer-sand', sc: 'measurement' },
   { id: 'loop_delay_max_ms',  name: 'Event loop delay (max)', unit: 'ms',       icon: 'mdi:timer-alert-outline', sc: 'measurement' },
 
+  // How much longer the trim is paused for, 0 when it is not. See BINARY_SENSORS below for the
+  // yes/no half of this. `measurement` like everything else here rather than an exemption from
+  // that rule: the hourly mean of a countdown is a sawtooth, but a non-zero one is a true record
+  // that trimming was off during that hour, which is exactly the thing worth finding a month
+  // later when a panel was slow and nobody remembers why.
+  { id: 'trim_paused_min',    name: 'Trim paused for',        unit: 'min',      icon: 'mdi:pause-circle-outline', sc: 'measurement' },
+
   // --- the one that is about the deployment rather than the traffic ----------------------
   { id: 'cert_days_left',     name: 'Certificate days left',  unit: 'd',        icon: 'mdi:certificate', sc: 'measurement' },
 ];
 
 const topicFor = (id) => `${DISCOVERY_PREFIX}/sensor/${NODE}/${id}/config`;
+// Binary sensors live under their own component path in the discovery tree, which is why this is
+// a second function rather than an argument.
+const binaryTopicFor = (id) => `${DISCOVERY_PREFIX}/binary_sensor/${NODE}/${id}/config`;
 const stateTopic = `${DISCOVERY_PREFIX}/sensor/${NODE}/state`;
 const availTopic = `${DISCOVERY_PREFIX}/sensor/${NODE}/availability`;
 
@@ -133,6 +143,15 @@ export function buildPayload(snap, extra = {}) {
     cache_hit_rate: snap?.registryCache?.hitRatePct ?? null,
     loop_delay_p99_ms: snap?.loopDelayMs?.p99 ?? null,
     loop_delay_max_ms: snap?.loopDelayMs?.max ?? null,
+
+    // Is the trim actually doing anything right now? Off when the option is off, and off while
+    // any user's pause is running — the state a sidebar badge or a conditional card asks for.
+    trimming: extra.trimming === false || (snap?.pauses?.length ?? 0) > 0 ? 'off' : 'on',
+    // Minutes until the longest-running pause ends, 0 when nothing is paused, so a template can
+    // count down without parsing a timestamp.
+    trim_paused_min: (snap?.pauses?.length ?? 0)
+      ? Math.max(0, Math.ceil(Math.max(...snap.pauses.map((p) => p.msLeft ?? 0)) / 60000))
+      : 0,
 
     cert_days_left: extra.certDaysLeft ?? null,
   };
@@ -199,8 +218,23 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000 } 
       };
       try { client.publish(topicFor(s.id), JSON.stringify(cfg), { retain: true, qos: 0 }); } catch {}
     }
+    for (const b of BINARY_SENSORS) {
+      const cfg = {
+        name: b.name,
+        unique_id: `${NODE}_${b.id}`,
+        state_topic: stateTopic,
+        availability_topic: availTopic,
+        value_template: `{{ value_json.${b.id} }}`,
+        payload_on: 'on',
+        payload_off: 'off',
+        device_class: b.dc,
+        icon: b.icon,
+        device,
+      };
+      try { client.publish(binaryTopicFor(b.id), JSON.stringify(cfg), { retain: true, qos: 0 }); } catch {}
+    }
     announced = true;
-    log(`  MQTT: announced ${SENSORS.length} sensors`);
+    log(`  MQTT: announced ${SENSORS.length} sensors and ${BINARY_SENSORS.length} binary sensor`);
   };
 
   return {
@@ -265,4 +299,16 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000 } 
   };
 }
 
-export { SENSORS };
+// One yes/no question — IS this thing trimming right now — published separately from the
+// numbers because that is the shape the question has. A sensor reading "active"/"paused" would
+// need string comparison everywhere it is used; a binary_sensor can be read by a sidebar badge,
+// a conditional card or an automation with no template at all.
+//
+// `device_class: running` renders as Running/Not running in the UI and, more usefully, gives the
+// entity the standard on/off semantics anything else can rely on. The countdown beside it is a
+// plain number so a template can say "48 min left" without parsing a timestamp.
+const BINARY_SENSORS = [
+  { id: 'trimming', name: 'Trimming', dc: 'running', icon: 'mdi:content-cut' },
+];
+
+export { SENSORS, BINARY_SENSORS };

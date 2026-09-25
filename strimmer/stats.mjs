@@ -264,11 +264,14 @@ function pruneSessions(now = Date.now()) {
 // widen it. Reporting the size captured at open meant the panel under-reported exactly the
 // connections a user rule had just changed — the panel stating something untrue about its own
 // behaviour, which is the failure it exists to prevent.
-export function connIdentity(id, { allowSize, user } = {}) {
+export function connIdentity(id, { allowSize, user, paused } = {}) {
   const c = conns.get(id);
   if (!c) return;
   if (Number.isFinite(allowSize)) c.allowSize = allowSize;
   if (user) c.user = String(user).slice(0, 80);
+  // A paused connection is being served untrimmed, so its row has to say so. Without it the
+  // Clients table shows a client on 3,600 entities beside one on 88 and offers no reason.
+  if (paused !== undefined) c.paused = Boolean(paused);
 }
 
 // How long this connection took to deliver the payload a dashboard cannot render without.
@@ -339,7 +342,7 @@ export function snapshot(extra = {}) {
     const rate = ageMs >= 60000 ? Math.round(c.eventBytes / (ageMs / 60000)) : null;
     return {
       id: c.id, ip: c.ip, dashboard: c.dash, attributedVia: c.via, allowSize: c.allowSize, ua: c.ua,
-      user: c.user,
+      user: c.user, paused: Boolean(c.paused),
       origin: c.origin, route: c.route, host: c.host, hop: c.hop, hops: c.hops,
       device: deviceFor ? (deviceFor(c.ip) ?? c.device) : c.device,
       msToEntityData: c.msToEntityData,
@@ -355,6 +358,9 @@ export function snapshot(extra = {}) {
 
   return {
     version: extra.version ?? null,
+    // Trimming currently paused, per user, and when each ends. Passed in rather than tracked
+    // here so this module stays a pure counter with no store of its own.
+    pauses: Array.isArray(extra.pauses) ? extra.pauses : [],
     // The runtime this process is ACTUALLY executing on, read from the process rather than
     // passed in — so it cannot drift from reality the way a hand-maintained constant would.
     //
