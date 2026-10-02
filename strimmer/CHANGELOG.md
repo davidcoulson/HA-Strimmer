@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026.10.02.2 — 2026-10-02
+
+**Security: a dashboard page could be fetched from a host other than Home Assistant.** Update if
+`trim_extra_modules` is on. With it on, the add-on fetches each dashboard's page itself so it can
+edit the module list, and it built that URL as `new URL(req.url, HA_BASE)`. The request target is
+whatever the client sent, so `GET //basement-panel/x` passed the dashboard check (its first segment
+names a dashboard) and was then read as protocol-relative: the add-on fetched
+`http://basement-panel/x` and served the answer as the page. The reach was narrow: only hosts that
+share a dashboard's name, port 80 unless the name carries one, and only with that option on. It was
+still a way to make the proxy talk to something other than its one upstream. The host now comes
+from `HA_BASE` alone, and the request supplies only the path and query. A test names a dashboard
+after a canary server's address and fails if the proxy ever contacts it. Found by CodeQL, now
+enabled on the repository.
+
+**The "cannot listen" fatal message named the wrong option.** It said to set `port`, the old name;
+the option is `proxy_port`.
+
+The repository now runs CodeQL, ruff (over `tools/make_icon.py`) and CodeRabbit on pull requests.
+None of that changes the add-on.
+
 ## 2026.10.02.1 — 2026-10-02
 
 **`ws` 8.22.0** (from 8.21.3), the websocket library on both legs of every trimmed connection. A
