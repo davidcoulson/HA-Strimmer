@@ -1791,6 +1791,33 @@ describe('trim_extra_modules', () => {
     } finally { px.kill(); await mock.close(); }
   });
 
+  // `new URL(req.url, HA_BASE)` let a request target of `//<dashboard>/…` choose the HOST: the
+  // first path segment names a dashboard, so it reached serveDashboardPage, and then resolved as a
+  // protocol-relative URL. The dashboard here is named after a canary server's host:port, which is
+  // the exploit made observable; in a real instance it was any host sharing a dashboard's name.
+  it('fetches the page from Home Assistant whatever the request target says the host is', async () => {
+    let strayed = 0;
+    const canary = http.createServer((q, s) => { strayed++; s.end('<!DOCTYPE html><html></html>'); });
+    await new Promise((r) => canary.listen(0, '127.0.0.1', r));
+    const forged = `localhost:${canary.address().port}`;
+    const mock = await startMockHa({ configs: { 'res-dash': CFG, [forged]: CFG }, extraModules: MODS });
+    const port = await getFreePort();
+    const px = spawnProxy({ mock, dashPaths: `res-dash,${forged}`, port,
+      extraEnv: { TRIM_RESOURCES: '1', TRIM_EXTRA_MODULES: '1' } });
+    try {
+      await px.waitForLog(READY);
+      const at = mock.state.httpHits.length;
+      const { status } = await new Promise((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port, path: `//${forged}/x`, headers: { accept: 'text/html' } },
+          (res) => { res.resume(); res.on('end', () => resolve({ status: res.statusCode })); })
+          .on('error', reject);
+      });
+      assert.equal(strayed, 0, 'the proxy must never fetch from a host the request target named');
+      assert.ok(mock.state.httpHits.slice(at).some((h) => h.url === `//${forged}/x`),
+        `the request must reach Home Assistant instead (status ${status})`);
+    } finally { px.kill(); await mock.close(); canary.close(); }
+  });
+
   // The same rule reaches the page. A module the resource trim dropped is removed from the page
   // for everyone else and left in place for the one client whose rule names it — so the panel
   // that needs an injected engine gets it at page load, and no other panel pays for it.

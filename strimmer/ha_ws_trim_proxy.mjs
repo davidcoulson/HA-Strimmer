@@ -3224,7 +3224,16 @@ function ipHint(req) {
 // every error path — fetch failure, non-HTML answer, a page the pattern does not match, anything
 // thrown — hands the request back to the ordinary proxy with nothing written to the socket yet.
 async function serveDashboardPage(req, res, dash) {
-  const upstream = new URL(req.url, HA_BASE);
+  // The host comes from HA_BASE and ONLY from there; the request supplies a path and a query.
+  // This used to be `new URL(req.url, HA_BASE)`, and req.url is the raw request target, so
+  // `GET //basement-panel/x` passed dashFromUrl (its first segment names a dashboard) and then
+  // resolved as a protocol-relative URL: the proxy fetched http://basement-panel/x, not Home
+  // Assistant. Found by CodeQL (js/request-forgery) on 2026-10-02.
+  if (!String(req.url).startsWith('/')) return false;
+  const upstream = new URL(HA_BASE);
+  const q = req.url.indexOf('?');
+  upstream.pathname = q < 0 ? req.url : req.url.slice(0, q);
+  upstream.search = q < 0 ? '' : req.url.slice(q);
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) {
     const key = k.toLowerCase();

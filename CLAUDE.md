@@ -384,6 +384,10 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
 - **Every socket the proxy opens to HA carries `X-Forwarded-*`** — bridge, identity probe
   (`resolveUser(token, fwd)`), and the `serveDashboardPage` fetch. HA's failed-login ban keys on
   the address it sees; a bare probe made a rejected token the PROXY's failed login.
+- **`serveDashboardPage` takes the HOST from `HA_BASE` only** and the request supplies path and
+  query. `new URL(req.url, HA_BASE)` let `GET //<dashboard-name>/…` resolve as protocol-relative
+  and fetch from a host named like a dashboard (CodeQL `js/request-forgery`, 2026-10-02). Any new
+  upstream fetch built from `req.url` needs the same shape.
 - **User-written regexes with nested quantifiers run under a 50ms `node:vm` deadline**
   (`guardedTest` in lovelace_extract.mjs). Don't "simplify" to rejecting them statically — a
   rejected filter matches nothing, which is the harmful direction — or to guarding every regex,
