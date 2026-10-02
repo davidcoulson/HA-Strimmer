@@ -44,7 +44,13 @@ WORKDIR /app
 # when the lock and the manifest disagree, which is the check that catches a hand-edited
 # dependency before it reaches a user.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund
+# npm is removed in the same layer that uses it. The app runs as `node ha_ws_trim_proxy.mjs` and
+# never calls npm, but the base image bundles one, and every CVE an image scanner reports in this
+# image has been in THAT copy's own dependencies: on 2026-10-02, Trivy found three fixable HIGHs
+# (brace-expansion, undici), all under /usr/local/lib/node_modules/npm and none in ours.
+# Shipping a package manager nobody runs only adds attack surface.
+RUN npm ci --omit=dev --no-audit --no-fund \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /root/.npm
 
 # App code. This list is explicit, so a new module that is not added here builds fine and then
 # dies at startup with ERR_MODULE_NOT_FOUND — add every .mjs the proxy imports.

@@ -34,9 +34,13 @@ jobs:
         node: ['22', '24', '26']
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      # zizmor: cache-poisoning is about a cache feeding a PUBLISHED artifact; this job publishes
+      # nothing, and only pushes to main can write a cache that main reads.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -58,7 +62,9 @@ jobs:
   metadata:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # config.yaml `version` and package.json `version` describe the same artifact, and the
       # image is tagged from config.yaml. When they disagree, the published tag and the version
@@ -102,18 +108,30 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      # zizmor: cache-poisoning is about a cache feeding a PUBLISHED artifact; this job publishes
+      # nothing, and only pushes to main can write a cache that main reads.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0 # zizmor: ignore[cache-poisoning]
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: tools/requirements.txt
 
-      - run: pip install ruff==$(grep -E '^ruff==' tools/requirements.txt | cut -d= -f3)
+      - run: pip install -r tools/requirements.txt
 
       - name: ruff check
         run: ruff check --output-format=github .
 
       - name: ruff format
         run: ruff format --check --diff .
+
+      # Security lint for these workflow files: unpinned actions, credentials left on disk, template
+      # expansion into shell, overbroad tokens. First run (2026-10-02) found 11 unpinned actions
+      # and three expansions into `run:`; all fixed. Pinned in tools/requirements.txt like ruff.
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --format github .github/workflows/
