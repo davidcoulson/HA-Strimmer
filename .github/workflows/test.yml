@@ -92,3 +92,28 @@ jobs:
             esac
           done
           exit $missing
+
+  # Ruff over the repo's Python (tools/make_icon.py). Installed from tools/requirements.txt
+  # rather than through a ruff action, so the version CI lints with is the one pinned there —
+  # the file Dependabot bumps — and not a second copy of the pin that could disagree with it.
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/requirements.txt
+
+      - run: pip install ruff==$(grep -E '^ruff==' tools/requirements.txt | cut -d= -f3)
+
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+      - name: ruff format
+        run: ruff format --check --diff .

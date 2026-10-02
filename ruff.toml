@@ -1,0 +1,12 @@
+# Ruff for the repo's Python, which today is one file: tools/make_icon.py, the icon generator.
+# The add-on itself is Node; nothing here touches what ships in the image.
+#
+# The version is pinned in tools/requirements.txt, which Dependabot keeps current, so CI and a
+# laptop lint with the same release instead of whatever `pip install ruff` happened to fetch.
+target-version = "py312"
+line-length = 100
+extend-exclude = ["strimmer/node_modules"]
+
+[lint]
+# pycodestyle, pyflakes, import order, bugbear, pyupgrade, simplify.
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]

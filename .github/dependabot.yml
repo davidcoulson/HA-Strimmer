@@ -40,6 +40,18 @@ updates:
     # on a minor, and the ws/http-proxy migration showed what a proxy library swap really costs
     # to review. Those deserve to be read one at a time.
 
+  # The icon generator's requirements, which pin ruff. One weekly PR at most: this is a dev tool,
+  # not anything that ships, and the CI lint job installs ruff from this exact pin.
+  - package-ecosystem: pip
+    directory: /tools
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    groups:
+      python-tools:
+        patterns: ['*']
+
   # GitHub Actions. This is the ecosystem that had actually rotted.
   - package-ecosystem: github-actions
     directory: /

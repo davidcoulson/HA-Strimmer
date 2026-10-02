@@ -160,6 +160,9 @@ pause banner shipped without one and showed an empty amber strip whenever nothin
 - `strimmer/DOCS.md` — app Documentation tab (option reference).
 - `repository.yaml` — lets HA add this GitHub URL as an app repository.
 - `README.md` — install + dev-run.
+- `tools/make_icon.py` — regenerates the icon and README banner; its requirements (Pillow, and the
+  ruff that CI lints with, configured in `ruff.toml`) are pinned in `tools/requirements.txt`.
+- `.coderabbit.yaml` — PR review config; its path instructions restate this file's sharpest invariants.
 
 ## Run modes (auto-detected)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the app's icon and the README banner.
 
-Run from the repo root:  python3 tools/make_icon.py
+Run from the repo root:  pip install -r tools/requirements.txt && python3 tools/make_icon.py
 
 Produces:
   strimmer/icon.png             128x128, shown in the Apps list
@@ -36,12 +36,12 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont
 SS = 4  # supersample factor
 
 # The tile: a clear sky, lighter toward the ground.
-SKY_TOP = (142, 197, 234)      # #8ec5ea
-SKY_BOTTOM = (216, 238, 250)   # #d8eefa
-BLADE_DARK = (27, 94, 32)      # #1b5e20
-BLADE_LIGHT = (46, 125, 50)    # #2e7d32
-SHORT_LEFT = (67, 160, 71)     # #43a047
-SHORT_RIGHT = (56, 142, 60)    # #388e3c
+SKY_TOP = (142, 197, 234)  # #8ec5ea
+SKY_BOTTOM = (216, 238, 250)  # #d8eefa
+BLADE_DARK = (27, 94, 32)  # #1b5e20
+BLADE_LIGHT = (46, 125, 50)  # #2e7d32
+SHORT_LEFT = (67, 160, 71)  # #43a047
+SHORT_RIGHT = (56, 142, 60)  # #388e3c
 WHITE = (255, 255, 255)
 
 # Banner text. Dark ink for the name, grey for the tagline; the tile beside them is the colour.
@@ -52,7 +52,7 @@ NAME = "Strimmer"
 TAGLINE = "cuts what your panel never shows"
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_DIR = "strimmer"                 # the add-on folder, renamed from websocket-stripper
+APP_DIR = "strimmer"  # the add-on folder, renamed from websocket-stripper
 FONTS = (
     "/System/Library/Fonts/HelveticaNeue.ttc",
     "/System/Library/Fonts/Helvetica.ttc",
@@ -78,9 +78,11 @@ CORNER = 24
 def _cubic(p0, p1, p2, p3, n=48):
     for i in range(n + 1):
         t = i / n
-        a, b, c, e = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t * t, t ** 3
-        yield (a * p0[0] + b * p1[0] + c * p2[0] + e * p3[0],
-               a * p0[1] + b * p1[1] + c * p2[1] + e * p3[1])
+        a, b, c, e = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t * t, t**3
+        yield (
+            a * p0[0] + b * p1[0] + c * p2[0] + e * p3[0],
+            a * p0[1] + b * p1[1] + c * p2[1] + e * p3[1],
+        )
 
 
 def _blade(pts, k):
@@ -99,13 +101,17 @@ def draw_tile(px):
     """The whole mark on its rounded sky tile, px square, antialiased."""
     S = px * SS
     k = S / 128
-    sc = lambda pts: [(x * k, y * k) for x, y in pts]
+
+    def sc(pts):
+        return [(x * k, y * k) for x, y in pts]
 
     # Sky: a vertical gradient, built one pixel wide and stretched.
     col = Image.new("RGB", (1, S))
     for y in range(S):
         t = y / (S - 1)
-        col.putpixel((0, y), tuple(round(a + (b - a) * t) for a, b in zip(SKY_TOP, SKY_BOTTOM)))
+        col.putpixel(
+            (0, y), tuple(round(a + (b - a) * t) for a, b in zip(SKY_TOP, SKY_BOTTOM, strict=True))
+        )
     tile = col.resize((S, S)).convert("RGBA")
 
     def paint(colour, mask):
@@ -123,9 +129,13 @@ def draw_tile(px):
     # The tip is cut out where it grew, THEN moved — the same order the SVG applies its clip
     # and its transform in. PIL rotates counter-clockwise and y points down, hence the sign.
     def moved(mask):
-        return mask.rotate(-TIP_ROTATE, resample=Image.BICUBIC,
-                           center=(TIP_PIVOT[0] * k, TIP_PIVOT[1] * k),
-                           translate=(TIP_SHIFT[0] * k, TIP_SHIFT[1] * k))
+        return mask.rotate(
+            -TIP_ROTATE,
+            resample=Image.BICUBIC,
+            center=(TIP_PIVOT[0] * k, TIP_PIVOT[1] * k),
+            translate=(TIP_SHIFT[0] * k, TIP_SHIFT[1] * k),
+        )
+
     paint(BLADE_DARK, moved(ImageChops.multiply(full, above)))
     paint(BLADE_LIGHT, moved(ImageChops.multiply(lit, above)))
 
@@ -164,7 +174,7 @@ def make_banner(w=1200, h=320):
     d = ImageDraw.Draw(img)
 
     margin = int(W * 0.045)
-    side = int(H * 0.70)                                  # the tile, as a share of the banner
+    side = int(H * 0.70)  # the tile, as a share of the banner
     tile = draw_tile(side // SS * SS)
     side = tile.width
     img.paste(tile, (margin, (H - side) // 2), tile)

@@ -1,0 +1,5 @@
+# What tools/make_icon.py needs, plus the linter CI runs over it. Pinned exactly so Dependabot
+# (the `pip` entry in .github/dependabot.yml) proposes every bump as a PR rather than CI drifting
+# to a new ruff release, with new rules, on an unrelated push.
+pillow==12.3.0
+ruff==0.16.10

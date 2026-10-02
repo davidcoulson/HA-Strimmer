@@ -1,0 +1,82 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit reviews every PR here. The project's real rulebook is CLAUDE.md, a list of behaviours
+# learned in production, each with the reason it exists. CodeRabbit reads CLAUDE.md as a code
+# guideline by default, which is the main thing it adds: a reviewer that knows "do not skip the
+# registry cache for widened connections" before it suggests exactly that. The path instructions
+# below repeat the invariants that are easiest to break in one line and hardest to notice.
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+    # Dependabot PRs are lockfile churn that the test matrix already judges. Ask with
+    # `@coderabbitai review` on one that deserves reading, such as a proxy-library major.
+    ignore_usernames:
+      - "dependabot[bot]"
+
+  path_filters:
+    - "!strimmer/package-lock.json"
+    - "!**/*.png"
+
+  path_instructions:
+    - path: "strimmer/ha_ws_trim_proxy.mjs"
+      instructions: >-
+        The proxy. Hold every change to the invariants in CLAUDE.md, especially: X-Forwarded-For
+        and X-Forwarded-Proto chains must stay the same LENGTH, and our own peer must be the
+        RIGHTMOST For entry whenever the client supplied a chain (otherwise any LAN host can log
+        in password-less via trusted_networks). Never rebuild the header from a single IP.
+        httpxy's ws() signature is (req, socket, options, head), and web()/ws() return promises
+        that need a .catch(). Inside bridge(), trims read the per-connection `trimming` flag,
+        never the global STRIP. The registry cache key must include the allowlist signature,
+        and the cache lookup must run inside the auth-gated thunk. Default-off options cannot
+        use the `(OPT.x ?? true) !== false` shape. Over-inclusion in an allowlist is harmless;
+        flag anything that could under-include.
+    - path: "strimmer/lovelace_extract.mjs"
+      instructions: >-
+        toMatcher() deliberately ports the auto-entities CARD's src/match.ts, quirks included,
+        so a pattern means here what it means in the browser. Do not suggest "fixing" those
+        quirks. /regex/ is unanchored, a * glob is anchored. Regexes with nested quantifiers
+        run under guardedTest's vm deadline on purpose; do not suggest rejecting them.
+    - path: "strimmer/panel.html"
+      instructions: >-
+        An Ingress iframe, not a native panel: it has no HA web components, so never suggest
+        <ha-icon> or <ha-tooltip>. Every button must be built with iconBtn() and carry no text,
+        only a data-tip and aria-label. Any element toggled with .hidden whose class sets
+        `display` needs a matching [hidden] { display: none } rule.
+    - path: "strimmer/config.yaml"
+      instructions: >-
+        `version` must equal package.json's and VERSION in ha_ws_trim_proxy.mjs. Removed options
+        stay in the schema (REMOVED_KEYS) so existing configurations remain valid; do not
+        suggest deleting them. Only amd64 and aarch64: armv7 was dropped on purpose.
+    - path: "strimmer/Dockerfile"
+      instructions: >-
+        Every .mjs the proxy imports must be named on a COPY line, or the image starts and dies
+        with ERR_MODULE_NOT_FOUND. The base image is node:26-alpine by deliberate choice.
+    - path: "strimmer/CHANGELOG.md"
+      instructions: >-
+        Entries before 2026.09.19 use the old name, WebSocket Stripper, on purpose: they record
+        what it was called at the time. Do not suggest renaming them.
+    - path: "strimmer/test/**"
+      instructions: >-
+        Tests spawn real proxies against a mock HA over real sockets. A test that counts
+        registry-triggered rebuilds must set REGISTRY_REBUILD_MIN_MS to 0. Every loopback
+        client is 127.0.0.1, so per-client collisions need two USERS, not two clients.
+
+  tools:
+    ruff:
+      enabled: true
+    shellcheck:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+
+chat:
+  auto_reply: true
