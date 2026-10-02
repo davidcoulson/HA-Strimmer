@@ -384,6 +384,12 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
 - **Every socket the proxy opens to HA carries `X-Forwarded-*`** — bridge, identity probe
   (`resolveUser(token, fwd)`), and the `serveDashboardPage` fetch. HA's failed-login ban keys on
   the address it sees; a bare probe made a rejected token the PROXY's failed login.
+- **Ingress is the PEER, never the header (`INGRESS_PEERS`).** As an add-on only Supervisor's
+  `172.30.32.2` may speak for Ingress; loopback is accepted only in a standalone run. It used to
+  accept 172.30.32.0/24 and loopback, and under host_network loopback is every host-network process
+  (Home Assistant, Node-RED, the SSH add-on…): any of them could forge `X-Ingress-Path` and pause
+  anyone or rewrite the console config. Found in review 2026-10-02. Note ha-mcp's "Ingress" proxy
+  mode connects directly from the host, so it gets the redacted, read-only view now.
 - **`serveDashboardPage` takes the HOST from `HA_BASE` only** and the request supplies path and
   query. `new URL(req.url, HA_BASE)` let `GET //<dashboard-name>/…` resolve as protocol-relative
   and fetch from a host named like a dashboard (CodeQL `js/request-forgery`, 2026-10-02). Any new

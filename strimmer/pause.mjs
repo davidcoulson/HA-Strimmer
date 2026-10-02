@@ -41,7 +41,17 @@ const filePath = (dataDir) => `${dataDir.replace(/\/$/, '')}/${PAUSE_FILE}`;
 // — so a switch can only pause a GROUP. Administrators is the right group: they are the people
 // who troubleshoot, and it leaves every kiosk and wall panel trimmed. A colon cannot appear in a
 // Home Assistant user id (they are 32 hex characters), so this can never collide with one.
-const keyOf = (user) => String(user ?? '').trim().toLowerCase();
+//
+// The key becomes an object property, and the id reaches here from a request (Supervisor's header,
+// or a resume naming someone), so anything that is not plainly an id is refused rather than
+// stored: no `__proto__`, no `constructor`, nothing outside the characters an id can hold. Real
+// ids are 32 hex characters; the pattern is a little wider so test ids like `u-david` still fit.
+const SAFE_KEY = /^[a-z0-9_:-]{1,64}$/;
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
+const keyOf = (user) => {
+  const k = String(user ?? '').trim().toLowerCase();
+  return SAFE_KEY.test(k) && !RESERVED.has(k) ? k : '';
+};
 export const ADMINS = 'role:admin';
 export const isRoleKey = (k) => keyOf(k) === ADMINS;
 
@@ -66,7 +76,7 @@ export function sanitize(raw, now = Date.now()) {
   const src = raw.pauses;
   if (!src || typeof src !== 'object') return out;
   for (const k of Object.keys(src)) {
-    if (k === '__proto__' || k === 'constructor') continue;   // same rule as the config store
+    if (!keyOf(k)) continue;                                  // same rule as the config store
     const v = src[k];
     if (!v || typeof v !== 'object') continue;
     const until = Number(v.until);
@@ -107,7 +117,7 @@ export function pauseUser(state, user, ms, { name = null, by = null, now = Date.
 
 export function resumeUser(state, user) {
   const key = keyOf(user);
-  if (!state.pauses[key]) return state;
+  if (!key || !Object.hasOwn(state.pauses, key)) return state;
   const pauses = { ...state.pauses };
   delete pauses[key];
   return { ...state, pauses };

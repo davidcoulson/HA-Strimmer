@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.02.2';
+const VERSION = '2026.10.02.3';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -4677,11 +4677,21 @@ function requireIngress(req, res, what) {
   return true;
 }
 
+// Who may speak for Ingress. The header is the client's to write, so the PEER is the whole check.
+//
+// As an add-on that is Supervisor and nothing else: 172.30.32.2, fixed by Supervisor's own network
+// layout. This used to accept all of 172.30.32.0/24 plus loopback, and under host_network loopback
+// is every host-network process on the machine — Home Assistant, Node-RED, the SSH add-on, a dozen
+// others on a typical install. Any of them could send `X-Ingress-Path` to 127.0.0.1:9122 and pause
+// trimming for anyone or rewrite the console's configuration (found in a review on 2026-10-02).
+// Loopback stays for a standalone run, where it is the developer's own machine and the tests'.
+const INGRESS_PEERS = new Set(
+  (process.env.INGRESS_PEERS ? process.env.INGRESS_PEERS.split(',') : inAddon ? ['172.30.32.2'] : ['127.0.0.1', '::1'])
+    .map((s) => s.trim()).filter(Boolean));
+
 function viaIngress(req) {
   if (!req.headers['x-ingress-path']) return false;
-  const peer = normalizeIp(req.socket?.remoteAddress) || '';
-  // Supervisor's own address on the hassio network. Also accept loopback for a local test.
-  return peer.startsWith('172.30.32.') || peer === '127.0.0.1' || peer === '::1';
+  return INGRESS_PEERS.has(normalizeIp(req.socket?.remoteAddress) || '');
 }
 
 // Append one value to a list option, writing to WHICHEVER SOURCE CURRENTLY OWNS IT.

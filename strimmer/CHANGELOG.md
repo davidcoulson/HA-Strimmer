@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026.10.02.3 — 2026-10-02
+
+**Security: other software on the same machine could act as an administrator in the console.** The
+console's writes (pausing trimming, changing configuration, pinning entities and resources) are
+meant to be reachable only through Home Assistant Ingress. The check trusted any request carrying
+Ingress's `X-Ingress-Path` header from loopback or anywhere in `172.30.32.0/24`. The header is
+the client's to write, and the add-on runs with host networking, so loopback includes every other
+host-network process on the machine. That's Home Assistant itself and, on a typical install, a dozen
+add-ons (Node-RED, the SSH add-on and so on). Any of them could pause trimming for any user or
+rewrite the console's settings. None of this reached Home Assistant's own authentication, and
+settings that decide where traffic goes (`ha_base`, the ports, the ESPHome key) were never writable
+there. As an add-on, only Supervisor's own address, `172.30.32.2`, now counts as Ingress. Loopback
+still works for a standalone run. Found in a security review.
+
+**Pause records refuse anything that isn't plainly a user id.** The id becomes a key in a stored
+object, and it reaches the store from a request, so `__proto__`, `constructor` and anything outside
+an id's characters are now refused rather than stored. Found by CodeQL's extended queries. It was
+only reachable through Ingress, by an administrator.
+
+**The image no longer ships npm.** The app never runs it, and Trivy's three fixable HIGH findings
+in the image (brace-expansion, undici) were all inside the copy the Node base image bundles. CI now
+fails a build that has a fixable HIGH or CRITICAL CVE before anything is published.
+
 ## 2026.10.02.2 — 2026-10-02
 
 **Security: a dashboard page could be fetched from a host other than Home Assistant.** Update if

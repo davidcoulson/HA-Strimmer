@@ -93,6 +93,16 @@ describe('the pause store', () => {
     assert.equal(row.name, 'administrators');
   });
 
+  // The id reaches the store from a request, and the store is a plain object keyed by it.
+  it('refuses an id that could reach the prototype, rather than storing it', () => {
+    for (const bad of ['__proto__', 'constructor', 'prototype', 'a b', 'x'.repeat(65), '']) {
+      assert.throws(() => pauseUser(emptyPauses(), bad, 3600e3), /user id/, `${JSON.stringify(bad)} must be refused`);
+    }
+    assert.deepEqual(resumeUser(emptyPauses(), 'constructor'), emptyPauses(), 'resuming a prototype name is a no-op');
+    assert.deepEqual(Object.keys(sanitize({ pauses: JSON.parse('{"__proto__": {"until": 9e15}, "constructor": {"until": 9e15}}') }).pauses), []);
+    assert.equal({}.until, undefined, 'and nothing leaked onto Object.prototype');
+  });
+
   it('resumes early', () => {
     const s = resumeUser(pauseUser(emptyPauses(), 'u-david', 60000, { now: NOW }), 'u-david');
     assert.equal(pausedUntil(s, 'u-david', NOW), null);
@@ -355,5 +365,74 @@ describe('a paused user is served untrimmed', () => {
     const back = readPauses(dataDir);
     assert.ok(pausedUntil(back, 'u-david'), 'and it is still live when read back');
     await post('/resume', {}, asUser('u-david', 'David'));
+  });
+});
+
+// The Ingress gate is the PEER, never the header. Under host_network every host-network process
+// reaches the console on loopback, so as an add-on only Supervisor's address may speak for
+// Ingress. Run here with that rule (INGRESS_PEERS is what add-on mode defaults to), from loopback,
+// carrying every header Ingress would: each write must be refused, and reads must be redacted.
+describe('a forged Ingress request from another local process', () => {
+  let mock, proxy, statsPort, dataDir, out = '';
+
+  const call = (method, p, body) => new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : '';
+    const req = http.request({
+      host: '127.0.0.1', port: statsPort, path: p, method,
+      headers: {
+        'content-type': 'application/json', 'content-length': Buffer.byteLength(data),
+        'x-ingress-path': '/api/hassio_ingress/forged',
+        'x-remote-user-id': 'u-david', 'x-remote-user-display-name': 'David',
+      },
+    }, (res) => {
+      let b = ''; res.on('data', (c) => b += c);
+      res.on('end', () => resolve({ status: res.statusCode, body: b }));
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+
+  before(async () => {
+    mock = await startMockHa();
+    statsPort = await getFreePort();
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strimmer-forged-'));
+    proxy = spawn(process.execPath, [PROXY], {
+      cwd: path.join(DIR, '..'),
+      env: {
+        ...process.env, HA_BASE: mock.base, HA_TOKEN: 'test-token', DASH_PATHS: 'test-dash',
+        PORT: String(await getFreePort()), STATS_PORT: String(statsPort), STRIP_ENTITIES: '1',
+        CONFIG_DIR: dataDir, INGRESS_PEERS: '172.30.32.2',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proxy.stdout.on('data', (b) => { out += b.toString(); });
+    proxy.stderr.on('data', (b) => { out += b.toString(); });
+    const deadline = Date.now() + 40000;
+    while (!/for live allowlist updates/.test(out)) {
+      if (Date.now() > deadline) throw new Error(`proxy never started\n${out}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
+  after(() => {
+    proxy?.kill(); mock?.close();
+    if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('cannot pause anyone', async () => {
+    const res = await call('POST', '/pause', { preset: 'hour' });
+    assert.equal(res.status, 403, 'a header is not an identity; the peer was not Supervisor');
+    assert.deepEqual(listPauses(readPauses(dataDir)), [], 'and nothing was written');
+  });
+
+  it('cannot rewrite the configuration or pin anything', async () => {
+    assert.equal((await call('POST', '/config', { key: 'trim_entities', value: false })).status, 403);
+    assert.equal((await call('POST', '/pin-entity', { entity_id: 'light.anything' })).status, 403);
+    assert.equal((await call('POST', '/pin-resource', { fragment: 'anything' })).status, 403);
+  });
+
+  it('reads the redacted snapshot, as any network caller does', async () => {
+    const res = await call('GET', '/stats.json');
+    assert.equal(JSON.parse(res.body).redacted, true);
   });
 });

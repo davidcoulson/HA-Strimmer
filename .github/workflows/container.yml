@@ -19,6 +19,9 @@ on:
     paths-ignore: ['**/*.md', 'assets/**', 'tools/**']
   workflow_dispatch:
 
+# Nothing by default; the one job below asks for exactly what it uses.
+permissions: {}
+
 env:
   # GHCR requires a lowercase path, and the repository name is not.
   IMAGE: ghcr.io/${{ github.repository_owner }}/strimmer
