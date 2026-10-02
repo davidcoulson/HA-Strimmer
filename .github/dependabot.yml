@@ -4,6 +4,12 @@
 #
 # Tuned for low noise on purpose: a dependency bot that opens eight PRs a week gets muted, and a
 # muted bot is worse than none because it looks like coverage. Weekly, grouped, capped.
+#
+# THIS FILE ALONE DOES NOT TURN IT ON. The repo is a fork, and GitHub leaves Dependabot disabled on
+# forks until it is enabled by hand (Insights -> Dependency graph -> Dependabot, and Settings ->
+# Advanced Security -> Dependabot security updates). From 2026-09-13 to 2026-10-02 this config sat
+# here and never ran once: no PRs, no runs, while ws and puppeteer-core both shipped minors. If the
+# Actions tab shows no "Dependabot Updates" runs after a Monday, check that before the YAML.
 version: 2
 
 updates:

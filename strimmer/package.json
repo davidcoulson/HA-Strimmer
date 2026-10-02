@@ -16,9 +16,9 @@
     "esphome-device": "^0.2.0",
     "httpxy": "^0.5.5",
     "multicast-dns": "^7.2.5",
-    "ws": "^8.18.0"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
-    "puppeteer-core": "^25.10.0"
+    "puppeteer-core": "^25.12.0"
   }
 }
