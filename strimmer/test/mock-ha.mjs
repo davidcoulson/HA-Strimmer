@@ -7,7 +7,15 @@ import net from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
 import { STATES, DASH_TEST, DASH_AUTO, AREAS, DEVICES, ENTITY_REGISTRY, ENTITY_REGISTRY_DISPLAY, LABELS } from './fixtures.mjs';
 
-export function getFreePort() {
+// The probe socket is closed before the port is used, so the kernel is free to hand the same
+// number to the very next probe — and a test asks for PORT and STATS_PORT back to back. On
+// 2026-10-02 CI got 34945 for both: the stats panel bound it, the proxy's own listener then hit
+// EADDRINUSE and exited, and the suite reported it as "proxy never built an allowlist". So never
+// hand out a number twice in one process. (Another test FILE can still race for it, since files
+// run as separate processes, but that needs a collision across processes, not a repeat in one.)
+const handedOut = new Set();
+
+function probePort() {
   return new Promise((res, rej) => {
     const srv = net.createServer();
     srv.listen(0, '127.0.0.1', () => {
@@ -16,6 +24,13 @@ export function getFreePort() {
     });
     srv.on('error', rej);
   });
+}
+
+export async function getFreePort() {
+  for (;;) {
+    const p = await probePort();
+    if (!handedOut.has(p)) { handedOut.add(p); return p; }
+  }
 }
 
 // token -> the user HA would report for it.

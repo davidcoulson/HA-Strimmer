@@ -5231,7 +5231,7 @@ server.listen(PORT, () => {
 // worth exiting for; anything else the server surfaces is not worth dying over.
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE' || e.code === 'EACCES') {
-    console.error(`fatal: cannot listen on :${PORT} (${e.code}) — set the add-on's \`port\` option to a free port`);
+    console.error(`fatal: cannot listen on :${PORT} (${e.code}) — set the add-on's \`proxy_port\` option to a free port`);
     process.exit(2);
   }
   logThrottled(`server:${e.code || e.message}`, `server error ${e.message}`);
