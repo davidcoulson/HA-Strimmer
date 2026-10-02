@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.10.02.1 — 2026-10-02
+
+**`ws` 8.22.0** (from 8.21.3), the websocket library on both legs of every trimmed connection. A
+minor release; the full suite passes on it and `npm audit` reports nothing. `puppeteer-core`, used
+only by the browser tests and not shipped in the image, moves to 25.12.0.
+
+**A correction to 2026.09.25.10.** It said Home Assistant would update the device's stored address on
+its own once Strimmer advertised the LAN one. On the instance it was written for, it did not: the
+config entry kept the Tailscale address until the ESPHome integration was reconfigured by hand. If
+**Settings → Devices & services → ESPHome → Strimmer** shows a `100.x` host, reconfigure it to the
+Home Assistant host's LAN address. The sensors keep their history, because the device is matched by
+its MAC.
+
+**Dependabot never ran.** It has been configured since 2026-09-13, but this repository is a fork, and
+GitHub leaves Dependabot off on forks until it is enabled by hand, so it never opened a PR. Security
+updates are now on. This changes nothing in the add-on; it is why these two bumps came from a person
+rather than a bot.
+
 ## 2026.09.25.10 — 2026-09-25
 
 **Home Assistant was reaching the add-on's sensors over Tailscale.** Its config entry for the device
