@@ -64,7 +64,10 @@ updates:
         patterns: ['*']
         update-types: [minor, patch]
 
-  # The base image. Majors are IGNORED deliberately — see below.
+  # The base image. Majors are IGNORED deliberately — see below. What this entry DOES update is the
+  # digest the Dockerfile pins (`FROM node:26-alpine@sha256:…`), so each republish of the tag with
+  # Alpine/Node patches arrives as a PR. It used to read the image through `ARG BUILD_FROM`, which
+  # this ecosystem cannot see: until 2026-10-06 the job ran and found nothing to check.
   - package-ecosystem: docker
     directory: /strimmer
     schedule:

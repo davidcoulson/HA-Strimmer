@@ -5,9 +5,16 @@
 # Home Assistant Container or Core, who cannot install add-ons at all. The proxy detects which
 # it is by the presence of SUPERVISOR_TOKEN and reads its config from /data/options.json or
 # from environment variables accordingly.
-# ARG BUILD_FROM is the Home Assistant add-on convention: Supervisor can inject a per-arch base
-# from build.yaml. The DEFAULT is what matters here though, because the same Dockerfile also
-# builds the plain container published to GHCR, where nothing injects anything.
+# A literal FROM, pinned to a digest. This was `ARG BUILD_FROM=node:26-alpine` / `FROM ${BUILD_FROM}`,
+# the add-on convention for letting Supervisor inject a per-arch base from build.yaml. There is no
+# build.yaml, so the default was always what built, and Dependabot does not read through an ARG: its
+# docker job found no image here at all, so the base was never watched (checked 2026-10-06).
+#
+# The digest is what gives Dependabot something to update. The tag alone never would: the ignore
+# rule in dependabot.yml holds back Node majors on purpose, and `26-alpine` names no smaller
+# version. Pinned, every republish of node:26-alpine (Alpine and Node security patches) arrives as a
+# PR, and CI's Trivy gate scans the result before anything ships. Check the index still lists
+# linux/amd64 AND linux/arm64 before accepting a bump: see the armv7 note in CLAUDE.md.
 #
 # Alpine because that is what the whole app ecosystem uses: both the official Home Assistant
 # bases and the community hassio-addons bases are Alpine. Nothing here compiles, so a Debian
@@ -25,8 +32,7 @@
 # the longer support window a few weeks early, and the cost is those few weeks on Current.
 # The test suite runs on 22, 24 and 26, so a regression specific to the new line is caught in
 # CI rather than on a wall panel; 24 stays in that matrix as the fallback if this bites.
-ARG BUILD_FROM=node:26-alpine
-FROM ${BUILD_FROM}
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80
 
 # Points the GHCR package at this repo and its README.
 LABEL org.opencontainers.image.source="https://github.com/davidcoulson/HA-Strimmer" \

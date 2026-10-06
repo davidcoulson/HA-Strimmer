@@ -286,7 +286,8 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   the Supervisor build fails outright on 32-bit ARM — and Home Assistant itself deprecated
   32-bit ARM in 2025.6 and dropped it after 2025.12. **Check the registry manifest before any
   base-image bump**, because that regression was silent: the tag existed, the platform did not.
-- **Base image is `node:26-alpine`** via `ARG BUILD_FROM`, taken deliberately ahead of its
+- **Base image is `node:26-alpine`, pinned by digest in a literal `FROM`** (not `ARG BUILD_FROM`,
+  which Dependabot cannot see through; there is no build.yaml to inject one), taken deliberately ahead of its
   2026-10-28 LTS date (v24 LTS 2025-10-28 / EOL 2028-04-30; v26 LTS 2026-10-28 / EOL
   2029-04-30). Cheap because nothing here compiles — no native bindings, no ABI to rebuild.
   CI tests Node 22, 24 and 26; 24 stays in the matrix as the known-good fallback. Dependabot is
