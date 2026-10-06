@@ -4,33 +4,66 @@
 // the /api/webrtc/ws passthrough). Used by proxy.test.mjs.
 import http from 'node:http';
 import net from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { STATES, DASH_TEST, DASH_AUTO, AREAS, DEVICES, ENTITY_REGISTRY, ENTITY_REGISTRY_DISPLAY, LABELS } from './fixtures.mjs';
 
-// The probe socket is closed before the port is used, so the kernel is free to hand the same
-// number to the very next probe — and a test asks for PORT and STATS_PORT back to back. On
-// 2026-10-02 CI got 34945 for both: the stats panel bound it, the proxy's own listener then hit
-// EADDRINUSE and exited, and the suite reported it as "proxy never built an allowlist". So never
-// hand out a number twice in one process. (Another test FILE can still race for it, since files
-// run as separate processes, but that needs a collision across processes, not a repeat in one.)
-const handedOut = new Set();
+// Ports for the tests' proxies and mocks, unique across every test PROCESS, not just this one.
+//
+// This used to ask the kernel for a free port (listen on 0), close the probe and hand the number
+// out. Two collisions in CI showed why that is not enough. 2026-10-02: the same process got one
+// number twice, for PORT and STATS_PORT. 2026-10-06: another test file's proxy, started with
+// STATS_PORT=0, was given 40009 by the kernel between this file's probe and its bind. The kernel
+// picks those from the EPHEMERAL range, the very range the probe drew from.
+//
+// So: allocate from 20000-32767, below the ephemeral range on Linux (32768+) and macOS (49152+),
+// where nothing picks a port by itself; claim each number with an exclusive-create lock file
+// shared by every test process; and bind the exact port (on all interfaces, as the proxy does)
+// before handing it out. A lock older than ten minutes is from a run that died, and is taken.
+const PORT_MIN = 20000, PORT_MAX = 32767;
+const LOCK_DIR = path.join(os.tmpdir(), 'strimmer-test-ports');
+const STALE_MS = 10 * 60 * 1000;
+const claimed = [];
+let next = PORT_MIN + Math.floor(Math.random() * (PORT_MAX - PORT_MIN));
 
-function probePort() {
-  return new Promise((res, rej) => {
+fs.mkdirSync(LOCK_DIR, { recursive: true });
+process.on('exit', () => { for (const f of claimed) { try { fs.rmSync(f); } catch {} } });
+
+function claim(port) {
+  const f = path.join(LOCK_DIR, String(port));
+  try {
+    fs.writeFileSync(f, String(process.pid), { flag: 'wx' });
+  } catch {
+    try {
+      if (Date.now() - fs.statSync(f).mtimeMs < STALE_MS) return null;
+      fs.rmSync(f);
+      fs.writeFileSync(f, String(process.pid), { flag: 'wx' });
+    } catch { return null; }
+  }
+  claimed.push(f);
+  return f;
+}
+
+function bindable(port) {
+  return new Promise((res) => {
     const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const p = srv.address().port;
-      srv.close(() => res(p));
-    });
-    srv.on('error', rej);
+    srv.once('error', () => res(false));
+    srv.listen(port, () => srv.close(() => res(true)));
   });
 }
 
 export async function getFreePort() {
-  for (;;) {
-    const p = await probePort();
-    if (!handedOut.has(p)) { handedOut.add(p); return p; }
+  for (let tries = 0; tries < PORT_MAX - PORT_MIN; tries++) {
+    const port = next;
+    next = next >= PORT_MAX ? PORT_MIN : next + 1;
+    const lock = claim(port);
+    if (!lock) continue;
+    if (await bindable(port)) return port;
+    // Held by something outside the tests. Keep the lock, so nobody else tries it this run.
   }
+  throw new Error(`no free test port in ${PORT_MIN}-${PORT_MAX}`);
 }
 
 // token -> the user HA would report for it.
