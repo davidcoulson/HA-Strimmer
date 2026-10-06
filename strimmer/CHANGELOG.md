@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.10.06.1 — 2026-10-06
+
+**`esphome-device` 0.2.1.** With `esphome_key` set, Home Assistant connecting without the key is
+now told that one is needed. Its add flow asks for the encryption key, and an existing entry starts
+a reauth. Before, it failed with "Unable to connect… make sure the YAML includes an api section",
+which sent people looking for a YAML file this add-on doesn't have. Nothing changes for an
+integration that already has the key.
+
 ## 2026.10.02.3 — 2026-10-02
 
 **Security: other software on the same machine could act as an administrator in the console.** The
