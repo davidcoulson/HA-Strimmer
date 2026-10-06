@@ -13,7 +13,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "esphome-device": "^0.2.0",
+    "esphome-device": "^0.2.1",
     "httpxy": "^0.5.5",
     "multicast-dns": "^7.2.5",
     "ws": "^8.22.0"
