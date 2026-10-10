@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   readStore, writeStore, adopt, release, effectiveOptions, ownership, BOOTSTRAP_KEYS, STORE_VERSION,
-  isKnownOption,
+  isKnownOption, valueError,
 } from '../config_store.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cfgstore-'));
@@ -123,5 +123,26 @@ describe('the store does not trust key names or shapes', () => {
     const back = readStore(dir);
     assert.deepEqual(back.history, []);
     assert.doesNotThrow(() => adopt(back, 'trim_themes', true, {}));
+  });
+});
+
+// A write is checked against the option's declared type when it is made, so the console can say
+// what is wrong. Stored unchecked, `"false"` reads as true at the next boot (`!!"false"`).
+describe('valueError', () => {
+  it('accepts each declared type in its own shape', () => {
+    assert.equal(valueError('trim_services', false), null);
+    assert.equal(valueError('dashboards', ['lovelace', 'kiosk']), null);
+    assert.equal(valueError('overrides', [{ role: 'admin', always_forward: ['/^update\\./'] }]), null);
+    assert.equal(valueError('client_api_access', 'lan'), null);
+    assert.equal(valueError('trim_services', undefined), null, 'undefined means take over the current value');
+  });
+
+  it('refuses the wrong shape with a reason', () => {
+    assert.match(valueError('trim_services', 'false'), /true or false/);
+    assert.match(valueError('dashboards', 'lovelace'), /list of text/);
+    assert.match(valueError('dashboards', [1, 2]), /list of text/);
+    assert.match(valueError('overrides', ['a rule as text']), /list of rules/);
+    assert.match(valueError('client_api_access', 'everyone'), /one of: lan, any, off/);
+    assert.match(valueError('constructor', true), /not an option/);
   });
 });

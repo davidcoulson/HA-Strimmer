@@ -78,8 +78,13 @@ COPY ha_ws_trim_proxy.mjs lovelace_extract.mjs stats.mjs history.mjs route.mjs m
 # watchdog restarted a perfectly healthy container every ~85 seconds — while Supervisor, never
 # seeing `started`, left Ingress showing "The app is starting, this can take some time".
 # Reading the bound port means the probe cannot disagree with the server about where it is.
+#
+# "unbound" means the stats server could not take its port and the proxy kept going on purpose
+# (see statsServer's error handler). There is nothing to probe then, and failing would hand the
+# Supervisor watchdog a reason to restart a proxy that is working; a dead process exits the
+# container anyway.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD p="$(cat /tmp/stats-port 2>/dev/null)"; [ -n "$p" ] && wget -qO- "http://127.0.0.1:$p/stats.json" >/dev/null 2>&1 || exit 1
+  CMD p="$(cat /tmp/stats-port 2>/dev/null)"; [ "$p" = unbound ] && exit 0; [ -n "$p" ] && wget -qO- "http://127.0.0.1:$p/stats.json" >/dev/null 2>&1 || exit 1
 
 # Cache compiled bytecode on the persistent volume, so a restart does not recompile the whole
 # app from source. It has to be set here rather than called in the entrypoint: ha_ws_trim_proxy.mjs

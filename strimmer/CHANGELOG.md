@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.10.10.2 — 2026-10-10
+
+**The console's settings, pins and request log are for administrators.** Every Home Assistant user
+can open this console (`panel_admin: false`). 2026.10.10.1 limited the group pause to
+administrators. This release applies the same rule to the rest of what acts on everyone:
+- changing configuration,
+- pinning an entity or a resource,
+- reading the request log, which holds webhook ids and camera stream tokens.
+
+Webhook ids are secrets: whoever has one can trigger the automation behind it. A user who isn't an
+administrator gets a refusal, and the console stops offering them controls that would refuse.
+
+**A configuration value of the wrong type is refused when it's saved.** It used to be stored as
+sent and read at the next restart, and a boolean was read by truthiness, so the text `"false"`
+turned the option *on*. The console always sent the right type; this guards every other writer.
+
+**A stats port that can't bind no longer gets the add-on restarted in a loop.** The proxy
+deliberately keeps running when its console port is taken, but the container healthcheck probed
+that port. It failed, and the Supervisor watchdog restarted a working proxy every couple of minutes.
+The healthcheck now knows the console didn't start.
+
+**The admin switch updates at once when the console pauses or resumes, and when a pause runs out.**
+It used to wait up to a minute for the next sample, so it could disagree with the console.
+
+All found in a code review.
+
 ## 2026.10.10.1 — 2026-10-10
 
 **Only an administrator can pause trimming for every administrator.** This console is open to

@@ -120,7 +120,9 @@ jobs:
           cache: pip
           cache-dependency-path: tools/requirements.txt
 
-      - run: pip install -r tools/requirements.txt
+      # Only the linters, at the versions pinned there. Pillow is for make_icon.py, which lint
+      # does not run.
+      - run: pip install $(grep -E '^(ruff|zizmor)==' tools/requirements.txt)
 
       - name: ruff check
         run: ruff check --output-format=github .

@@ -266,6 +266,10 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   resuming someone else's pause look the role up with `config/auth/list` over the control ws
   (`CONTROL_RPC`; `system-admin` group or owner, cached 60s) and fail CLOSED when it cannot.
   Codex review 2026-10-10: before this, any household user could pause every administrator.
+  The same gate (`callerMayAdminister`) covers `/config`, both pins and `/access.json` (webhook
+  ids are bearer secrets). A NAMED caller is always checked; with no identity it passes only in a
+  standalone run, where loopback is the operator's machine. `/config` also type-checks each value
+  (`valueError`): stored unchecked, `"false"` read as true at the next boot.
   **The reserved key `role:admin`** (`ADMINS`) pauses every administrator at once, which is what
   the switch `switch.strimmer_trimming_admins` does — the transport carries a command and not an
   identity, so an anonymous control can only scope to a role. `is_admin` comes from

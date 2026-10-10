@@ -40,7 +40,7 @@ import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { certDaysLeft } from './metrics.mjs';
 import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
 import * as httpLog from './http_log.mjs';
-import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, REMOVED_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
+import { readStore, writeStore, adopt, release, effectiveOptions, ownership, isKnownOption, valueError, BOOTSTRAP_KEYS, EDITABLE_KEYS, LEGACY_KEYS, REMOVED_KEYS, legacyNameFor, OPTIONS, SECTIONS } from './config_store.mjs';
 import { resourceInvariantProblems } from './resource_invariants.mjs';
 import { readPauses, writePauses, pauseUser, resumeUser, sweep as sweepPauses, pausedUntil, pausedForUser, anyActive as anyPauseActive, listPauses, msUntilEndOfDay, ADMINS, isRoleKey, MAX_PAUSE_MS } from './pause.mjs';
 
@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.10.1';
+const VERSION = '2026.10.10.2';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -753,6 +753,8 @@ const pauseSweeper = setInterval(() => {
     log(`trim pause expired for ${k} — trimming again`);
     recycleUser(k, 'pause expired');
   }
+  // Or the admin switch reads "off" for up to a minute after trimming came back on.
+  esphomeSensors.push();
 }, PAUSE_SWEEP_MS);
 pauseSweeper.unref?.();
 
@@ -2683,6 +2685,10 @@ function resolveUser(token, fwd = null) {
         // must — see the note on USER_CACHE_FILE.
         // is_admin joins id and name because a rule can now match on it. Still only what the
         // rules read — the rest of Home Assistant's user object stays out of the file.
+        // Deleted first so the entry moves to the END of the Map: eviction below takes the first
+        // key, and Map.set on an existing key keeps its old place, so a user refreshed every few
+        // minutes stayed first in line to be evicted.
+        USER_CACHE.delete(key);
         USER_CACHE.set(key, {
           user: {
             id: user.id,
@@ -4698,6 +4704,17 @@ async function userIsAdmin(userId) {
   return ADMIN_LOOKUP.admins.has(id);
 }
 
+// For console requests that act on everyone or read what only an administrator should see: the
+// request log, configuration writes, pins. As an add-on Supervisor always names the caller, and
+// only an administrator passes. A standalone run has no Ingress and no identity: what reaches the
+// gate there is loopback (see INGRESS_PEERS), the operator's own machine, so there is no one to
+// check. A NAMED caller is always checked, whichever mode this is.
+async function callerMayAdminister(req) {
+  const id = String(req.headers['x-remote-user-id'] || '').trim();
+  if (!id) return !inAddon;
+  return userIsAdmin(id);
+}
+
 const refuseNotAdmin = (res, what) => {
   res.writeHead(403, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ error: `only a Home Assistant administrator can ${what}` }));
@@ -4788,7 +4805,7 @@ const pinResource = (fragment) => appendToListOption('resources_always_forward',
 // it wrong. `never_forward` still wins afterwards, as it does over everything.
 const pinEntity = (entityId) => appendToListOption('always_forward', entityId, 'ALWAYS_FORWARD');
 
-const statsServer = http.createServer((req, res) => {
+const statsServer = http.createServer(async (req, res) => {
   // Ingress rewrites the path prefix, so match on the tail rather than the whole URL.
   const path = String(req.url || '/').split('?')[0].replace(/\/+$/, '') || '/';
   // Pin a resource so every dashboard receives it. Ingress only — see viaIngress().
@@ -4798,6 +4815,7 @@ const statsServer = http.createServer((req, res) => {
       res.writeHead(403, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
     }
+    if (!(await callerMayAdminister(req))) return refuseNotAdmin(res, 'pin a resource for every dashboard');
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
     req.on('end', async () => {
@@ -4907,7 +4925,7 @@ const statsServer = http.createServer((req, res) => {
       // Writes are Ingress-only, and the panel is also served on its own port — where every
       // control would otherwise render as editable and then fail with a 403 on click. The page
       // is told, so it can say "open this through Home Assistant" instead of setting a trap.
-      editableHere: viaIngress(req),
+      editableHere: viaIngress(req) && await callerMayAdminister(req),
       storePath: CONFIG_DIR ? `${CONFIG_DIR}/config.json` : null,
       // Named, though not listed as rows, so the console can explain where they DO live if
       // someone comes looking for one.
@@ -4947,8 +4965,9 @@ const statsServer = http.createServer((req, res) => {
   // WHO is taken from Supervisor's Ingress headers, never from the request body. Supervisor
   // authenticates the Home Assistant user and stamps `X-Remote-User-Id` before this add-on sees
   // anything, so a person can only ever pause their OWN trim — there is no field to put someone
-  // else's id in. Resume accepts a named user because ending a pause early is the safe
-  // direction, and a pause left running by someone who has gone out should be stoppable.
+  // else's id in. The one group target, `scope: 'admins'`, and resuming anyone but yourself both
+  // need an administrator (userIsAdmin): this console is open to every user, and either one acts
+  // on other people's sessions.
   //
   // The id, not the display name: the bridge resolves identity through `auth/current_user`,
   // which returns the same id, and a display name is editable and can collide.
@@ -4973,7 +4992,7 @@ const statsServer = http.createServer((req, res) => {
         const { preset, tzOffset, scope } = JSON.parse(body || '{}');
         const ms = preset === 'day' ? msUntilEndOfDay(tzOffset) : 3600000;
         // `scope: 'admins'` pauses the role instead of the person — the same thing the Home
-        // Assistant switch does, offered here so the two paths cannot drift apart. What it grants
+        // Assistant switch does (setAdminPause), and it tells the switch at once, below. What it grants
         // is what Home Assistant would already hand those tokens, minus this app's filtering, so
         // it exposes no data. But it acts on every administrator's session, and this console is
         // open to every user (panel_admin: false), so only an administrator may ask for it.
@@ -4995,6 +5014,9 @@ const statsServer = http.createServer((req, res) => {
         // Their open connections are still on a trimmed subscription, and HA cannot amend one.
         // Dropping them is what makes the pause take effect on the page they are looking at.
         const dropped = recycleUser(pauseKey(target), 'trim paused');
+        // As setAdminPause does: the admin switch, and trim_paused_for, should agree with the
+        // console the moment it answers, not at the next sampling tick.
+        esphomeSensors.push();
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, user: target, name, until, msLeft: until - Date.now(), reconnected: dropped }));
       } catch (e) {
@@ -5034,6 +5056,7 @@ const statsServer = http.createServer((req, res) => {
         if (had) {
           log(`trim resumed for ${id} (ended early from the console)`);
           dropped = recycleUser(pauseKey(id), 'pause ended');
+          esphomeSensors.push();
         }
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, user: id, wasPaused: Boolean(had), reconnected: dropped }));
@@ -5051,6 +5074,7 @@ const statsServer = http.createServer((req, res) => {
       res.writeHead(403, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
     }
+    if (!(await callerMayAdminister(req))) return refuseNotAdmin(res, 'change the configuration');
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
     req.on('end', () => {
@@ -5076,6 +5100,14 @@ const statsServer = http.createServer((req, res) => {
         if (!isKnownOption(key)) {
           res.writeHead(400, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ error: `"${key}" is not an option this version knows about` }));
+        }
+        // Checked here, where the console can say so, rather than at the next boot, after it had
+        // already reported success: `!!"false"` is true, so a string where a boolean belongs
+        // silently turned on the very thing it was meant to turn off.
+        const bad = action === 'release' ? null : valueError(key, value);
+        if (bad) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: `"${key}" ${bad}` }));
         }
         const next = action === 'release'
           ? release(CONFIG_STORE, key)
@@ -5105,6 +5137,7 @@ const statsServer = http.createServer((req, res) => {
       res.writeHead(403, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ error: 'writes are only accepted through Home Assistant Ingress' }));
     }
+    if (!(await callerMayAdminister(req))) return refuseNotAdmin(res, 'pin an entity for every dashboard');
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
     req.on('end', async () => {
@@ -5144,6 +5177,9 @@ const statsServer = http.createServer((req, res) => {
   if (path.endsWith('/access.json')) {
     // The worst of them: this one carries webhook ids and stream tokens.
     if (requireIngress(req, res, '/access.json')) return;
+    // Ingress is not enough: every user can open this console (panel_admin: false), and webhook
+    // ids are bearer secrets that a non-admin cannot otherwise see.
+    if (!(await callerMayAdminister(req))) return refuseNotAdmin(res, 'read the request log');
     const limit = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('limit')) || 100, 500);
     const body = JSON.stringify(httpLog.snapshot({ limit }), null, 2);
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -5156,10 +5192,10 @@ const statsServer = http.createServer((req, res) => {
     return res.end(body);
   }
   if (path.endsWith('/stats.json')) {
-    // Deliberately NOT Ingress-only, unlike the reads above: a `rest:` sensor in Home Assistant
-    // polls this for a health signal, and that fetch comes from core rather than through Ingress.
-    // Gating it wholesale would silently take that sensor down — which is exactly the failure this
-    // add-on caused once already by moving its port.
+    // Deliberately NOT Ingress-only, unlike the reads above: monitoring polls this for a health
+    // signal (the container's own HEALTHCHECK, Uptime Kuma, a `rest:` sensor someone set up), and
+    // those fetches do not come through Ingress. Gating it wholesale would silently take them down,
+    // which is exactly the failure this add-on caused once already by moving its port.
     //
     // So the aggregates stay public and the IDENTITIES do not. What a health check needs is
     // "is it up and is the allowlist built"; what it does not need is every client's address,
@@ -5180,9 +5216,18 @@ const statsServer = http.createServer((req, res) => {
 // with it — the add-on's actual job is unaffected. Log it and carry on, unlike PORT below.
 // Worth being explicit that Ingress goes with it: under host_network the panel is reached
 // THROUGH this same listener, so a bind failure costs the panel and the JSON API both.
-statsServer.on('error', (e) => warn(`stats server could not start on :${STATS_PORT} (${e.message})`
+statsServer.on('error', (e) => {
+  // The healthcheck probes this server. Without a word from here it fails, Docker marks the
+  // container unhealthy, and the Supervisor watchdog restarts it in a loop — taking the proxy
+  // down after all. "unbound" tells the probe there is nothing to probe and the process chose to
+  // keep proxying; a dead process exits the container, which the watchdog sees on its own.
+  if (e.code === 'EADDRINUSE' || e.code === 'EACCES') {
+    try { fs.writeFileSync(STATS_PORT_FILE, 'unbound'); } catch {}
+  }
+  warn(`stats server could not start on :${STATS_PORT} (${e.message})`
   + ' — the panel and JSON API are unavailable, including over Ingress. Proxying is unaffected;'
-  + ' set STATS_PORT (and ingress_port) to move it.'));
+  + ' set STATS_PORT (and ingress_port) to move it.');
+});
 statsServer.listen(STATS_PORT, () => {
   // Publish the port the healthcheck should probe. Best-effort: a container whose /tmp is not
   // writable still proxies and still serves the panel, and failing the probe over that would be

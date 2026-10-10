@@ -184,6 +184,25 @@ export const EDITABLE_KEYS = Object.fromEntries(
 // "is this a known option" guard waved them through.
 export const isKnownOption = (key) => typeof key === 'string' && Object.hasOwn(EDITABLE_KEYS, key);
 
+// Why `value` cannot be stored for `key`, or null when it can. Checked when the console writes, so
+// a wrong type is refused with a reason instead of being reported saved and misread at the next
+// boot. `undefined` is allowed: adopt() reads it as "take over the value already in effect".
+export function valueError(key, value) {
+  if (value === undefined) return null;
+  const opt = OPTIONS[key];
+  if (!opt || !Object.hasOwn(OPTIONS, key)) return 'is not an option this version knows about';
+  const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  switch (opt.type) {
+    case 'bool': return typeof value === 'boolean' ? null : 'must be true or false';
+    case 'str': return typeof value === 'string' ? null : 'must be text';
+    case 'list': return Array.isArray(value) && value.every((v) => typeof v === 'string') ? null : 'must be a list of text';
+    case 'objects': return Array.isArray(value) && value.every(isPlainObject) ? null : 'must be a list of rules';
+    case 'choice': return (opt.choices || []).some((c) => c.value === value)
+      ? null : `must be one of: ${(opt.choices || []).map((c) => c.value).join(', ')}`;
+    default: return null;
+  }
+}
+
 const emptyStore = () => ({ version: STORE_VERSION, managed: {}, history: [] });
 
 export function storePath(dataDir) {

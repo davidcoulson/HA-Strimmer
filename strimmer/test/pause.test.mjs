@@ -378,6 +378,32 @@ describe('a paused user is served untrimmed', () => {
     assert.deepEqual(paused(), []);
   });
 
+  // The same rule for everything else the console can change or reveal. A named caller who is not
+  // an administrator is refused; an administrator gets through, and a wrong type is refused with
+  // a reason instead of being reported saved.
+  it('keeps configuration, pins and the request log to administrators', async () => {
+    const get = (p, headers) => new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: statsPort, path: p, headers }, (r) => {
+        let b = ''; r.on('data', (c) => b += c); r.on('end', () => resolve({ status: r.statusCode, body: b }));
+      }).on('error', reject);
+    });
+    const michelle = asUser('u-michelle', 'Michelle'), david = asUser('u-david', 'David');
+
+    assert.equal((await post('/config', { key: 'trim_services', value: true }, michelle)).status, 403);
+    assert.equal((await post('/pin-entity', { entity_id: 'light.kitchen' }, michelle)).status, 403);
+    assert.equal((await post('/pin-resource', { fragment: 'some-card' }, michelle)).status, 403);
+    assert.equal((await get('/access.json', michelle)).status, 403, 'webhook ids are for administrators');
+    assert.equal(JSON.parse((await get('/config.json', michelle)).body).editableHere, false,
+      'and the page is told, so it does not offer controls that will refuse');
+
+    assert.equal((await get('/access.json', david)).status, 200);
+    assert.equal(JSON.parse((await get('/config.json', david)).body).editableHere, true);
+    const typo = await post('/config', { key: 'trim_services', value: 'false' }, david);
+    assert.equal(typo.status, 400, 'a string where a boolean belongs is refused, not saved and misread');
+    assert.match(typo.body, /true or false/);
+    assert.equal((await post('/config', { key: 'trim_services', action: 'release' }, david)).status, 200);
+  });
+
   it('puts the trim back when the pause is ended early', async () => {
     // Sets up its own pause rather than inheriting one from the test above: state that leaks
     // between tests makes whichever one runs second lie about what it is checking.
