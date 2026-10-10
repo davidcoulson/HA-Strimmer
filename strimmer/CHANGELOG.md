@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.10.10.4 — 2026-10-10
+
+**`esphome-device` 0.3.1,** which includes the unpublished 0.3.0. For Strimmer that means:
+- **Hardening it gets with no change here:** message sizes are bounded before anything is buffered,
+  open connections are capped at 8, a handshake has to finish within 60 seconds, and a connection
+  that goes quiet is dropped. A server error after startup is logged rather than ending the process.
+- **The admin switch applies commands in order.** A quick on-then-off can no longer finish on.
+- **mDNS checks the name isn't already taken before announcing,** and answers only the local
+  network. Strimmer still advertises the one LAN address it picks.
+
+Nothing to do on upgrade.
+
 ## 2026.10.10.3 — 2026-10-10
 
 **Other people's details are for administrators too.** The console's Clients list names every
