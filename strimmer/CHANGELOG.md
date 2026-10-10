@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.10.10.1 — 2026-10-10
+
+**Only an administrator can pause trimming for every administrator.** This console is open to
+every Home Assistant user (`panel_admin: false`), and Ingress tells the add-on who is asking but not
+their role. So any user who could open the panel could pause trimming for all administrators for up
+to a day, and recycle their connections. Nobody could see anything they couldn't already: a pause
+only stops this add-on filtering what Home Assistant would send those sessions anyway. But it acted
+on other people's sessions, and that is now checked. The add-on asks Home Assistant whether the
+caller is an administrator, using its own definition (the `system-admin` group, or the owner), and
+refuses when it can't find out. Ending someone else's pause, the administrators' one included, is
+held to the same rule. Anyone can still pause and resume their own trim. Found by a Codex review.
+
+**Standalone Compose installs from before the rename: your data volume needs copying.** The rename
+to Strimmer changed the Compose file's volume (`stripper-data` to `strimmer-data`), image and
+service name, and Compose carries none of them over. The new file starts on an empty volume, and the
+old container keeps running as an orphan, holding the ports. The volume is not being renamed back:
+installs have run on the new one for three weeks, and switching again would strand them instead.
+[docs/MIGRATING.md](https://github.com/davidcoulson/HA-Strimmer/blob/main/docs/MIGRATING.md#standalone-compose-the-rename-to-strimmer)
+now has the steps, tested on a throwaway project. Add-on installs are unaffected. Found by a Codex
+review.
+
 ## 2026.10.06.1 — 2026-10-06
 
 **`esphome-device` 0.2.1.** With `esphome_key` set, Home Assistant connecting without the key is

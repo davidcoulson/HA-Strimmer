@@ -24,8 +24,12 @@ services:
       - "9122:9122"     # stats panel + JSON API (optional; drop this line to keep it internal)
 
     volumes:
-      # Keeps the 24h statistics history across restarts. Without it the add-on still works
-      # and still samples — the window just starts empty on every restart.
+      # Keeps what the console saves (settings it manages, pins, pauses) and the 24h statistics
+      # history across restarts. Without it the add-on still works, but starts from nothing.
+      #
+      # UPGRADING from a WebSocket Stripper install? This volume used to be `stripper-data`, and
+      # Compose will NOT carry it over: it creates this one empty, beside the old one. Copy it
+      # across first — docs/MIGRATING.md, "Standalone Compose: the rename to Strimmer".
       - strimmer-data:/data
 
     environment:

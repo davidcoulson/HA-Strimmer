@@ -347,6 +347,37 @@ describe('a paused user is served untrimmed', () => {
     assert.ok(Array.isArray(back) && back.length, 'and it goes back afterwards');
   });
 
+  // The console is open to every user (panel_admin: false), and Ingress says who is asking but
+  // not their role. A pause that acts on OTHER people's sessions, the administrators' or one
+  // person's, has to be asked for by an administrator. Michelle is a plain user in the mock.
+  it('lets only an administrator act on anyone but themselves', async () => {
+    const paused = () => listPauses(readPauses(dataDir)).map((p) => p.user);
+
+    const group = await post('/pause', { preset: 'hour', scope: 'admins' }, asUser('u-michelle', 'Michelle'));
+    assert.equal(group.status, 403, 'a non-admin may not pause every administrator');
+    assert.match(group.body, /administrator/);
+    assert.ok(!paused().includes('role:admin'), 'and nothing was written');
+
+    const own = await post('/pause', { preset: 'hour' }, asUser('u-michelle', 'Michelle'));
+    assert.equal(own.status, 200, 'anyone may still pause their own trim');
+    assert.equal((await post('/resume', {}, asUser('u-michelle', 'Michelle'))).status, 200, 'and end it');
+
+    await post('/pause', { preset: 'hour' }, asUser('u-david', 'David'));
+    await post('/pause', { preset: 'hour', scope: 'admins' }, asUser('u-david', 'David'));
+    assert.equal((await post('/resume', { user: 'u-david' }, asUser('u-michelle', 'Michelle'))).status, 403,
+      "a non-admin may not end someone else's pause");
+    assert.equal((await post('/resume', { user: 'role:admin' }, asUser('u-michelle', 'Michelle'))).status, 403,
+      "nor the administrators' one");
+    assert.ok(paused().includes('u-david') && paused().includes('role:admin'), 'both pauses are still there');
+
+    await post('/pause', { preset: 'hour' }, asUser('u-michelle', 'Michelle'));
+    assert.equal((await post('/resume', { user: 'u-michelle' }, asUser('u-david', 'David'))).status, 200,
+      "an administrator may end someone else's pause");
+    await post('/resume', { user: 'role:admin' }, asUser('u-david', 'David'));
+    await post('/resume', {}, asUser('u-david', 'David'));
+    assert.deepEqual(paused(), []);
+  });
+
   it('puts the trim back when the pause is ended early', async () => {
     // Sets up its own pause rather than inheriting one from the test above: state that leaks
     // between tests makes whichever one runs second lie about what it is checking.

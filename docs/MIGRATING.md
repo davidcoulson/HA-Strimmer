@@ -7,6 +7,10 @@ Nothing below is required — it is here for when you want the newer names and t
 That is deliberate. Silently ignoring a renamed key is the worst thing an upgrade can do: the
 setting appears to be there, the default quietly takes over, and nothing says so.
 
+**One exception: a standalone Docker Compose install from before the rename to Strimmer**
+(September 2026). Its data volume, image and service were all renamed, and the new Compose file
+starts on an empty volume. See [Standalone Compose: the rename to Strimmer](#standalone-compose-the-rename-to-strimmer).
+
 ---
 
 ## Renamed options
@@ -170,6 +174,58 @@ you want that font local, download it and point the import at `/local/...`.
 
 The hint that attributes a connection to a dashboard now survives a restart, so panels no longer
 fall back to the union until something makes them reload. Nothing to configure.
+
+---
+
+## Standalone Compose: the rename to Strimmer
+
+Only for running the plain container with Docker Compose, set up before the project was renamed
+from WebSocket Stripper. An add-on install doesn't need any of this.
+
+Three names in `docker-compose.yml` changed:
+
+| | Before | Now |
+|---|---|---|
+| Image | `ghcr.io/davidcoulson/ha-websocket-stripper` | `ghcr.io/davidcoulson/strimmer` |
+| Service and container | `websocket-stripper` | `strimmer` |
+| Data volume | `stripper-data` | `strimmer-data` |
+
+Each one fails quietly if you only half-follow it:
+
+- **Keep the old file and you stop getting updates.** The old image name is no longer published, so
+  `docker compose pull` keeps the last one it had and reports nothing wrong.
+- **Switch to the new file and the old container keeps running.** Compose sees a different service
+  name and leaves `websocket-stripper` up as an orphan, still holding ports 9123 and 9122, so the
+  new one can't bind them.
+- **The new volume starts empty.** Compose creates `strimmer-data` beside the old volume rather
+  than renaming it. Without a copy you lose everything the console saved (settings it manages,
+  pinned entities and resources, pauses) plus the statistics history. The old volume is still on
+  disk and untouched.
+
+To move across, from the folder holding your `docker-compose.yml`:
+
+```bash
+# 1. Copy your HA_BASE, HA_TOKEN, DASH_PATHS and other settings into the new docker-compose.yml.
+
+# 2. Stop the old container and remove it. Its volume is kept.
+docker compose down --remove-orphans
+
+# 3. Create the new container and its empty volume without starting it.
+docker compose up --no-start
+
+# 4. Find both volumes. Compose prefixes each with the project (folder) name.
+docker volume ls --filter name=stripper-data --filter name=strimmer-data
+
+# 5. Copy the old data into the new volume, using the two names from step 4.
+docker run --rm -v <project>_stripper-data:/from:ro -v <project>_strimmer-data:/to \
+  alpine cp -a /from/. /to/
+
+# 6. Start it.
+docker compose up -d
+```
+
+Check that the log doesn't report a fresh start, and that the console's **Config** tab shows your
+settings. Once you're happy, `docker volume rm <project>_stripper-data` reclaims the space.
 
 ---
 

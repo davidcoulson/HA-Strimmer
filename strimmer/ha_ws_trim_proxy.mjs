@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.06.1';
+const VERSION = '2026.10.10.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1302,6 +1302,11 @@ function refreshOpenConnections(grown, unionGrew) {
 // (HA restarting, core still booting, the supervisor proxy answering 502) is retried with the
 // same backoff as any later drop. It used to reject, and boot turned that into `process.exit(2)`
 // — so an HA reboot put the add-on into a ~300ms crash/restart loop instead of just waiting.
+// The control connection's rpc while it is authenticated, for the few requests outside a rebuild
+// that have to ask Home Assistant something (today: whether a console user is an administrator).
+// Null whenever the socket is down, so a caller fails closed instead of queueing on a dead one.
+let CONTROL_RPC = null;
+
 function startController() {
   return new Promise((resolve) => {
     let settled = false;
@@ -1434,6 +1439,7 @@ function startController() {
         if (m.type === 'auth_ok') {
           try {
             backoff = 1000; attempts = 0;
+            CONTROL_RPC = rpc;
             const next = await buildAllow(rpc, renderTemplate);
             if (!settled) {
               ALLOW = next.union; ALLOW_BY_DASH = next.perDash; ALLOW_VERSION++; REG_RESPONSE_CACHE.clear();
@@ -1532,6 +1538,7 @@ function startController() {
 
       const onGone = (e) => {
         if (gone) return; gone = true;
+        if (CONTROL_RPC === rpc) CONTROL_RPC = null;
         // `recomputeTimer` outlives this socket (it is shared across reconnects), so a rebuild
         // debounced just before the drop would fire against the dead socket and log "recompute
         // failed". Nothing is lost by cancelling it: the reconnect rebuilds from scratch, and that
@@ -4661,6 +4668,41 @@ function effectiveFallback() {
   };
 }
 
+// Whether a Home Assistant user is an administrator. Ingress says WHO is asking (the
+// X-Remote-User-* headers) but not their role, and `panel_admin: false` lets every user open this
+// console, so a request that acts on more than its own caller has to ask. Admin is the
+// `system-admin` group (or the owner), which is Home Assistant's own definition and the one
+// behind `is_admin` in auth/current_user. Cached briefly: one console click should not cost a
+// websocket round trip per request, and a demotion still reaches here within a minute.
+// Fails CLOSED: no control connection, or a failed lookup, is "not shown to be an admin".
+const ADMIN_LOOKUP_TTL_MS = 60 * 1000;
+let ADMIN_LOOKUP = { at: 0, admins: null };
+async function userIsAdmin(userId) {
+  const id = String(userId || '').trim().toLowerCase();
+  if (!id) return false;
+  if (!ADMIN_LOOKUP.admins || Date.now() - ADMIN_LOOKUP.at > ADMIN_LOOKUP_TTL_MS) {
+    if (!CONTROL_RPC) return false;
+    try {
+      const users = await CONTROL_RPC({ type: 'config/auth/list' });
+      const admins = new Set();
+      for (const u of Array.isArray(users) ? users : []) {
+        const groups = Array.isArray(u?.group_ids) ? u.group_ids : [];
+        if (u?.id && (u.is_owner === true || groups.includes('system-admin'))) admins.add(String(u.id).toLowerCase());
+      }
+      ADMIN_LOOKUP = { at: Date.now(), admins };
+    } catch (e) {
+      logThrottled('admin-lookup', `could not check who is an administrator (${e.message}) — refusing requests that need it`);
+      return false;
+    }
+  }
+  return ADMIN_LOOKUP.admins.has(id);
+}
+
+const refuseNotAdmin = (res, what) => {
+  res.writeHead(403, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ error: `only a Home Assistant administrator can ${what}` }));
+};
+
 function requireIngress(req, res, what) {
   if (viaIngress(req)) return false;
   // Once per caller and endpoint, then debug. The console polls these every 60 seconds, and the
@@ -4918,7 +4960,7 @@ const statsServer = http.createServer((req, res) => {
     }
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 2048) req.destroy(); });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const id = String(req.headers['x-remote-user-id'] || '').trim();
         const name = String(req.headers['x-remote-user-display-name'] || req.headers['x-remote-user-name'] || '').trim() || null;
@@ -4931,9 +4973,12 @@ const statsServer = http.createServer((req, res) => {
         const { preset, tzOffset, scope } = JSON.parse(body || '{}');
         const ms = preset === 'day' ? msUntilEndOfDay(tzOffset) : 3600000;
         // `scope: 'admins'` pauses the role instead of the person — the same thing the Home
-        // Assistant switch does, offered here so the two paths cannot drift apart. It is not a
-        // privilege check: what it grants is what Home Assistant would already hand those tokens,
-        // minus this app's filtering, for an hour.
+        // Assistant switch does, offered here so the two paths cannot drift apart. What it grants
+        // is what Home Assistant would already hand those tokens, minus this app's filtering, so
+        // it exposes no data. But it acts on every administrator's session, and this console is
+        // open to every user (panel_admin: false), so only an administrator may ask for it.
+        // Anyone may pause their own. (Codex review, 2026-10-10.)
+        if (scope === 'admins' && !(await userIsAdmin(id))) return refuseNotAdmin(res, 'pause trimming for every administrator');
         const target = scope === 'admins' ? ADMINS : id;
         PAUSES = pauseUser(PAUSES, target, ms, {
           name: scope === 'admins' ? 'administrators' : name,
@@ -4968,13 +5013,19 @@ const statsServer = http.createServer((req, res) => {
     }
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 2048) req.destroy(); });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const asked = JSON.parse(body || '{}');
-        const id = String(asked.user || req.headers['x-remote-user-id'] || '').trim();
-        if (!id) {
+        const caller = String(req.headers['x-remote-user-id'] || '').trim();
+        if (!caller) {
           res.writeHead(400, { 'content-type': 'application/json' });
-          return res.end(JSON.stringify({ error: 'no user to resume' }));
+          return res.end(JSON.stringify({ error: 'Home Assistant did not say who you are — open the panel from the sidebar' }));
+        }
+        const id = String(asked.user || caller).trim();
+        // Ending your own pause is yours to do. Ending anyone else's, the administrators' pause
+        // included, is the mirror image of pausing them, and is held to the same rule.
+        if (id.toLowerCase() !== caller.toLowerCase() && !(await userIsAdmin(caller))) {
+          return refuseNotAdmin(res, "end someone else's pause");
         }
         const had = pausedUntil(PAUSES, id);
         PAUSES = resumeUser(PAUSES, id);

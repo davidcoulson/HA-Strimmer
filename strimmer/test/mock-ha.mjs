@@ -244,6 +244,19 @@ export async function startMockHa({ users = DEFAULT_USERS, configs = DEFAULT_CON
       if (m.type) state.rpcCounts.set(m.type, (state.rpcCounts.get(m.type) || 0) + 1);
       if (state.hangTypes.has(m.type)) return;          // counted, then never answered
       const ok = (result) => ws.send(JSON.stringify({ id: m.id, type: 'result', success: true, result }));
+      // config/auth/list answers in Home Assistant's real shape: no is_admin field, the role is
+      // the `system-admin` group. Built from the same table auth/current_user reads, so a test
+      // user's role cannot differ between the two.
+      if (m.type === 'config/auth/list') {
+        const seen = new Map();
+        for (const u of Object.values(users)) {
+          if (u?.id && !seen.has(u.id)) {
+            seen.set(u.id, { id: u.id, name: u.name, is_owner: false, is_active: true,
+              group_ids: [u.is_admin ? 'system-admin' : 'system-users'], credentials: u.credentials ?? [] });
+          }
+        }
+        return ok([...seen.values()]);
+      }
       if (m.type === 'auth/current_user') {
         // This socket is an identity probe, not a browser connection — the proxy opens it purely
         // to ask who a token belongs to and closes it again. Take it out of the push list so a

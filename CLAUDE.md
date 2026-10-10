@@ -94,6 +94,12 @@ what your panel never shows*.
 Renamed with it: the add-on `slug` (`websocket_stripper` -> `strimmer`, so Supervisor treats it as
 a new install with an empty `/data`), the folder, the MQTT node id and every sensor's unique_id
 (long-term statistics start over — an accepted cost), the image name, and the panel.
+The standalone Compose file renamed its volume (`stripper-data` -> `strimmer-data`), image and
+service too, and Compose carries none of them over: the new volume starts empty and the old
+container is left running as an orphan holding the ports. It is NOT being reverted, because by the
+time that was noticed (2026-10-10, Codex review) installs had run three weeks on the new volume, and
+reverting would strand them instead. `docs/MIGRATING.md` has the copy procedure, rehearsed on a
+throwaway Compose project.
 
 Deliberately NOT renamed, and each for a reason a rename would have cost something real:
 - `/stripper/client.json` still answers beside `/strimmer/client.json`, and the status reply
@@ -255,6 +261,11 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   at and slow as well. Pauses expire (1h / rest of day, 24h ceiling) because one left on is
   invisible: panels just load slowly. WHO is paused is redacted off-Ingress like every other
   identity; THAT something is paused is not, because a health check should see it.
+  **Acting on anyone but yourself needs an admin** (`userIsAdmin`): `panel_admin: false` opens this
+  console to every user, and Ingress names the caller but not their role, so `scope: 'admins'` and
+  resuming someone else's pause look the role up with `config/auth/list` over the control ws
+  (`CONTROL_RPC`; `system-admin` group or owner, cached 60s) and fail CLOSED when it cannot.
+  Codex review 2026-10-10: before this, any household user could pause every administrator.
   **The reserved key `role:admin`** (`ADMINS`) pauses every administrator at once, which is what
   the switch `switch.strimmer_trimming_admins` does — the transport carries a command and not an
   identity, so an anonymous control can only scope to a role. `is_admin` comes from
