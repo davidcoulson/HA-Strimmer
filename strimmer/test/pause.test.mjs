@@ -396,6 +396,14 @@ describe('a paused user is served untrimmed', () => {
     assert.equal(JSON.parse((await get('/config.json', michelle)).body).editableHere, false,
       'and the page is told, so it does not offer controls that will refuse');
 
+    // The clients list names everyone else; through Ingress it is an administrator's to read.
+    const theirs = JSON.parse((await get('/stats.json', michelle)).body);
+    assert.equal(theirs.redacted, true, 'a non-admin on Ingress gets the redacted snapshot');
+    assert.deepEqual(theirs.viewer, { ingress: true, admin: false });
+    const mine = JSON.parse((await get('/stats.json', david)).body);
+    assert.notEqual(mine.redacted, true);
+    assert.deepEqual(mine.viewer, { ingress: true, admin: true });
+
     assert.equal((await get('/access.json', david)).status, 200);
     assert.equal(JSON.parse((await get('/config.json', david)).body).editableHere, true);
     const typo = await post('/config', { key: 'trim_services', value: 'false' }, david);

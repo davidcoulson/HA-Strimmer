@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.10.2';
+const VERSION = '2026.10.10.3';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -188,7 +188,7 @@ const STATS_PORT = parseInt(process.env.MGMT_PORT || process.env.STATS_PORT
 // served "The app is starting" indefinitely. Writing the bound port removes the duplicate rather
 // than correcting it. Absent file means the stats server never bound, which is genuinely
 // unhealthy, so the probe is right to fail on it.
-const STATS_PORT_FILE = '/tmp/stats-port';
+const STATS_PORT_FILE = process.env.STATS_PORT_FILE || '/tmp/stats-port';
 // Deliberately env-only, not a config.yaml option: adding to the schema forces users through
 // a Supervisor store refresh before the new key is even accepted, which is a lot of friction for
 // a value almost nobody should change. The default suits every normal setup; this exists so the
@@ -4683,25 +4683,33 @@ function effectiveFallback() {
 // Fails CLOSED: no control connection, or a failed lookup, is "not shown to be an admin".
 const ADMIN_LOOKUP_TTL_MS = 60 * 1000;
 let ADMIN_LOOKUP = { at: 0, admins: null };
-async function userIsAdmin(userId) {
-  const id = String(userId || '').trim().toLowerCase();
-  if (!id) return false;
-  if (!ADMIN_LOOKUP.admins || Date.now() - ADMIN_LOOKUP.at > ADMIN_LOOKUP_TTL_MS) {
-    if (!CONTROL_RPC) return false;
-    try {
-      const users = await CONTROL_RPC({ type: 'config/auth/list' });
+// One lookup at a time, shared, as resolveUser does with USER_INFLIGHT: the console fires several
+// requests at once when it loads, and each one asked Home Assistant separately.
+let ADMIN_INFLIGHT = null;
+function adminIds() {
+  if (ADMIN_LOOKUP.admins && Date.now() - ADMIN_LOOKUP.at <= ADMIN_LOOKUP_TTL_MS) return Promise.resolve(ADMIN_LOOKUP.admins);
+  if (!CONTROL_RPC) return Promise.resolve(null);
+  ADMIN_INFLIGHT ??= CONTROL_RPC({ type: 'config/auth/list' })
+    .then((users) => {
       const admins = new Set();
       for (const u of Array.isArray(users) ? users : []) {
         const groups = Array.isArray(u?.group_ids) ? u.group_ids : [];
         if (u?.id && (u.is_owner === true || groups.includes('system-admin'))) admins.add(String(u.id).toLowerCase());
       }
       ADMIN_LOOKUP = { at: Date.now(), admins };
-    } catch (e) {
+      return admins;
+    })
+    .catch((e) => {
       logThrottled('admin-lookup', `could not check who is an administrator (${e.message}) — refusing requests that need it`);
-      return false;
-    }
-  }
-  return ADMIN_LOOKUP.admins.has(id);
+      return null;
+    })
+    .finally(() => { ADMIN_INFLIGHT = null; });
+  return ADMIN_INFLIGHT;
+}
+async function userIsAdmin(userId) {
+  const id = String(userId || '').trim().toLowerCase();
+  if (!id) return false;
+  return Boolean((await adminIds())?.has(id));
 }
 
 // For console requests that act on everyone or read what only an administrator should see: the
@@ -4926,6 +4934,9 @@ const statsServer = http.createServer(async (req, res) => {
       // control would otherwise render as editable and then fail with a 403 on click. The page
       // is told, so it can say "open this through Home Assistant" instead of setting a trap.
       editableHere: viaIngress(req) && await callerMayAdminister(req),
+      // Why not, when it is not: through Ingress but not an administrator is a different message
+      // from "you are on the app's own port".
+      ingress: viaIngress(req),
       storePath: CONFIG_DIR ? `${CONFIG_DIR}/config.json` : null,
       // Named, though not listed as rows, so the console can explain where they DO live if
       // someone comes looking for one.
@@ -4997,7 +5008,7 @@ const statsServer = http.createServer(async (req, res) => {
         // it exposes no data. But it acts on every administrator's session, and this console is
         // open to every user (panel_admin: false), so only an administrator may ask for it.
         // Anyone may pause their own. (Codex review, 2026-10-10.)
-        if (scope === 'admins' && !(await userIsAdmin(id))) return refuseNotAdmin(res, 'pause trimming for every administrator');
+        if (scope === 'admins' && !(await callerMayAdminister(req))) return refuseNotAdmin(res, 'pause trimming for every administrator');
         const target = scope === 'admins' ? ADMINS : id;
         PAUSES = pauseUser(PAUSES, target, ms, {
           name: scope === 'admins' ? 'administrators' : name,
@@ -5039,14 +5050,15 @@ const statsServer = http.createServer(async (req, res) => {
       try {
         const asked = JSON.parse(body || '{}');
         const caller = String(req.headers['x-remote-user-id'] || '').trim();
-        if (!caller) {
+        const id = String(asked.user || caller).trim();
+        if (!id) {
           res.writeHead(400, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ error: 'Home Assistant did not say who you are — open the panel from the sidebar' }));
         }
-        const id = String(asked.user || caller).trim();
         // Ending your own pause is yours to do. Ending anyone else's, the administrators' pause
-        // included, is the mirror image of pausing them, and is held to the same rule.
-        if (id.toLowerCase() !== caller.toLowerCase() && !(await userIsAdmin(caller))) {
+        // included, is the mirror image of pausing them, and is held to the same rule (the same
+        // gate as configuration, so the two cannot disagree about who passes).
+        if (id.toLowerCase() !== caller.toLowerCase() && !(await callerMayAdminister(req))) {
           return refuseNotAdmin(res, "end someone else's pause");
         }
         const had = pausedUntil(PAUSES, id);
@@ -5200,9 +5212,18 @@ const statsServer = http.createServer(async (req, res) => {
     // So the aggregates stay public and the IDENTITIES do not. What a health check needs is
     // "is it up and is the allowlist built"; what it does not need is every client's address,
     // Home Assistant user, User-Agent, internal hostname and device name.
+    // Identities need an ADMINISTRATOR on Ingress, not just Ingress: panel_admin is false, so every
+    // household user reaches this console, and the clients list names everyone else, their
+    // phones' addresses and User-Agents.
     const snap = stats.snapshot(statsExtras());
+    const ingress = viaIngress(req);
+    const admin = ingress && await callerMayAdminister(req);
+    const out = admin ? snap : redactForNetwork(snap);
+    // So the page can stop offering what this viewer would be refused (the admin pause, someone
+    // else's resume, pins).
+    out.viewer = { ingress, admin };
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(JSON.stringify(viaIngress(req) ? snap : redactForNetwork(snap), null, 2));
+    return res.end(JSON.stringify(out, null, 2));
   }
   if (path === '/' || path.endsWith('/index.html')) {
     if (!PANEL_HTML) { res.writeHead(500, { 'content-type': 'text/plain' }); return res.end('panel.html missing'); }
@@ -5221,13 +5242,17 @@ statsServer.on('error', (e) => {
   // container unhealthy, and the Supervisor watchdog restarts it in a loop — taking the proxy
   // down after all. "unbound" tells the probe there is nothing to probe and the process chose to
   // keep proxying; a dead process exits the container, which the watchdog sees on its own.
-  if (e.code === 'EADDRINUSE' || e.code === 'EACCES') {
+  if (!statsServer.listening) {
     try { fs.writeFileSync(STATS_PORT_FILE, 'unbound'); } catch {}
   }
   warn(`stats server could not start on :${STATS_PORT} (${e.message})`
   + ' — the panel and JSON API are unavailable, including over Ingress. Proxying is unaffected;'
   + ' set STATS_PORT (and ingress_port) to move it.');
 });
+// /tmp survives `docker restart`, so a port written by an earlier run would otherwise still be
+// there for the healthcheck to probe if this run's server never starts. Cleared first; the
+// listen callback writes the real port, and the error handler writes "unbound".
+try { fs.rmSync(STATS_PORT_FILE, { force: true }); } catch {}
 statsServer.listen(STATS_PORT, () => {
   // Publish the port the healthcheck should probe. Best-effort: a container whose /tmp is not
   // writable still proxies and still serves the panel, and failing the probe over that would be

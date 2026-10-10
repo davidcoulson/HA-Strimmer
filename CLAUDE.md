@@ -270,6 +270,10 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   ids are bearer secrets). A NAMED caller is always checked; with no identity it passes only in a
   standalone run, where loopback is the operator's machine. `/config` also type-checks each value
   (`valueError`): stored unchecked, `"false"` read as true at the next boot.
+  Identities follow the same rule: `/stats.json` is unredacted only for an ADMINISTRATOR on Ingress,
+  not for Ingress alone, and it carries `viewer: { ingress, admin }` so the console hides what that
+  viewer would be refused (the admin pause, other people's resumes, pins). Pause and resume use the
+  same gate as configuration, so the two cannot disagree about who passes.
   **The reserved key `role:admin`** (`ADMINS`) pauses every administrator at once, which is what
   the switch `switch.strimmer_trimming_admins` does — the transport carries a command and not an
   identity, so an anonymous control can only scope to a role. `is_admin` comes from

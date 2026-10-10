@@ -143,7 +143,9 @@ test('the Dockerfile healthcheck reads the bound port instead of hardcoding one'
   const dockerfile = fs.readFileSync(path.join(dir, '..', 'Dockerfile'), 'utf8');
   const src = fs.readFileSync(path.join(dir, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
 
-  const portFile = (src.match(/^const STATS_PORT_FILE = '([^']+)';/m) || [])[1];
+  // The env override exists for tests, which must not all fight over one file in /tmp; the
+  // default is what the image runs with, and what the probe has to read.
+  const portFile = (src.match(/^const STATS_PORT_FILE = (?:process\.env\.STATS_PORT_FILE \|\| )?'([^']+)';/m) || [])[1];
   assert.ok(portFile, 'the proxy must define STATS_PORT_FILE');
   // ...and must actually write it, or the probe has nothing to read.
   assert.match(src, new RegExp(`writeFileSync\\(STATS_PORT_FILE`),
@@ -441,5 +443,89 @@ test('boots with a retired option still in the options file, and says it does no
   } finally {
     proxy.kill(); await mock.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// Boot a proxy for the two tests below and wait until it is serving.
+async function bootProxy(env) {
+  const { startMockHa } = await import('./mock-ha.mjs');
+  const { spawn } = await import('node:child_process');
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const mock = await startMockHa();
+  const proxy = spawn(process.execPath, [path.join(dir, '..', 'ha_ws_trim_proxy.mjs')], {
+    cwd: path.join(dir, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, HA_BASE: mock.base, ...env(mock) },
+  });
+  let out = '';
+  proxy.stdout.on('data', (b) => { out += b; });
+  proxy.stderr.on('data', (b) => { out += b; });
+  const deadline = Date.now() + 25000;
+  while (!/for live allowlist updates/.test(out) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  assert.match(out, /for live allowlist updates/, `never finished booting:\n${out}`);
+  return { mock, proxy, out: () => out, stop: async () => { proxy.kill(); await mock.close(); } };
+}
+
+// As an add-on, only Supervisor's address speaks for Ingress. Every other Ingress test sets
+// INGRESS_PEERS or runs standalone, so without this one a default that let loopback back in (the
+// host-network forgery fixed in 2026.10.02.3) would pass the whole suite.
+test('as an add-on, a request from loopback is not Ingress, whatever its headers say', async () => {
+  const { getFreePort } = await import('./mock-ha.mjs');
+  const os = await import('node:os');
+  const http = await import('node:http');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strimmer-addon-'));
+  fs.writeFileSync(path.join(dataDir, 'options.json'), JSON.stringify({ dashboards: ['test-dash'] }));
+  const sp = await getFreePort();
+  const port = await getFreePort();
+  const p = await bootProxy((mock) => ({
+    PORT: String(port), STATS_PORT: String(sp),
+    SUPERVISOR_TOKEN: 'supervisor-token', ALLOW_WS_URL: mock.base.replace(/^http/, 'ws') + '/api/websocket',
+    CONFIG_DIR: dataDir, STATS_PORT_FILE: path.join(dataDir, 'stats-port'), INGRESS_PEERS: '',
+  }));
+  const forged = { 'x-ingress-path': '/api/hassio_ingress/forged', 'x-remote-user-id': 'u-david', 'content-type': 'application/json' };
+  const call = (method, p2, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: sp, path: p2, method, headers: forged }, (r) => {
+      let b = ''; r.on('data', (c) => b += c); r.on('end', () => resolve({ status: r.statusCode, body: b }));
+    });
+    req.on('error', reject); req.end(body ? JSON.stringify(body) : undefined);
+  });
+  try {
+    const write = await call('POST', '/config', { key: 'trim_services', value: true });
+    assert.equal(write.status, 403, 'loopback is every host-network process, not Supervisor');
+    const snap = JSON.parse((await call('GET', '/stats.json')).body);
+    assert.equal(snap.redacted, true);
+    assert.deepEqual(snap.viewer, { ingress: false, admin: false });
+  } finally {
+    await p.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// The proxy deliberately keeps running when its console port is taken. The healthcheck probes that
+// port, so without "unbound" it failed, and the Supervisor watchdog restarted a working proxy in a
+// loop. The file is seeded with a stale port first: it must not survive into this run.
+test('a console port that cannot bind tells the healthcheck "unbound", and the proxy keeps serving', async () => {
+  const { getFreePort } = await import('./mock-ha.mjs');
+  const os = await import('node:os');
+  const net = await import('node:net');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'strimmer-unbound-'));
+  const portFile = path.join(dir, 'stats-port');
+  fs.writeFileSync(portFile, '12345');
+  const taken = await getFreePort();
+  const holder = net.createServer();
+  await new Promise((r) => holder.listen(taken, r));
+  const port = await getFreePort();
+  let p;
+  try {
+    p = await bootProxy(() => ({
+      HA_TOKEN: 't', DASH_PATHS: 'test-dash', PORT: String(port), STATS_PORT: String(taken),
+      STATS_PORT_FILE: portFile, SUPERVISOR_TOKEN: '',
+    }));
+    assert.match(p.out(), /stats server could not start/);
+    assert.equal(fs.readFileSync(portFile, 'utf8'), 'unbound',
+      'the probe must be told there is nothing to probe, not left with an old port');
+  } finally {
+    await p?.stop();
+    holder.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

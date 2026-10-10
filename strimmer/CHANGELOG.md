@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026.10.10.3 — 2026-10-10
+
+**Other people's details are for administrators too.** The console's Clients list names every
+connection: who it belongs to, the phone's address and browser, and which dashboard it's on.
+Through Home Assistant that was shown to any user who opened the console. Now only an administrator
+sees it. Everyone else gets the same anonymised view the console's own port has always shown.
+
+**The console stops offering what it would refuse.** 2026.10.10.2 said it did, but only the Config
+tab did. For someone who isn't an administrator, it now:
+- leaves "All admins, 1 hour" out of the pause menu,
+- shows a single "End your own pause" instead of a resume for each person,
+- shows pin buttons disabled, with a tooltip that says why.
+
+The Config tab also now says "Only a Home Assistant administrator can change these settings". It
+used to tell them they were on the app's own port and should open it from the sidebar, which is
+where they already were.
+
+**A port file from an earlier run can't mislead the healthcheck.** `/tmp` survives a container
+restart, so a run whose console never started could leave the probe checking the previous run's
+port, and the watchdog restarting a working proxy. The file is now cleared at boot, and any failure
+to bind writes "unbound".
+
+All found in a code review.
+
 ## 2026.10.10.2 — 2026-10-10
 
 **The console's settings, pins and request log are for administrators.** Every Home Assistant user

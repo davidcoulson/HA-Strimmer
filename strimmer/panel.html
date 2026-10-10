@@ -1522,7 +1522,10 @@ async function searchEntities(q) {
       td.appendChild(done);
       continue;
     }
-    const btn = iconBtn('pin-outline', `Always send ${m.entity_id}`, null, 'sm');
+    // Pinning changes what every dashboard is sent, so it is an administrator's to do.
+    const btn = iconBtn('pin-outline',
+      VIEWER.admin ? `Always send ${m.entity_id}` : 'Only a Home Assistant administrator can pin', null, 'sm');
+    btn.disabled = !VIEWER.admin;
     btn.onclick = () => pinEntity(m.entity_id, btn);
     td.appendChild(btn);
   }
@@ -1640,8 +1643,15 @@ function renderPause(s) {
     d.textContent = text;
     return d;
   };
-  for (const p of live) {
-    menu.append(item('play-circle-outline', `Resume ${p.name || p.user || 'now'}`, (b) => postResume(p.user, b)));
+  // Someone else's pause, the administrators' included, is an administrator's to end. Anyone else
+  // sees the list without names, so they get one row that ends their OWN pause: the server reads
+  // who that is from Ingress, as it does for pausing.
+  if (VIEWER.admin) {
+    for (const p of live) {
+      menu.append(item('play-circle-outline', `Resume ${p.name || p.user || 'now'}`, (b) => postResume(p.user, b)));
+    }
+  } else if (live.length) {
+    menu.append(item('play-circle-outline', 'End your own pause', (b) => postResume(null, b)));
   }
   // Pausing for YOU is per Home Assistant user, not this browser: a phone on cellular behind
   // Cloudflare has no stable address, and the person is the thing that stays constant. The
@@ -1650,10 +1660,15 @@ function renderPause(s) {
     label('Pause for you, on every device'),
     item('timer-outline', '1 hour', (b) => postPause('hour', b)),
     item('calendar-today', 'Rest of the day', (b) => postPause('day', b)),
-    // What the Home Assistant switch does, here too, so the two stay one feature.
-    label('Pause for every administrator'),
-    item('account-group', 'All admins, 1 hour', (b) => postPause('hour', b, 'admins')),
   );
+  // What the Home Assistant switch does, here too, so the two stay one feature. An
+  // administrator's to ask for, since it acts on every administrator's session.
+  if (VIEWER.admin) {
+    menu.append(
+      label('Pause for every administrator'),
+      item('account-group', 'All admins, 1 hour', (b) => postPause('hour', b, 'admins')),
+    );
+  }
 }
 
 async function pinEntity(id, btn) {
@@ -1745,9 +1760,11 @@ function renderTuning(s) {
       '',
     ]);
     const btn = iconBtn(isPinned ? 'pin' : 'pin-outline',
-      isPinned ? 'Already pinned — always sent' : `Always send "${frag}" (adds it to resources_always_forward)`,
+      isPinned ? 'Already pinned — always sent'
+        : !VIEWER.admin ? 'Only a Home Assistant administrator can pin'
+        : `Always send "${frag}" (adds it to resources_always_forward)`,
       null, 'sm');
-    btn.disabled = isPinned;
+    btn.disabled = isPinned || !VIEWER.admin;
     btn.onclick = () => pinResource(frag, btn);
     tr.lastElementChild.appendChild(btn);
     tb.appendChild(tr);
@@ -1813,6 +1830,11 @@ async function renderHttp() {
   }
 }
 
+// Who is looking, as the server judged it: through Ingress, and an administrator. Every Home
+// Assistant user can open this console, and some actions are refused to anyone but an
+// administrator, so the page stops offering those rather than letting each click end in a 403.
+let VIEWER = { ingress: false, admin: false };
+
 async function tick() {
   let s;
   try {
@@ -1823,6 +1845,7 @@ async function tick() {
     setErr($('sub'), 'Cannot reach the app: ' + e.message);
     return;
   }
+  VIEWER = s.viewer || VIEWER;
 
   renderTuning(s);
   renderHttp();
@@ -2825,8 +2848,11 @@ async function renderConfig() {
   msg.style.display = 'none';
   if (d.writable && !d.editableHere) {
     msg.style.display = '';
-    msg.textContent = 'Viewing on the app\'s own port. Changes are only accepted through Home Assistant — '
-      + 'open the panel from the Home Assistant sidebar to edit.';
+    // Two different reasons, and only one of them is fixed by opening the sidebar.
+    msg.textContent = d.ingress
+      ? 'Only a Home Assistant administrator can change these settings.'
+      : 'Viewing on the app\'s own port. Changes are only accepted through Home Assistant — '
+        + 'open the panel from the Home Assistant sidebar to edit.';
   }
 
   // One source for the option wording — see `short()`, which the status pills use.
