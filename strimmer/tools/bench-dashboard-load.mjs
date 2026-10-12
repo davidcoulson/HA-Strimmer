@@ -11,7 +11,7 @@
 // browser, same throttle, same machine — only the path differs.
 import puppeteer from 'puppeteer-core';
 
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const HOST = process.env.HA_HOST || '127.0.0.1';
 const TOKEN = process.env.HA_TOKEN;
 const DASH = process.env.DASH || 'dashboard-test';
