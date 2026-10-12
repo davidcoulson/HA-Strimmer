@@ -251,6 +251,7 @@ Create the token under **Profile → Security → Long-lived access tokens**.
 | `DASH` | `dashboard-test` | Dashboard `url_path` to load |
 | `RUNS` | `3` | Runs per profile per side; the median is reported |
 | `PROFILES` | `4G,weak cell,no limit` | Which throttle profiles to run |
+| `CHROME` | macOS Chrome path | Chrome or Chromium binary to drive (set it on Linux) |
 
 Ports are the two constants in the script's run loop: `9123` (app) and `8123` (Home Assistant).
 
