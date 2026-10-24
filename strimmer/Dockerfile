@@ -32,7 +32,7 @@
 # the longer support window a few weeks early, and the cost is those few weeks on Current.
 # The test suite runs on 22, 24 and 26, so a regression specific to the new line is caught in
 # CI rather than on a wall panel; 24 stays in that matrix as the fallback if this bites.
-FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80
+FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797
 
 # Points the GHCR package at this repo and its README.
 LABEL org.opencontainers.image.source="https://github.com/davidcoulson/HA-Strimmer" \

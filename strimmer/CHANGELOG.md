@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.10.24.1 — 2026-10-24
+
+**Node 26.12.1 base image,** the fix for Node2Shell (CVE-2026-111497), an out-of-bounds write in Node's
+bundled Brotli decoder. Strimmer was not exposed: it never decompresses Brotli (HTTP is proxied as raw
+bytes, upstream fetches ask Home Assistant for plain text, and the websockets use deflate only), so this
+just keeps the image on a patched runtime.
+
+Rebuild the app to pick it up. Nothing else to do on upgrade.
+
 ## 2026.10.10.4 — 2026-10-10
 
 **`esphome-device` 0.3.1,** which includes the unpublished 0.3.0. For Strimmer that means:
