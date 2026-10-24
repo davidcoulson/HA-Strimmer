@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.10.24.2 — 2026-10-24
+
+Three fixes from a whole-codebase review:
+- **A cached registry is no longer served before the socket has authenticated.** Cache hits never
+  reach Home Assistant, so a socket that skipped `auth` could read another client's cached rows.
+  Until HA says `auth_ok`, a registry request now goes on to HA, which refuses it.
+- **Client overrides that swap one entity for another now apply.** A rule that added one entity and
+  removed another left the set the same size, and the original set was returned unchanged.
+- **Certificate-expiry monitoring works again.** `metrics.mjs` lost its `tls` import when MQTT was
+  removed, so every check quietly returned nothing.
+
+Nothing to do on upgrade.
+
 ## 2026.10.24.1 — 2026-10-24
 
 **Node 26.12.1 base image,** the fix for Node2Shell (CVE-2026-111497), an out-of-bounds write in Node's

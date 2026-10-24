@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.24.1';
+const VERSION = '2026.10.24.2';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2891,7 +2891,7 @@ function applyClientRules(set, extra) {
   });
   // never wins last here too, matching every other override block.
   [...out].forEach((eid) => { if (matchesAny(extra.never, eid)) out.delete(eid); });
-  return out.size === set.size ? set : out;
+  return out.size === set.size && [...out].every((eid) => set.has(eid)) ? set : out;
 }
 
 // Could ANY per-user rule apply to this connection at all?
@@ -3685,6 +3685,9 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // Bounded: a client that never gets answers must not grow this without limit.
   const pendingTypes = new Map();
   const queue = []; let haOpen = false;
+  // Set when HA says auth_ok. A cache hit never reaches HA, so without this an unauthenticated
+  // socket could read another client's cached registry rows by simply skipping `auth`.
+  let haAuthed = false;
   // Binary frames go out uncompressed, in both directions. The HA-side socket negotiates
   // permessage-deflate for the JSON traffic, but a binary frame here is a voice satellite's PCM
   // audio chunk on the way up or a camera/media frame on the way down — already-compressed or
@@ -3974,6 +3977,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // the entities the rule adds. The gate never saw it: a hit returned before reaching the
     // queue. Reproduced with a slow auth/current_user in test/proxy.perdash.test.mjs.
     const cachedOrForward = (kind) => () => {
+      if (!haAuthed) return s;   // HA will refuse it; never answer from cache before auth_ok
       const hit = REG_RESPONSE_CACHE.get(regCacheKey(kind, dash, cacheSig()));
       if (hit !== undefined) {
         logThrottled(`regcache:${kind}`, `${kind === 'services' ? 'get_services' : `${kind} registry`} served from cache${dash ? ` (${dash})` : ''}`, LEVELS.debug);
@@ -4165,6 +4169,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       logThrottled('unparsed-frame', `frame that is neither binary nor JSON (${raw?.length ?? '?'} bytes): ${e.message}`);
       return done();
     }
+    if (m && m.type === 'auth_ok') haAuthed = true;
 
     // Apply the trims to ONE message.
     //

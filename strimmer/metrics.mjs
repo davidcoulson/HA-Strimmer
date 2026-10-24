@@ -11,6 +11,8 @@
 // answer "what has been happening since June", which is a different question — a slowly climbing
 // entity count means a dashboard picked up a broad filter, and a rebuild counter that never stops
 // rising is a fault invisible in any single snapshot.
+import tls from 'node:tls';
+
 
 // `dp` is how many decimals a reader should see. MQTT does not need it — a JSON number carries its
 // own precision — but the ESPHome native API sends float32, so 74.3 arrives as 74.30000305175781
