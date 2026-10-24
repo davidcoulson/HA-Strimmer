@@ -11,6 +11,7 @@
 // answer "what has been happening since June", which is a different question — a slowly climbing
 // entity count means a dashboard picked up a broad filter, and a rebuild counter that never stops
 // rising is a fault invisible in any single snapshot.
+import net from 'node:net';
 import tls from 'node:tls';
 
 
@@ -139,7 +140,7 @@ export function certDaysLeft(host, { port = 443, timeoutMs = 8000 } = {}) {
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     try {
       const sock = tls.connect({
-        host, port, servername: host,
+        host, port, servername: net.isIP(host) ? undefined : host,   // Node 26 rejects an IP as SNI
         // Expiry is readable from a cert we do not trust, and refusing to report on a
         // self-signed or misissued cert would silence exactly the case worth alerting on.
         rejectUnauthorized: false,

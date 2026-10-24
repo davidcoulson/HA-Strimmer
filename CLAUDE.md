@@ -380,6 +380,11 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   ignorable ONLY while auto-entities' `device_manufacturer`/`device_model` stay unsupported — take
   them out of the set if those filters are added. `allowlist.rebuilds` in stats.json (and the
   `rebuilds_total` sensor) is the storm detector; it was never incremented before 2026.09.19.1.
+- **Every rebuild retires the cached registry answers** (`ALLOW_VERSION++; REG_RESPONSE_CACHE.clear()`),
+  including a `+0 -0` one. It used to clear only when membership moved, so a device rename or area move
+  (which rebuilds but changes no entity ids) kept being served from the old rows with no TTL to rescue it.
+  Found in the 2026-10-24 Codex review. Cached answers are also withheld until HA's `auth_ok`: a hit never
+  reaches HA, so serving one earlier let a socket that skipped `auth` read another client's rows.
 - **Registry-triggered rebuilds also have a time floor** (`REGISTRY_REBUILD_MIN_MS`, 30s,
   env-only). Tests that fire registry events seconds apart and COUNT rebuilds must set it to `0`.
   `scheduleRecompute(why, floorMs)` takes the LOWEST floor among debounced requests, so an edit is
