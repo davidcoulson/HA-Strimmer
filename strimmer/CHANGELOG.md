@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026.10.24.3 — 2026-10-24
+
+More fixes from the same review:
+- **Nested regex groups are now guarded.** `/^((a)+)+$/` slipped past the catastrophic-backtracking
+  check, so a filter like it could stall every panel instead of being cut off at 50ms.
+- **A resource that answers with an error is no longer cached as scanned.** A bundle that returned 503
+  once had its cards dropped until its URL changed; failed reads are now retried after five minutes.
+- **The resource cache forgets resources that are no longer configured.**
+- **A pause that lands while a connection is waiting on its user lookup now applies** to the
+  subscribe and registry requests already held, instead of only to later ones.
+- **Two pins at once no longer lose one** when the options live in Supervisor.
+
+Nothing to do on upgrade.
+
 ## 2026.10.24.2 — 2026-10-24
 
 Three fixes from a whole-codebase review:

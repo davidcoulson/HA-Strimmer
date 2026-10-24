@@ -10,6 +10,7 @@ import tls from 'node:tls';
 import { WebSocket as WS } from 'ws';
 import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
 import { certDaysLeft } from '../metrics.mjs';
+import { looksCatastrophic } from '../lovelace_extract.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
@@ -91,5 +92,16 @@ describe('registry cache and authentication', () => {
       raw.close(); warm.close();
       assert.equal(mock.rpcCount('get_services') - before, 1, 'must go to HA to be refused, not be answered from cache');
     });
+  });
+});
+
+describe('looksCatastrophic', () => {
+  const bad = ['^(a+)+$', '^(a|a)+$', '^((a)+)+$', '^(?:(a)+)+$', '^((a|b))+$', '^(x(a+))*$', '^(\\w+\\s?)*$'];
+  const fine = ['^abc$', '^(abc)$', '^(ab)+$', '^\\(a+\\)+$', '^(a)(b)$', '^[a-z]+(x)$'];
+  it('flags nested quantifiers and alternations at any depth', () => {
+    for (const r of bad) assert.equal(looksCatastrophic(r), true, r);
+  });
+  it('leaves ordinary patterns alone', () => {
+    for (const r of fine) assert.equal(looksCatastrophic(r), false, r);
   });
 });

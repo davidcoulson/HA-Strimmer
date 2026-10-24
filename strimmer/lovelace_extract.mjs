@@ -134,15 +134,27 @@ let guardCtx = null, guardScript = null;
 // against 12.3s for the `(a+)+` case the guard was originally written for. The detector flagged
 // the second and not the first.
 //
-// Innermost groups only, escapes skipped. Deliberately loose: it flags `(ab|cd)+`, which cannot
+// Groups are collapsed innermost-first so nesting at any depth counts (2026.10.24.3: ((a)+)+ was missed). Deliberately loose: it flags `(ab|cd)+`, which cannot
 // backtrack badly at all, because a false positive costs only the guarded path (measured: 424ms
 // across 10,000 first-pass calls, ~0 once memoised) while a false negative costs the event loop.
 // Flagging is not rejecting — a flagged pattern still runs and still matches.
 export function looksCatastrophic(src) {
-  const body = '(?:[^()\\\\]|\\\\.)*';
+  const body = '[^()]*';
   const quant = '(?:[+*]|\\{\\d+,\\d*\\})';
-  // ( …quantifier-or-alternation… ) followed by a quantifier
-  return new RegExp(`\\(${body}(?:${quant}|\\|)${body}\\)${quant}`).test(src);
+  const inner = new RegExp(`\\((${body})\\)(${quant})?`);
+  const risky = new RegExp(`${quant}|\\||\u0001`);
+  // Escapes carry no quantifier or group, so blank them first. Then collapse innermost groups one at a
+  // time: a group that is risky or quantified becomes \u0001, which makes any group around it risky too
+  // — that is what catches ((a)+)+ and (?:(a|b)+x)* — while a plain one becomes inert.
+  let s = src.replace(/\\./g, 'e');
+  for (let i = 0; i < 100; i++) {
+    const m = inner.exec(s);
+    if (!m) return false;
+    const isRisky = risky.test(m[1]);
+    if (isRisky && m[2]) return true;
+    s = s.slice(0, m.index) + (isRisky || m[2] ? '\u0001' : 'x') + s.slice(m.index + m[0].length);
+  }
+  return false;
 }
 
 function guardedTest(re, src, note) {

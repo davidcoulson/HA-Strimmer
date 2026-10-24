@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.24.2';
+const VERSION = '2026.10.24.3';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -2343,10 +2343,14 @@ async function buildResources(rpc, keysByDash) {
   // updated card re-fetches on its own.
   for (const r of rows) {
     const c = RESOURCE_CACHE.get(r.url);
-    if (c && [...unionKeys].every((k) => c.tested.has(k))) continue;
+    // A failed read is retried after 5 minutes rather than being final: a bundle that answered 503 once
+    // must not stay unscanned (and its cards dropped) until its URL changes.
+    if (c && (!c.unreadable || Date.now() - c.at < 300000) && [...unionKeys].every((k) => c.tested.has(k))) continue;
     try {
       const abs = /^https?:/i.test(r.url) ? r.url : HA_BASE + r.url;
-      const body = await (await fetch(abs, { signal: AbortSignal.timeout(20000) })).text();
+      const res = await fetch(abs, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.text();
       RESOURCE_CACHE.set(r.url, {
         tested: new Set(unionKeys),
         literal: new Set([...literalNames].filter((k) => body.includes(k))),
@@ -2357,10 +2361,14 @@ async function buildResources(rpc, keysByDash) {
         bytes: body.length,
       });
     } catch (e) {
-      RESOURCE_CACHE.set(r.url, { tested: new Set(unionKeys), literal: new Set(), icons: new Set(), frags: new Set(), fonts: new Set(), unreadable: true, bytes: 0 });
+      RESOURCE_CACHE.set(r.url, { tested: new Set(unionKeys), literal: new Set(), icons: new Set(), frags: new Set(), fonts: new Set(), unreadable: true, bytes: 0, at: Date.now() });
       logThrottled(`res:${r.url}`, `  resources: could not read ${r.url} (${e.message}) — always forwarding it`);
     }
   }
+
+  // Forget resources that are no longer configured (a HACS update changes the versioned URL).
+  const liveUrls = new Set(rows.map((r) => r.url));
+  for (const u of RESOURCE_CACHE.keys()) if (!liveUrls.has(u)) RESOURCE_CACHE.delete(u);
 
   // Document frequency across the resources we could actually read. A fragment in more than
   // a quarter of them identifies nothing, so it cannot carry a fragment match on its own.
@@ -3978,6 +3986,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // queue. Reproduced with a slow auth/current_user in test/proxy.perdash.test.mjs.
     const cachedOrForward = (kind) => () => {
       if (!haAuthed) return s;   // HA will refuse it; never answer from cache before auth_ok
+      if (!trimming) return s;   // a pause landed while this was held
       const hit = REG_RESPONSE_CACHE.get(regCacheKey(kind, dash, cacheSig()));
       if (hit !== undefined) {
         logThrottled(`regcache:${kind}`, `${kind === 'services' ? 'get_services' : `${kind} registry`} served from cache${dash ? ` (${dash})` : ''}`, LEVELS.debug);
@@ -3992,6 +4001,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     };
     sendOrQueue(stampAllow
       ? () => {
+        if (!trimming) { subEntityIds.delete(m.id); return s; }   // a pause landed while this was held
         // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
         // nothing", it's "no filter" (HA: `set(msg["entity_ids"]) or None`). Sending one
         // would invert the add-on's entire purpose, so drop the connection instead.
@@ -4782,7 +4792,14 @@ function viaIngress(req) {
 //
 // Supervisor writes are read-modify-write rather than a blind set: the options object holds
 // every setting the user has, and writing only this field would silently discard the rest.
-async function appendToListOption(key, value, envName) {
+// One at a time: two pins in flight would each read the same options and the second write would drop the first.
+let pinChain = Promise.resolve();
+function appendToListOption(...args) {
+  const run = pinChain.then(() => appendToListOptionNow(...args));
+  pinChain = run.catch(() => {});
+  return run;
+}
+async function appendToListOptionNow(key, value, envName) {
   const managed = ownership(YAML_OPT, CONFIG_STORE).managed.includes(key);
   if (inAddon && !managed) {
     const headers = { Authorization: `Bearer ${process.env.SUPERVISOR_TOKEN}`, 'content-type': 'application/json' };
