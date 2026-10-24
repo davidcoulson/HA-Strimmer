@@ -105,3 +105,27 @@ describe('looksCatastrophic', () => {
     for (const r of fine) assert.equal(looksCatastrophic(r), false, r);
   });
 });
+
+describe('a client cannot make the proxy hold unbounded frames', () => {
+  it('is cut off when it floods while the user lookup is in flight', async () => {
+    const rules = JSON.stringify([{ user: 'someone', dashboard: 'test-dash', always_forward: ['light.bedroom'] }]);
+    await withProxy({ USER_OVERRIDES: rules, BACKPRESSURE_HIGH_BYTES: '65536' }, async ({ mock, port }) => {
+      mock.setCurrentUserDelay(5000);
+      const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+      await c.authed;
+      const closed = new Promise((r) => c.ws.on('close', r));
+      const frame = JSON.stringify({ type: 'ping', pad: 'x'.repeat(20000) });
+      for (let i = 0; i < 10; i++) c.ws.send(frame);
+      const winner = await Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(() => r('open'), 2000))]);
+      assert.equal(winner, 'closed');
+    });
+  });
+});
+
+describe('registry cache and renames', () => {
+  it('is rebuilt on a rebuild even when membership is unchanged', async () => {
+    // pinned structurally: a +0 -0 rebuild must retire cached rows (see the comment at the clear)
+    const src = fs.readFileSync(path.join(DIR, '..', 'ha_ws_trim_proxy.mjs'), 'utf8');
+    assert.match(src, /\n  ALLOW_VERSION\+\+; REG_RESPONSE_CACHE\.clear\(\);\n/);
+  });
+});

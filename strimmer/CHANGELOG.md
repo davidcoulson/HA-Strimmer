@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.10.24.4 — 2026-10-24
+
+The last two findings from the review:
+- **A client can no longer make the proxy hold an unbounded backlog.** Frames sent while Home Assistant
+  was still connecting, or while a user lookup was in flight, were queued without limit, and a backlog
+  of writes to HA was never checked. Past the backpressure limit (8MB, `BACKPRESSURE_HIGH_BYTES`) the
+  connection is closed and reconnects fresh.
+- **Renaming a device or moving it to another area now reaches new connections.** The cached registry
+  answers were only retired when the set of entities changed, so a rename left old names being served.
+  Every rebuild now retires them.
+
+Nothing to do on upgrade.
+
 ## 2026.10.24.3 — 2026-10-24
 
 More fixes from the same review:

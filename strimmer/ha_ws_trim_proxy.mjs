@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.24.3';
+const VERSION = '2026.10.24.4';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1245,7 +1245,10 @@ function applyAllow(built, why, { merge = false } = {}) {
   // precisely so it picks up the new entities, and a stale cache would then hand those
   // reconnections registry rows that omit them — names and areas silently failing to resolve
   // on exactly the entities that were just added. Only the reconnect path used to bump this.
-  if (added.length || removed.length) { ALLOW_VERSION++; REG_RESPONSE_CACHE.clear(); }
+  // Cleared on EVERY rebuild, not only when membership moved: a rename or an area move changes rows
+  // for entities that stay allowed, and the cache has no TTL. Rebuilds are rare (registry events are
+  // filtered by changed field and floored in time), so this costs little hit rate.
+  ALLOW_VERSION++; REG_RESPONSE_CACHE.clear();
   const fmt = (a) => (a.length > 25 ? `${a.slice(0, 25).join(', ')} …(+${a.length - 25} more)` : a.join(', '));
   log(`allowlist ${why}: ${ALLOW.size} entities (+${added.length} -${removed.length})`);
   if (added.length) log(`  +added: ${fmt(added)}`);
@@ -3703,9 +3706,26 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // path, where every 20-100ms audio chunk crossing this hop is one more thing between the
   // wake word and the reply.
   const BIN = { binary: true, compress: false };
+  // Bytes the browser has sent that are waiting on HA's handshake or the user lookup. Unbounded, a
+  // client could flood frames (each under the per-frame cap) while HA stalls and exhaust memory.
+  let heldBytes = 0;
+  const drained = () => { if (haOpen && !gateQueue) heldBytes = 0; };
+  const dropClient = (why) => {
+    logThrottled(`held:${meta.ip}`, `${meta.ip ?? '?'} ${why} — closing; it will reconnect fresh`);
+    try { browserWs.terminate(); } catch {}
+    close();
+  };
+  const overflow = (n) => {
+    heldBytes += n;
+    if (heldBytes <= BP_HIGH_BYTES) return false;
+    dropClient(`sent ${(heldBytes / 1024).toFixed(0)}KB while HA was not ready for it`);
+    return true;
+  };
   const toHA = (s) => {
     if (!haOpen) return queue.push(s);
     if (Buffer.isBuffer(s)) haWs.send(s, BIN); else haWs.send(s);
+    // HA is not reading: the write backlog is the same unbounded growth, in the other direction.
+    if (haWs.bufferedAmount > BP_HIGH_BYTES) dropClient(`has ${(haWs.bufferedAmount / 1024).toFixed(0)}KB waiting for HA to read`);
   };
 
   // ---- backpressure (see BP_HIGH_BYTES) ----
@@ -3776,15 +3796,18 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     const held = gateQueue || [];
     gateQueue = null;
     held.forEach(flush);
+    drained();
   };
 
   haWs.on('open', () => {
     haOpen = true;
     queue.forEach((s) => (Buffer.isBuffer(s) ? haWs.send(s, BIN) : haWs.send(s)));
     queue.length = 0;
+    drained();
   });
 
   browserWs.on('message', (raw, isBinary) => {
+    if ((!haOpen || gateQueue) && overflow(raw.length)) return;
     // Binary frames are forwarded byte-for-byte. They are not JSON, and running toString()
     // over them UTF-8-decodes arbitrary bytes — lossy — and then re-sends them as a TEXT
     // frame. Home Assistant uses binary frames for media, so this path carries camera data.
