@@ -451,7 +451,9 @@ function makeMatcher(cond, unsupported, ctx, role, overInclude) {
   const { structural, volatile, descriptive } = condTests(cond, unsupported, ctx);
   let tests;
   if (overInclude && role === 'exclude') {
-    if (!structural.length) return () => false;
+    // A condition with a live half (`domain: sensor` + `state: unavailable`) cannot be applied
+    // whole, and applying only its structural half would drop every healthy sensor too.
+    if (!structural.length || volatile.length) return () => false;
     tests = structural;
   } else if (overInclude) {
     tests = structural.length ? structural : descriptive.length ? descriptive : volatile;
@@ -601,6 +603,14 @@ export function extractEntities(config, allStates = [], opts = {}) {
     // The key name cannot be predicted — `printer` here, something else in the next card — so
     // match on the VALUE being a real device id rather than on where it appears.
     resolveDeviceIds(node, ctx, add);
+
+    // The core area card lists its area's entities itself, in the browser, from the registry.
+    if (node.type === 'area' && typeof node.area === 'string' && ctx.ent) {
+      const want = node.area.toLowerCase();
+      for (const [id, r] of ctx.ent) {
+        if (r.areaId === node.area || (r.areaName && r.areaName.toLowerCase() === want)) add(id);
+      }
+    }
 
     // Standard entity-bearing keys.
     if (typeof node.entity === 'string') add(node.entity);
