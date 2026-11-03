@@ -316,6 +316,21 @@ function parseRules(v) {
   });
 }
 const ALWAYS = parseRules(OPT.always_forward ?? process.env.ALWAYS_FORWARD);
+// `battery` or `sensor:battery`: forward every entity whose device_class matches. For cards that
+// discover entities by scanning hass.states at runtime, which no config walk can predict. Matched
+// against live state at each rebuild, so a newly added battery sensor joins on the next one.
+const CLASS_RULES = toList(OPT.always_forward_device_class ?? process.env.ALWAYS_FORWARD_DEVICE_CLASS)
+  .map((t) => { const [a, b] = t.toLowerCase().split(':'); return b === undefined ? { cls: a } : { dom: a, cls: b }; });
+let CLASS_IDS = new Set();   // set by each build, read by applyOverrides
+function deviceClassIds(states) {
+  const out = new Set();
+  if (!CLASS_RULES.length) return out;
+  for (const s of states) {
+    const cls = s.attributes?.device_class;
+    if (cls && CLASS_RULES.some((r) => r.cls === cls && (!r.dom || s.entity_id.startsWith(`${r.dom}.`)))) out.add(s.entity_id);
+  }
+  return out;
+}
 // Set by the control connection once it is up. Lets the stats panel ask for a rebuild after
 // pinning something, so a pin takes effect immediately instead of waiting for a restart.
 //
@@ -948,6 +963,7 @@ function applyOverrides(set, realIds, dash = null) {
     if (r.literal) out.add(r.literal);
     else realIds.forEach((eid) => { if (r.re.test(eid)) out.add(eid); });
   });
+  CLASS_IDS.forEach((eid) => out.add(eid));
   [...out].forEach((eid) => {
     if (matchesAny(NEVER, eid) || matchesAny(extra.never, eid)) out.delete(eid);
   });
@@ -1035,6 +1051,8 @@ async function buildAllowOnce(rpc, renderTemplate) {
   const states = await rpc({ type: 'get_states' });
   const realIds = states.map((s) => s.entity_id);
   REAL_IDS = realIds;
+  CLASS_IDS = deviceClassIds(states);
+  if (CLASS_RULES.length) report(`  device_class rules forward ${CLASS_IDS.size} entities`);
   // The control connection asks for every state by definition, so this is the instance size.
   // Do NOT learn it from a browser's get_states instead: the modern frontend subscribes
   // rather than polling, so that path can go a whole uptime without ever firing.
@@ -4770,6 +4788,7 @@ function effectiveFallback() {
     dashboards: DASH_PATHS,
     always_forward: toList(process.env.ALWAYS_FORWARD),
     never_forward: toList(process.env.NEVER_FORWARD),
+    always_forward_device_class: toList(process.env.ALWAYS_FORWARD_DEVICE_CLASS),
     exclude_device_categories: EXCLUDE_DEVICE_CATEGORIES,
     resources_always_forward: toList(process.env.RESOURCES_ALWAYS_FORWARD),
     resources_never_forward: toList(process.env.RESOURCES_NEVER_FORWARD),

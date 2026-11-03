@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`always_forward_device_class`** (add-on options and the console's Config tab): forward every entity of a
+  device class (`battery`, or `sensor:battery`), for cards that scan all states at runtime and so name
+  nothing the allowlist can find. Matched against live state at each rebuild.
+
 - **Download diagnostics** (⋮ menu, administrators only): one JSON file with the version, redacted
   options, the allowlist per dashboard, the dashboard configs (credentials removed by key name), the
   entity ids panels asked for that were not forwarded, and the stats. Attach it to a bug report.
