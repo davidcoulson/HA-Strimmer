@@ -29,3 +29,20 @@ test('an area card forwards the entities in its area',
     const got = run({ type: 'area', area: 'kitchen' });
     assert.ok(got.includes('light.kitchen'), 'area card named kitchen but light.kitchen was not forwarded');
   });
+
+test('adjacent overlapping repeats are flagged for the timed guard, ordinary patterns are not', async () => {
+  const { looksCatastrophic } = await import('../lovelace_extract.mjs');
+  assert.equal(looksCatastrophic('^a+a+a+a+a+b$'), true);
+  assert.equal(looksCatastrophic('^.*a.*a.*a.*$'), true);   // what a many-star glob converts to
+  assert.equal(looksCatastrophic('^sensor\\..*_battery$'), false);
+  assert.equal(looksCatastrophic('^light\\.kitchen_[0-9]+$'), false);
+});
+
+test('a many-star glob is run under the deadline instead of hanging the loop', () => {
+  const got = extractEntities(
+    { views: [{ cards: [{ type: 'custom:auto-entities', filter: { include: [{ name: '*a*a*a*a*a*a*b' }] } }] }] },
+    [{ entity_id: 'sensor.x', state: '1', attributes: { friendly_name: 'a'.repeat(300) + '!' } }],
+    { overInclude: true },
+  );
+  assert.ok(Array.isArray(got.entities));
+});

@@ -71,9 +71,9 @@ export function toMatcher(pattern, note = null) {
     try {
       const src = p.slice(1, -1);
       const re = new RegExp(src);
-      // Only a regex somebody WROTE can backtrack catastrophically; a converted glob cannot nest
-      // a quantifier. Everything else keeps the plain, free `re.test`.
-      const test = authored && looksCatastrophic(src) ? guardedTest(re, src, note) : (v) => re.test(v);
+      // A glob with many stars backtracks polynomially too, so the check covers both. Everything it
+      // does not flag keeps the plain, free `re.test`.
+      const test = looksCatastrophic(src) ? guardedTest(re, src, note) : (v) => re.test(v);
       tests.push((v) => typeof v === 'string' && test(v));
     } catch { /* an unparseable regex simply contributes no matches */ }
   }
@@ -147,6 +147,8 @@ export function looksCatastrophic(src) {
   // time: a group that is risky or quantified becomes \u0001, which makes any group around it risky too
   // — that is what catches ((a)+)+ and (?:(a|b)+x)* — while a plain one becomes inert.
   let s = src.replace(/\\./g, 'e');
+  // Adjacent overlapping repeats (`a+a+a+a+b`, `*a*a*a*`) backtrack polynomially with no group at all.
+  if ((s.replace(/\[[^\]]*\]/g, 'c').match(/[+*]|\{\d+,\}/g) || []).length >= 3) return true;
   for (let i = 0; i < 100; i++) {
     const m = inner.exec(s);
     if (!m) return false;

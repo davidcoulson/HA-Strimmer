@@ -220,6 +220,7 @@ let LAST_REBUILD_AT = 0;
 // holding its backlog. Sized in bytes because that is what the memory cost is.
 const BP_HIGH_BYTES = parseInt(process.env.BACKPRESSURE_HIGH_BYTES || String(8 * 1024 * 1024), 10);
 const BP_LOW_BYTES = Math.max(1, Math.floor(BP_HIGH_BYTES / 4));
+const BRIDGE_PING_MS = parseInt(process.env.BRIDGE_PING_MS || '30000', 10);   // liveness ping on both bridge legs
 const BP_STALL_MS = parseInt(process.env.BACKPRESSURE_STALL_MS || '60000', 10);
 // The largest frame a BROWSER may send us. `ws` defaults a server to 100MB, and every text frame
 // from a browser is JSON.parse'd on the one event loop that relays every other panel — so one
@@ -1074,10 +1075,13 @@ async function buildAllowOnce(rpc, renderTemplate) {
   REG_CACHE_BY_ENTITY = (() => {
     const byDev = buildRegistryCtx(registries).byDevice;
     const out = new Map();
+    const perDevice = new Map(); // one filtered array per device, shared by all its entities
     for (const e of (registries?.entities || [])) {
       if (!e.entity_id || !e.device_id) continue;
       const rows = byDev.get(e.device_id);
-      if (rows) out.set(e.entity_id, deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES));
+      if (!rows) continue;
+      if (!perDevice.has(e.device_id)) perDevice.set(e.device_id, deviceEntityIds(rows, EXCLUDE_DEVICE_CATEGORIES));
+      out.set(e.entity_id, perDevice.get(e.device_id));
     }
     return out;
   })();
@@ -1324,6 +1328,11 @@ function startController() {
       // completes the ws handshake) would otherwise never fire 'close' or 'error', so nothing
       // would ever schedule a reconnect and the add-on would sit at 503 forever looking healthy.
       const ws = new WebSocket(ALLOW_WS_URL, { handshakeTimeout: 15000 });
+      // handshakeTimeout ends at the upgrade. An HA that upgrades and then never speaks auth would
+      // leave the controller waiting, with no rebuilds, for ever.
+      const authTimer = setTimeout(() => { try { ws.terminate(); } catch {} }, 15000);
+      authTimer.unref?.();
+      ws.on('close', () => clearTimeout(authTimer));
       let id = 1; const pending = {}; let gone = false;
       // Every command is bounded — see CONTROL_RPC_TIMEOUT_MS. Expiry drops the socket rather
       // than merely rejecting: the socket is evidently not answering, and onGone() is the one
@@ -1442,6 +1451,7 @@ function startController() {
           return;
         }
         if (m.type === 'auth_ok') {
+          clearTimeout(authTimer);
           try {
             backoff = 1000; attempts = 0;
             CONTROL_RPC = rpc;
@@ -3598,7 +3608,7 @@ server.on('upgrade', (req, socket, head) => {
     // NOTE the argument order: httpxy is `ws(req, socket, options, head)` where node-http-proxy
     // was `ws(req, socket, head)`. Passing `head` third would spread a Buffer into the request
     // options and break the upgrade — silently, since the socket simply never completes.
-    proxy.ws(req, socket, undefined, head).catch(() => {});
+    proxy.ws(req, socket, { upgradeTimeout: 30000 }, head).catch(() => {});
   }
 });
 
@@ -3653,7 +3663,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // token resolves and a pause arriving later has to be able to find it.
   const bridgeInfo = { dash, ip: meta.ip ?? null, user: null, isAdmin: false };
   let timedInitial = false;
-  const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0, headers: meta.fwd || {} });
+  const haWs = new WebSocket(HA_WS, { perMessageDeflate: true, maxPayload: 0, headers: meta.fwd || {}, handshakeTimeout: 15000 });
   const connId = stats.connOpen({
     ip: meta.ip, dash, via: meta.via, allowSize: baseAllow.size, ua: meta.ua,
     origin: meta.origin, route: meta.route, host: meta.host, hop: meta.hop, hops: meta.hops,
@@ -3676,9 +3686,9 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   const allowSigReset = () => { allowSig = null; };
   const getStatesIds = new Set();
   const subEntityIds = new Set();   // subscribe_entities subs we injected the allowlist into
-  const registryIds = new Map();    // request id -> which registry, to trim its result
+  const registryIds = new Map();    // request id -> { kind, ver }: which registry, and the allowlist version it was asked under
   const resourceIds = new Set();    // lovelace/resources requests, to trim their result
-  const serviceIds = new Set();     // get_services requests, to trim their result
+  const serviceIds = new Map();     // get_services request id -> allowlist version it was asked under
   const repairIds = new Set();      // repairs/list_issues requests, to empty their result
   const translationIds = new Set(); // frontend/get_translations, for the size analysis below
   const shapeIds = new Map();       // id -> type, for the one-shot shape capture below
@@ -4019,7 +4029,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       }
       // A miss: this goes to HA to be built. Counted so the hit RATE has a denominator.
       stats.recordCacheMiss();
-      if (kind === 'services') serviceIds.add(m.id); else registryIds.set(m.id, kind);
+      if (kind === 'services') serviceIds.set(m.id, ALLOW_VERSION); else registryIds.set(m.id, { kind, ver: ALLOW_VERSION });
       return s;
     };
     sendOrQueue(stampAllow
@@ -4216,6 +4226,13 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       if (!msg || typeof msg !== 'object') return msg;
       if (dropStateChanged(msg)) return null;
       if (dropRegistryEvent(msg)) return null;
+      // A refused request never reaches the shape checks below that retire its id, so it would
+      // sit in these collections for the life of the connection.
+      if (msg.type === 'result' && msg.success === false) {
+        getStatesIds.delete(msg.id); registryIds.delete(msg.id); resourceIds.delete(msg.id);
+        serviceIds.delete(msg.id); repairIds.delete(msg.id); translationIds.delete(msg.id);
+        themeIds.delete(msg.id); stateChangedSubs.delete(msg.id);
+      }
 
       if (trimming && msg.type === 'result' && getStatesIds.has(msg.id) && Array.isArray(msg.result)) {
         const beforeB = sized(msg.result);
@@ -4229,7 +4246,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         log(`get_states trimmed ${before} -> ${msg.result.length}${dash ? ` (${dash})` : ''}`);
       }
     if (trimming && TRIM_REGISTRIES && msg && msg.type === 'result' && registryIds.has(msg.id) && msg.result && typeof msg.result === 'object') {
-      const kind = registryIds.get(msg.id);
+      const { kind, ver } = registryIds.get(msg.id);
       registryIds.delete(msg.id);
       const rowsOf = (r) => (Array.isArray(r) ? r.length : (Array.isArray(r?.entities) ? r.entities.length : -1));
       const beforeB = sized(msg.result);
@@ -4245,7 +4262,9 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // Keep the trimmed rows for the next connection on this allowlist. Stored as a JSON
       // STRING, not an object: it is only ever spliced back into a reply, so serialising it
       // once here saves doing it per hit, and nothing downstream can mutate a string.
-      regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
+      // Only if no rebuild landed while HA was answering: that reply was built from rows the rebuild
+      // retired, and keying it under the NEW version would serve them as current.
+      if (ver === ALLOW_VERSION) regCacheSet(regCacheKey(kind, dash, cacheSig()), JSON.stringify(msg.result));
     }
     if (trimming && TRIM_THEMES && msg && msg.type === 'result' && themeIds.has(msg.id)
         && msg.result && typeof msg.result.themes === 'object') {
@@ -4353,6 +4372,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     }
     if (trimming && TRIM_SERVICES && msg && msg.type === 'result' && serviceIds.has(msg.id)
         && msg.result && typeof msg.result === 'object' && !Array.isArray(msg.result)) {
+      const ver = serviceIds.get(msg.id);
       serviceIds.delete(msg.id);
       const keep = new Set(['homeassistant']);
       for (const id of allow) keep.add(String(id).split('.')[0]);
@@ -4373,7 +4393,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // handing the frontend an empty service list, and the cache has to agree with that
       // decision or the first connection would see the safe answer and every later one the
       // empty one.
-      regCacheSet(regCacheKey('services', dash, cacheSig()), JSON.stringify(msg.result));
+      if (ver === ALLOW_VERSION) regCacheSet(regCacheKey('services', dash, cacheSig()), JSON.stringify(msg.result));
     }
     if (trimming && TRIM_RESOURCES && msg && msg.type === 'result' && resourceIds.has(msg.id) && Array.isArray(msg.result)) {
       resourceIds.delete(msg.id);
@@ -4456,7 +4476,20 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       bpCheck();
     } catch {}
   }
+  // Liveness for both legs. A peer that vanished without a FIN (a phone leaving wifi, a wedged HA)
+  // sends nothing, so it never trips the backpressure stall either; without a ping the pair of
+  // sockets and everything the bridge holds would stay until the OS gave up, hours later.
+  let browserAlive = true, haAlive = true;
+  browserWs.on('pong', () => { browserAlive = true; });
+  haWs.on('pong', () => { haAlive = true; });
+  const liveTimer = setInterval(() => {
+    if (!browserAlive || !haAlive) { try { browserWs.terminate(); } catch {} try { haWs.terminate(); } catch {} return; }
+    browserAlive = haAlive = false;
+    try { browserWs.ping(); } catch {} try { haWs.ping(); } catch {}
+  }, BRIDGE_PING_MS);
+  liveTimer.unref?.();
   const close = () => {
+    clearInterval(liveTimer);
     openBridges.delete(close); stats.connClose(connId);
     if (bpTimer) { clearInterval(bpTimer); bpTimer = null; }
     try { browserWs.close(); } catch {} try { haWs.close(); } catch {}
