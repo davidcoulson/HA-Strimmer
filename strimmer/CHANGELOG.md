@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Download diagnostics** (⋮ menu, administrators only): one JSON file with the version, redacted
+  options, the allowlist per dashboard, the dashboard configs (credentials removed by key name), the
+  entity ids panels asked for that were not forwarded, and the stats. Attach it to a bug report.
+
 ## 2026.11.02.1 — 2026-11-02
 
 Fixes from a performance and stability review, plus the extractor gaps found chasing issue #19:

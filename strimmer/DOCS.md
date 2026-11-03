@@ -292,6 +292,16 @@ search as you type — and still accept anything typed, because an `always_forwa
 routinely a `/regex/`, which no list of entity ids can suggest. Deleting a rule takes two clicks,
 since the rows look alike and the deletion cannot be undone from the console.
 
+### Download diagnostics
+
+The ⋮ menu has **Download diagnostics** (administrators only). It saves `strimmer-diagnostics.json`: the
+version, your options, the allowlist per dashboard, the dashboard configs, entity ids a panel asked
+for that were not forwarded, and the stats. Credentials are removed by key name, but read the file
+before you post it.
+
+**Editing cards through Strimmer:** the editor's entity pickers only list entities that were
+forwarded, so edit dashboards on the untrimmed Home Assistant address.
+
 ### Pausing the trim while you troubleshoot
 
 The add-on serves a panel only the entities its dashboard names, which is exactly wrong when you
