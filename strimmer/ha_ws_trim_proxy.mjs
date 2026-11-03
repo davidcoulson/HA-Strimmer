@@ -90,7 +90,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.10.24.4';
+const VERSION = '2026.11.02.1';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -1394,7 +1394,12 @@ function startController() {
       const runRecompute = async (why) => {
         if (rebuilding) return;
         rebuilding = true;
-        try { applyAllow(await buildAllow(rpc, renderTemplate), `recomputed (${why})`); }
+        try {
+          const next = await buildAllow(rpc, renderTemplate);
+          // The socket dropped while resources were being fetched, which are not tied to it; a newer
+          // connection is rebuilding already, and publishing this older result over it would regress it.
+          if (!gone) applyAllow(next, `recomputed (${why})`);
+        }
         catch (e) { log('recompute failed:', e.message); }
         finally {
           rebuilding = false;
@@ -1456,6 +1461,7 @@ function startController() {
             backoff = 1000; attempts = 0;
             CONTROL_RPC = rpc;
             const next = await buildAllow(rpc, renderTemplate);
+            if (gone) return;   // superseded while building; see runRecompute
             if (!settled) {
               ALLOW = next.union; ALLOW_BY_DASH = next.perDash; ALLOW_VERSION++; REG_RESPONSE_CACHE.clear();
               settled = true; ALLOW_READY = true; resolve(ALLOW);
@@ -3021,6 +3027,7 @@ const CLIENT_DASH_TTL_MS = 10 * 60 * 1000;
 // `client_overrides` remains for everything this cannot cover — a device that announces nothing.
 const clientLearned = new Map();
 const CLIENT_LEARNED_MAX = 500;
+const CLIENT_LEARNED_TTL_MS = 86400000;
 // entity_id -> every entity id on that entity's device, honouring exclude_device_categories.
 // Rebuilt with the allowlist, so a renamed or re-added device is picked up without a restart.
 let REG_CACHE_BY_ENTITY = null;
@@ -3034,6 +3041,9 @@ let THEMES_USED = new Set();
 // widen an allowlist, never narrow one.
 function learnedFor(ip) {
   const hit = ip ? clientLearned.get(ip) : null;
+  // Entries are refreshed by every announce (satellites repeat every 30s), so one that has gone a
+  // day quiet is a retired device, and its address may belong to another by now.
+  if (hit && Date.now() - hit.at > CLIENT_LEARNED_TTL_MS) { clientLearned.delete(ip); return null; }
   return hit ? hit.ids : null;
 }
 
@@ -4553,6 +4563,7 @@ function hopNameFor(ip) {
   if (hit && Date.now() - hit.at < HOP_TTL_MS) return hit.name;
   if (hit) HOP_NAMES.delete(ip);
   // Mark it in flight before awaiting, so a burst of connections asks once.
+  if (HOP_NAMES.size >= 500) HOP_NAMES.delete(HOP_NAMES.keys().next().value);   // oldest first
   HOP_NAMES.set(ip, { name: hit?.name ?? null, at: Date.now() });
   dns.promises.reverse(ip)
     .then((names) => HOP_NAMES.set(ip, { name: tidyHostname(names[0]), at: Date.now() }))

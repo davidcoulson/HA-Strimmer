@@ -165,7 +165,11 @@ function guardedTest(re, src, note) {
   return (v) => {
     if (REGEX_KILLED.has(src)) { note?.(killedMsg); return false; }
     let memo = REGEX_MEMO.get(src);
-    if (!memo) { memo = new Map(); REGEX_MEMO.set(src, memo); }
+    if (!memo) {
+      // Patterns come and go as dashboards are edited; keep the recent ones, not every one ever seen.
+      if (REGEX_MEMO.size >= 200) REGEX_MEMO.delete(REGEX_MEMO.keys().next().value);
+      memo = new Map(); REGEX_MEMO.set(src, memo);
+    }
     const seen = memo.get(v);
     if (seen !== undefined) return seen;
     if (!guardScript) {

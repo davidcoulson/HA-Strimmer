@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.11.02.1 — 2026-11-02
+
+Fixes from a performance and stability review, plus the extractor gaps found chasing issue #19:
+- **A sensor list with an exclude that has a live state test** (`exclude: {domain: sensor, state: unavailable}`)
+  no longer drops every sensor from the allowlist. **Area cards** now forward their area's entities.
+- **Bridge sockets are bounded.** The Home Assistant side has a 15s handshake timeout, both legs get a
+  30s ping (`BRIDGE_PING_MS`) and a silent one is closed, passthrough upgrades time out after 30s, and
+  the control socket must authenticate within 15s.
+- **A registry or services reply that was in flight during a rebuild is no longer cached as current.**
+  Refused requests no longer leave their ids tracked for the life of the connection.
+- **Regexes with three or more unbounded repeats** (`a+a+a+a+b`, many-star globs) now run under the
+  50ms guard. Learned satellite entities expire after a day without an announce. The regex memo
+  and the reverse-DNS cache are capped. A rebuild that finishes after its control connection dropped is
+  discarded. The device index no longer builds one array per entity.
+- Dependencies: httpxy 0.5.6, ws 8.22.1; Pillow 13.0.0 and puppeteer-core 25.16.0 (tooling only).
+
+Nothing to do on upgrade.
+
 ## 2026.10.24.4 — 2026-10-24
 
 The last two findings from the review:
