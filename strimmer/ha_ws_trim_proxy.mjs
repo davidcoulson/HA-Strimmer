@@ -316,6 +316,21 @@ function parseRules(v) {
   });
 }
 const ALWAYS = parseRules(OPT.always_forward ?? process.env.ALWAYS_FORWARD);
+// `battery` or `sensor:battery`: forward every entity whose device_class matches. For cards that
+// discover entities by scanning hass.states at runtime, which no config walk can predict. Matched
+// against live state at each rebuild, so a newly added battery sensor joins on the next one.
+const CLASS_RULES = toList(OPT.always_forward_device_class ?? process.env.ALWAYS_FORWARD_DEVICE_CLASS)
+  .map((t) => { const [a, b] = t.toLowerCase().split(':'); return b === undefined ? { cls: a } : { dom: a, cls: b }; });
+let CLASS_IDS = new Set();   // set by each build, read by applyOverrides
+function deviceClassIds(states) {
+  const out = new Set();
+  if (!CLASS_RULES.length) return out;
+  for (const s of states) {
+    const cls = s.attributes?.device_class;
+    if (cls && CLASS_RULES.some((r) => r.cls === cls && (!r.dom || s.entity_id.startsWith(`${r.dom}.`)))) out.add(s.entity_id);
+  }
+  return out;
+}
 // Set by the control connection once it is up. Lets the stats panel ask for a rebuild after
 // pinning something, so a pin takes effect immediately instead of waiting for a restart.
 //
@@ -948,6 +963,7 @@ function applyOverrides(set, realIds, dash = null) {
     if (r.literal) out.add(r.literal);
     else realIds.forEach((eid) => { if (r.re.test(eid)) out.add(eid); });
   });
+  CLASS_IDS.forEach((eid) => out.add(eid));
   [...out].forEach((eid) => {
     if (matchesAny(NEVER, eid) || matchesAny(extra.never, eid)) out.delete(eid);
   });
@@ -1035,6 +1051,8 @@ async function buildAllowOnce(rpc, renderTemplate) {
   const states = await rpc({ type: 'get_states' });
   const realIds = states.map((s) => s.entity_id);
   REAL_IDS = realIds;
+  CLASS_IDS = deviceClassIds(states);
+  if (CLASS_RULES.length) report(`  device_class rules forward ${CLASS_IDS.size} entities`);
   // The control connection asks for every state by definition, so this is the instance size.
   // Do NOT learn it from a browser's get_states instead: the modern frontend subscribes
   // rather than polling, so that path can go a whole uptime without ever firing.
@@ -1128,11 +1146,11 @@ async function buildAllowOnce(rpc, renderTemplate) {
   for (const p of DASH_PATHS) {
     try {
       const cfg = await rpc({ type: 'lovelace/config', url_path: p });
-      DASH_CONFIGS.set(p, cfg);
       const tpls = await renderTemplates(cfg, renderTemplate);
       const c0 = performance.now();
       const set = allowlistFor(cfg, states, registries, tpls);
       const cMs = performance.now() - c0;
+      DASH_CONFIGS.set(p, cfg);
       if (BUILD_DASH) {
         BUILD_DASH.ms += cMs;
         if (cMs > BUILD_DASH.slowestMs) { BUILD_DASH.slowestMs = cMs; BUILD_DASH.slowest = p; }
@@ -1151,7 +1169,7 @@ async function buildAllowOnce(rpc, renderTemplate) {
       })(cfg);
       themesByDash.set(p, dashThemes);
       set.forEach((e) => union.add(e));
-    } catch (e) { failed++; log(`  ${p}: FAILED ${e.message}`); }
+    } catch (e) { failed++; DASH_CONFIGS.delete(p); log(`  ${p}: FAILED ${e.message}`); }
   }
   THEMES_USED = themesUsed;
   // Any failure at all is worth naming the alternatives for: `config_not_found` means the
@@ -3048,7 +3066,7 @@ const ENTITY_ID_RE = /^[a-z0-9_]+\.[a-z0-9_]+$/;
 function noteAsked(dash, m, allow) {
   const raw = [m.entity_ids, m.entity_id, m.statistic_ids, m.target?.entity_id, m.service_data?.entity_id].flat(2);
   for (const id of raw) {
-    if (typeof id !== 'string' || !ENTITY_ID_RE.test(id) || allow.has(id)) continue;
+    if (typeof id !== 'string' || id.length > 255 || !ENTITY_ID_RE.test(id) || allow.has(id)) continue;
     const key = dash ?? '(union)';
     let per = ASKED_NOT_FORWARDED.get(key);
     if (!per) {
@@ -3062,8 +3080,16 @@ function noteAsked(dash, m, allow) {
 const DASH_CONFIGS = new Map();
 // Credentials a config or option can carry. Matched on the KEY, so a new card's `api_key:` is covered.
 const SECRET_KEY_RE = /token|password|passwd|secret|api[_-]?key|authorization|webhook|(^|_)key$/i;
+// Credentials also ride inside ordinary values: a URL's userinfo, a `?token=` in an image address.
+function redactString(v) {
+  return v.replace(/(\/\/)[^/\s@]*@/g, '$1[redacted]@')
+    .replace(/([?&;](?:[^=&\s]*(?:token|password|passwd|secret|api[_-]?key|authorization|key|sig|signature))=)[^&\s"']*/gi, '$1[redacted]');
+}
+// Past the depth cap the subtree is replaced, never passed through: it could hold a credential.
 function redactDeep(v, depth = 0) {
-  if (depth > 40 || v == null || typeof v !== 'object') return v;
+  if (typeof v === 'string') return redactString(v);
+  if (v == null || typeof v !== 'object') return v;
+  if (depth > 40) return '[truncated]';
   if (Array.isArray(v)) return v.map((x) => redactDeep(x, depth + 1));
   return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, SECRET_KEY_RE.test(k) ? '[redacted]' : redactDeep(x, depth + 1)]));
 }
@@ -3943,7 +3969,6 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       pendingTypes.set(m.id, m.type);
     }
     if (trimming && m && m.type === 'get_states') getStatesIds.add(m.id);
-    if (trimming && m && typeof m === 'object') noteAsked(dash, m, allow);
     // A request the shared cache may be able to answer. The lookup itself is deferred to the
     // thunk below — see cachedOrForward — so it runs at FLUSH time, after any user rule has
     // settled the allowlist. Only what to look up is decided here.
@@ -4072,7 +4097,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       if (kind === 'services') serviceIds.set(m.id, ALLOW_VERSION); else registryIds.set(m.id, { kind, ver: ALLOW_VERSION });
       return s;
     };
-    sendOrQueue(stampAllow
+    // Noted when the thunk RUNS, not on receipt: a held message is judged against the allowlist
+    // the user rules have settled, and a paused connection is not judged at all.
+    const noted = (thunk) => () => { if (trimming && m && typeof m === 'object') noteAsked(dash, m, allow); return thunk(); };
+    sendOrQueue(noted(stampAllow
       ? () => {
         if (!trimming) { subEntityIds.delete(m.id); return s; }   // a pause landed while this was held
         // Belt-and-braces to the upgrade gate: an empty entity_ids is NOT "subscribe to
@@ -4089,7 +4117,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         return JSON.stringify(m);
       }
       : cacheKind ? cachedOrForward(cacheKind)
-      : () => s);
+      : () => s));
   });
 
   // ---- per-connection helpers for the HA -> browser path ----
@@ -4770,6 +4798,7 @@ function effectiveFallback() {
     dashboards: DASH_PATHS,
     always_forward: toList(process.env.ALWAYS_FORWARD),
     never_forward: toList(process.env.NEVER_FORWARD),
+    always_forward_device_class: toList(process.env.ALWAYS_FORWARD_DEVICE_CLASS),
     exclude_device_categories: EXCLUDE_DEVICE_CATEGORIES,
     resources_always_forward: toList(process.env.RESOURCES_ALWAYS_FORWARD),
     resources_never_forward: toList(process.env.RESOURCES_NEVER_FORWARD),
@@ -5326,7 +5355,7 @@ const statsServer = http.createServer(async (req, res) => {
       generated: new Date().toISOString(),
       version: VERSION,
       node: process.version,
-      options: redactDeep(OPT),
+      options: redactDeep({ ...effectiveFallback(), ...OPT }),
       allowlist: {
         union: ALLOW.size,
         byDashboard: Object.fromEntries([...ALLOW_BY_DASH].map(([d, set]) => [d, [...set].sort()])),
