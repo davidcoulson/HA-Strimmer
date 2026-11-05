@@ -11,7 +11,11 @@
   entities sent, clients and cache hits beside it; entity search now says why an entity is or is not
   sent. Settings that need a restart show a notice (there is still no restart button). The tab bar
   scrolls at phone width.
-- **Download diagnostics** (⋮ menu, administrators only): one JSON file with the version, redacted
+- **`always_forward_device_class`** (add-on options and the console's Config tab): forward every entity of a
+  device class (`battery`, or `sensor:battery`), for cards that scan all states at runtime and so name
+  nothing the allowlist can find. Matched against live state at each rebuild.
+
+- **Download diagnostics** (Diagnostics tab, administrators only): one JSON file with the version, redacted
   options, the allowlist per dashboard, the dashboard configs (credentials removed by key name), the
   entity ids panels asked for that were not forwarded, and the stats. Attach it to a bug report.
 
