@@ -209,24 +209,25 @@ The app registers an Ingress panel, so there is a **Strimmer** entry in the Home
 sidebar. (If it is missing, turn on *Show in sidebar* on the app's own page — Supervisor
 stores that flag per install and leaves it off for apps that gained Ingress in an update.)
 
-It shows:
+It has five tabs:
 
-- **clients connected now** — address, which dashboard each was attributed to and how, how
-  many entities it is subscribed to, and its live update throughput;
-- **what got trimmed** — per payload, the size Home Assistant sent, the size the browser
-  received, and the difference;
-- **per-dashboard** entity counts against the size of the instance, and resource kept/dropped
-  figures when `trim_resources` is on;
-- **the last 24 hours** — data not sent, clients connected, and update traffic, as charts;
-- **how clients reach this** — a flow diagram from where each client was, through how it
-  arrived (direct, a reverse proxy, Cloudflare, Ingress), to the hostname it dialled.
+- **Overview** — whether anything needs attention, four measured numbers (payload not sent,
+  entities sent, clients open, registry cache hits), what is not being sent, the **pause** card, and
+  the last 24 hours as charts;
+- **Dashboards** — each dashboard's entity count against the instance, an **entity search** that
+  says whether an entity is sent and lets you pin it, and resource kept/dropped figures;
+- **Clients** — who is connected now or in the last 24 hours (open a row for its detail), and a flow
+  diagram from where each client was, through how it arrived, to the hostname it dialled;
+- **Settings** — every option, as switches and lists (below);
+- **Diagnostics** — the diagnostics download, what the trim saved, what is flowing, HTTP, runtime.
 
-It is drawn in Home Assistant's own colours and type. Ingress passes none of HA's theme into the
-frame, so the page can only follow the operating system — a dark HA on a light desktop would get
-a light panel in a dark frame. The **Auto / Light / Dark** control in the header pins it, per
-browser. The Clients table hides its six diagnostic columns on a narrow screen; **All columns**
-in the card heading shows them, and the choice is remembered. Anything the console changes
-reports the outcome in a snackbar at the bottom of the screen.
+"Payload not sent" is measured on the answers the app knows how to shrink (before and after
+bytes). It is not a comparison with an untrimmed run: the entity stream is cut at the source, so its
+untrimmed size is never seen and no such figure is shown.
+
+It follows Home Assistant's settings look. Ingress passes none of HA's theme into the frame, so the
+page follows the operating system; the header button cycles **Auto / Light / Dark** and is
+remembered per browser. Anything the console changes reports the outcome in a snackbar.
 
 Two JSON endpoints back it, both read-only:
 
@@ -251,32 +252,19 @@ sensor:
 
 Options can be changed from the console instead of the add-on's Configuration tab.
 
-**Everything that is on or off is one grid at the top, headed Strimmers** — twelve icon tiles,
-filled blue for on and outlined for off, so "what is this app currently doing to my dashboards"
-is a glance rather than a scroll. A tile's caption has room for about a word; its tooltip carries
-the full sentence and the option's config key. Three of the twelve — mDNS, metrics and compression —
-are not trims; they are in the grid because the question the grid answers is *what is switched
-on*, not *what is cut*.
+**Everything that is on or off is a switch**, in three groups (what to trim, extra trimming, discovery
+and network), each with a line saying what it does. Lists (dashboards, always/never forward, resources)
+are chips you add and remove under **What to send**. **Advanced** holds the override rules and the
+remaining value options.
 
-**Everything that holds a value keeps its section below**: Dashboards and entities, Custom cards,
-Overrides, Device discovery, Monitoring, Panel status API. Lists are their items with a remove
-button and an add box, and the override rules get a list and a wizard rather than a YAML block.
-Every row shows what the option actually resolved to, so an option nothing has set reads as its
-default rather than as blank.
-
-There is no *Trimming* or *Websocket* heading, which the sections list in older versions of this
-page had: both held nothing but switches, and a section with nothing left to set is skipped rather
-than drawn over empty space. Their options are all in the grid.
-
-This exists because the add-on's options have outgrown what a Supervisor schema can express:
-nested groups do not render in the Configuration tab at all, sub-options cannot carry
-descriptions, and there is no validation beyond types.
+An option whose change needs a restart says so after you save it. There is no restart button here:
+restart the app from its page under Settings → Apps.
 
 **Ownership is per option.** An option is read from the console only when someone has deliberately
 changed it there; everything else still comes from the add-on's Configuration tab and still works
-exactly as before. A row marked **set here** is owned by the console, and the Configuration tab no
+exactly as before. A switch or row marked **set here** is owned by the console, and the Configuration tab no
 longer applies to it. Taking a setting over never changes it — it is seeded from whatever is
-already in effect — and **Use add-on config** hands it back.
+already in effect — and **Use add-on setting** hands it back.
 
 Options are read once at startup, so a change takes effect on the next restart.
 
@@ -306,7 +294,7 @@ forwarded, so edit dashboards on the untrimmed Home Assistant address.
 
 The add-on serves a panel only the entities its dashboard names, which is exactly wrong when you
 are trying to find out why something is broken: an entity no card mentions is not there to look
-at. **Pause trimming** in the console's status strip turns it off for **one hour** or for the
+at. **Pause trimming** on the console's Overview tab turns it off for **one hour** or for the
 **rest of the day**, and it ends by itself.
 
 It pauses for a **Home Assistant user**, not a browser or an address:
@@ -342,7 +330,7 @@ switch cannot know who flipped it. Administrators is the scope that matches the 
 troubleshoots, and **every kiosk and wall panel keeps its trim** and is never disturbed. The switch
 returns to `on` by itself when the hour is up. `ADMIN_PAUSE_MINUTES` (env) changes the span.
 
-The console offers the same thing under **pause trimming → all admins, 1 hour**, so the two paths
+The console offers the same thing under **Pause trimming → All administrators**, so the two paths
 are one feature.
 
 ### Publishing the metrics to Home Assistant

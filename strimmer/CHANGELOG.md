@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Console rework.** Five tabs (Overview, Dashboards, Clients, Settings, Diagnostics) in Home Assistant's
+  settings style: cards, list rows, switches, text buttons, a pause card with duration and scope, and
+  advanced options collapsed. Every function of the old console is still there. Changed on purpose:
+  buttons now say what they do instead of being icons with tooltips; the clients table and its column
+  picker are replaced by expandable rows (the `stripper-clcols` browser setting is no longer used);
+  the headline is **payload not sent (measured)** rather than an unverifiable percentage, with
+  entities sent, clients and cache hits beside it; entity search now says why an entity is or is not
+  sent. Settings that need a restart show a notice (there is still no restart button). The tab bar
+  scrolls at phone width.
 - **Download diagnostics** (⋮ menu, administrators only): one JSON file with the version, redacted
   options, the allowlist per dashboard, the dashboard configs (credentials removed by key name), the
   entity ids panels asked for that were not forwarded, and the stats. Attach it to a bug report.
