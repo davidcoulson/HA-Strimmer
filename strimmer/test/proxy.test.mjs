@@ -594,6 +594,19 @@ describe('backpressure from a browser that is not reading', () => {
     ws.resume();
     await closed;
   });
+
+  // #3: closing the bridge used to send a close FRAME to the paused HA socket, which never reads
+  // the reply, so the HA leg lingered for ws's 30s close timeout (and longer under load).
+  it('destroys the paused HA socket at once when the browser goes away', async () => {
+    const ws = await openStalled();
+    await flood(60);
+    await proxy.waitForLog(/is not keeping up \(\d+KB queued\) — pausing its HA stream/, 10000);
+    const before = mock.mainSocketCount();
+    ws.terminate();
+    const deadline = Date.now() + 5000;
+    while (mock.mainSocketCount() >= before && Date.now() < deadline) await delay(100);
+    assert.ok(mock.mainSocketCount() < before, 'HA-side socket still open 5s after the browser left');
+  });
 });
 
 describe('live allowlist rebuild on lovelace_updated', () => {
