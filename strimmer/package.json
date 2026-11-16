@@ -19,6 +19,6 @@
     "ws": "^8.22.1"
   },
   "devDependencies": {
-    "puppeteer-core": "^25.16.0"
+    "puppeteer-core": "^25.17.0"
   }
 }
