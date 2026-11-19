@@ -36,7 +36,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
-import { classify as classifyRoute, normalizeIp, isPrivate } from './route.mjs';
+import { classify as classifyRoute, normalizeIp, isPrivate, parseCidr } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { certDaysLeft } from './metrics.mjs';
 import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
@@ -2826,22 +2826,6 @@ function resolveUser(token, fwd = null) {
 }
 
 // ---- client-pinned rules ----
-
-// Parse "10.2.4.0/24" into a test. IPv4 only on purpose: a CIDR here exists to name a VLAN of
-// wall panels, and anything needing IPv6 subtleties is better served by listing addresses.
-function parseCidr(s) {
-  const m = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(s);
-  if (!m) return null;
-  const bits = Number(m[2]);
-  if (bits > 32) return null;
-  const toInt = (ip) => ip.split('.').reduce((a, o) => (a << 8 >>> 0) + Number(o), 0) >>> 0;
-  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
-  const net = (toInt(m[1]) & mask) >>> 0;
-  return (ip) => {
-    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) return false;
-    return ((toInt(ip) & mask) >>> 0) === net;
-  };
-}
 
 // Resolve each rule's `client` to addresses and each `devices` entry to entity ids.
 //

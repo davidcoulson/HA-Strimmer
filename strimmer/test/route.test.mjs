@@ -6,7 +6,7 @@
 // reverse proxy, through Cloudflare, and the hairpin case that looks like a bug.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, normalizeIp, isPrivate } from '../route.mjs';
+import { classify, normalizeIp, isPrivate, parseCidr } from '../route.mjs';
 
 const req = (headers = {}, remoteAddress = '10.2.3.1') => ({ headers, socket: { remoteAddress } });
 
@@ -161,5 +161,13 @@ describe('trusted_proxies', () => {
   });
   it('without a list, behaves as it always did', () => {
     assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }, '10.2.4.99')).ip, '10.2.4.20');
+  });
+});
+
+describe('parseCidr', () => {
+  it('refuses an octet over 255 rather than carrying it into the next one', () => {
+    assert.equal(parseCidr('10.0.256.0/24'), null);
+    assert.equal(parseCidr('10.0.0.0/24')('10.0.0.300'), false);
+    assert.equal(parseCidr('10.0.0.0/16')('10.0.255.1'), true);
   });
 });

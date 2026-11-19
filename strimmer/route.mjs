@@ -49,6 +49,22 @@ export function normalizeIp(value) {
   return s.toLowerCase();
 }
 
+// Parse "10.2.4.0/24" into a test. IPv4 only on purpose: a CIDR here exists to name a VLAN of
+// wall panels, and anything needing IPv6 subtleties is better served by listing addresses.
+// Octets are range-checked on both sides: unchecked, `10.0.256.0/24` carried into the next octet
+// and matched 10.1.0.x.
+const isV4 = (ip) => IPV4.test(ip) && ip.split('.').every((o) => Number(o) <= 255);
+export function parseCidr(s) {
+  const m = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(s);
+  if (!m || !isV4(m[1])) return null;
+  const bits = Number(m[2]);
+  if (bits > 32) return null;
+  const toInt = (ip) => ip.split('.').reduce((a, o) => (a << 8 >>> 0) + Number(o), 0) >>> 0;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  const net = (toInt(m[1]) & mask) >>> 0;
+  return (ip) => isV4(ip) && ((toInt(ip) & mask) >>> 0) === net;
+}
+
 // RFC1918 and friends. Deliberately includes loopback and Docker's own ranges: a connection
 // from 172.30.32.x is another add-on, not a person on the internet, and calling it `internet`
 // would put the noisiest, least interesting traffic in the column you actually watch.
