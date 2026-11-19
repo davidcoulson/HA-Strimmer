@@ -134,9 +134,10 @@ describe('the client info endpoint', () => {
   // Loopback here is a LAN reverse proxy someone left off the list. Its clients are attributed to
   // it, but one it says came from the internet is still refused before the token is looked at.
   it('still refuses, in lan mode, an untrusted peer forwarding a public address', async () => {
-    for (const h of [{ 'x-forwarded-for': '74.1.2.3' }, { 'x-real-ip': '74.1.2.3' }]) {
+    // The last is a caller who TYPED a private address; the unlisted proxy appended its real one.
+    for (const h of [{ 'x-forwarded-for': '74.1.2.3' }, { 'x-real-ip': '74.1.2.3' }, { 'x-forwarded-for': '10.0.0.5, 74.1.2.3' }]) {
       const res = await get(port, '/strimmer/client.json', 'david-token', h);
-      assert.equal(res.status, 403, `${Object.keys(h)[0]} claimed the internet`);
+      assert.equal(res.status, 403, `${JSON.stringify(h)} came from the internet`);
     }
   });
 

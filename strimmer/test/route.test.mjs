@@ -158,6 +158,12 @@ describe('trusted_proxies', () => {
       'trusted hops in the chain are skipped too');
     assert.equal(classify(req({}), trusted).ip, '10.2.3.1', 'no header: the proxy itself');
   });
+  it('labels origin by the believed address behind a listed proxy, by every claim behind an unlisted one', () => {
+    assert.equal(classify(req({ 'x-forwarded-for': '74.9.9.9, 10.2.4.20' }), trusted).origin, 'lan',
+      'a LAN panel behind a listed proxy, whatever was typed on the left');
+    assert.equal(classify(req({ 'x-forwarded-for': '10.0.0.5, 74.1.2.3' }, '10.2.4.99'), trusted).origin, 'internet');
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20' }, '10.2.4.99'), trusted).origin, 'lan');
+  });
   it('does not take X-Real-IP even from a trusted proxy, which may have passed the client\'s through', () => {
     assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).ip, '10.2.3.1');
   });

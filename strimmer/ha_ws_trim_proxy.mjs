@@ -5520,7 +5520,7 @@ log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${A
 if (isTrustedProxy) {
   log(`trusted_proxies: X-Forwarded-For is believed only from ${TRUSTED_PROXIES.used.join(', ') || 'nothing'}`);
   for (const bad of TRUSTED_PROXIES.invalid) warn(`trusted_proxies: "${bad}" is not an address or CIDR, and is ignored`);
-  if (!TRUSTED_PROXIES.used.length) warn('trusted_proxies: no usable entry, so every forwarded address is ignored and each client is known by its peer address');
+  if (!TRUSTED_PROXIES.used.some((e) => TRUSTED_PROXY_ENTRIES.includes(e))) warn('trusted_proxies: no usable entry, so every forwarded address is ignored and each client is known by its peer address');
 }
 // One line for the whole rule set, because 'my override does nothing' is the commonest
 // complaint and the first thing worth knowing is whether it was parsed at all.
