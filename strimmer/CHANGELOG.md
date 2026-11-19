@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026.11.19.2 — 2026-11-19
+
+Fixes from a security review of 2026.11.18.2. It found nothing of high or medium severity.
+
+- **New option `trusted_proxies`: whose `X-Forwarded-For` is believed.** Empty, the default, keeps today's
+  behaviour: any caller's leftmost address is taken as the client, so `client_overrides`, the panel's own
+  `client.json` and client attribution all key on an address anyone can type. Set it to the addresses or
+  CIDRs of your reverse proxies and only they are believed, reading the chain from the right as Home
+  Assistant does. `X-Real-IP` is never used, and a public address claimed in a header still counts as the
+  internet. List every hop: one left out puts all of its panels on its own address. An entry that is not an
+  address or CIDR is named in the boot log and the list fails closed. As an add-on, Supervisor's Ingress hop
+  is added for you. It is read at startup, so a change needs a restart.
+- **Standalone runs: a loopback caller must also send a loopback `Host` to count as Ingress.** Outside the
+  add-on, a DNS-rebinding page in a browser on the same machine could otherwise read `/access.json` and write
+  `/config`. The add-on is unaffected, and setting `INGRESS_PEERS` skips the check.
+- **Without `esphome_key` the ESPHome pause switch is read-only.** The API is then plaintext and takes
+  commands from anything that can reach the port, and the switch pauses trimming for every administrator.
+  It is still there with the same id and still shows its state; a command is ignored, logged once, and the
+  switch springs back.
+- **A voice satellite is learned only after Home Assistant has accepted the socket's `auth`.** Before, a
+  `voice_satellite/*` message sent ahead of authentication widened the allowlist remembered for that address.
+
+**On upgrade:** nothing, by default. If you turn trimming off for administrators with the ESPHome switch
+and have no `esphome_key` set, set one, or the switch stops working. If a reverse proxy sits in front, list
+it in `trusted_proxies` only if you want forwarded addresses checked.
+
 ## 2026.11.19.1 — 2026-11-19
 
 - **A page can ask for the entities it needs.** `strimmer/want` on the websocket, with entity ids or `*`
