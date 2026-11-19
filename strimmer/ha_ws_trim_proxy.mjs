@@ -3434,11 +3434,14 @@ async function serveDashboardPage(req, res, dash) {
 //     it or whether it is talking straight to Home Assistant. It does not need a header to find
 //     out — this path exists only on the proxy, so a 200 here means the proxy is in the path and
 //     a 404 means it is not. That is the whole "is it running" question, answered by arriving.
-//   * A PANEL SEES ITSELF, NOT THE ESTATE. The reply describes the caller and nothing else. There
-//     is deliberately no way to ask about another address: this port is reachable by anything on
-//     the network, so every field here has to be something that network may read. That rules out
-//     the override rules, the allowlist contents, entity ids, Home Assistant user identities and
-//     any other client's address — none of which a panel needs to render its own status.
+//   * A PANEL SEES ITSELF, NOT THE ESTATE. The reply describes one address and nothing else. That
+//     address is clientIp(), which believes the leftmost X-Forwarded-For from ANY peer, so a
+//     caller holding a valid token can name another panel's address and read that panel's report.
+//     Keying on the peer instead would put every panel behind a reverse proxy onto the proxy's own
+//     address. So every field here has to be something any token holder on the network may read
+//     about any panel. That rules out the override rules, the allowlist contents, entity ids, Home
+//     Assistant user identities and any other client's address — none of which a panel needs to
+//     render its own status.
 function clientReport(ip) {
   const snap = stats.snapshot(statsExtras());
   const mine = (snap.clients?.list || []).filter((c) => c.ip === ip);
