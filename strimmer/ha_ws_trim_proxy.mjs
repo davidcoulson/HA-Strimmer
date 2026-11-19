@@ -174,10 +174,11 @@ const CLIENT_API_ALLOW = toList(OPT.client_api_allow ?? process.env.CLIENT_API_A
   .map((c) => ({ raw: c, cidr: parseCidr(c), ip: normalizeIp(c) }))
   .filter((r) => r.cidr || r.ip);
 
-// Which peers may tell us who the client is (X-Forwarded-For, X-Real-IP). Empty, every peer is
-// believed, which is how this always behaved, so an update changes nothing; but then any caller can
+// Which peers may tell us who the client is. Empty, every peer is believed (X-Forwarded-For, else
+// X-Real-IP), which is how this always behaved, so an update changes nothing; but then any caller can
 // name another address — another panel's, for /strimmer/client.json, or a client_overrides
-// subject's. Listed, only these peers are believed and everyone else is known by their own address.
+// subject's. Listed, only these peers' X-Forwarded-For is believed (never X-Real-IP, which a proxy
+// may pass through from the client) and everyone else is known by their own address.
 // As an add-on Supervisor's Ingress hop is added, since it is a proxy by construction.
 // An entry that cannot be used still counts as setting the list, so a typo fails CLOSED (forwarded
 // addresses ignored) rather than open; the boot log names it (see TRUSTED_PROXIES.invalid).

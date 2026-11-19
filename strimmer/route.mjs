@@ -126,7 +126,7 @@ function hostOf(headers) {
 }
 
 // `trusted(ip)` says whether an address is a proxy of ours. Omitted, every peer is believed, as
-// before the option existed. Given, forwarded headers count only from a trusted peer, and the
+// before the option existed. Given, only X-Forwarded-For counts, only from a trusted peer, and the
 // chain is walked from the RIGHT, skipping trusted hops, as Home Assistant itself does: the
 // leftmost entry is whatever the original caller typed, so it cannot be the one believed.
 export function classify(req, trusted) {
@@ -155,7 +155,9 @@ export function classify(req, trusted) {
   let ip = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
   if (trusted) {
     if (!hop || !trusted(hop)) ip = hop;
-    else ip = [...chain].reverse().find((a) => !trusted(a)) || ip;
+    // X-Forwarded-For only. X-Real-IP is one value with no chain, so a proxy that passes the
+    // client's own through unchanged would let the client name any address.
+    else ip = [...chain].reverse().find((a) => !trusted(a)) || chain[0] || hop;
   }
 
   return {

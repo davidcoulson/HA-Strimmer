@@ -296,8 +296,8 @@ configuration:
     name: Trusted reverse proxies
     description: >-
       Addresses or CIDRs (IPv4 or IPv6) of the reverse proxies in front of this app (Nginx Proxy Manager,
-      Caddy, cloudflared). Their X-Forwarded-For is believed; anyone else is known by their own
-      address, so a client cannot claim to be another panel. Empty (the default) believes every
+      Caddy, cloudflared). Their X-Forwarded-For is believed (X-Real-IP is then not used); anyone
+      else is known by their own address, so a client cannot claim to be another panel. Empty (the default) believes every
       caller, as before. List EVERY hop: one left out puts all of its clients onto its address.
   log_level:
     name: How much to log

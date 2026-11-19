@@ -156,8 +156,10 @@ describe('trusted_proxies', () => {
     assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }), trusted).ip, '74.1.2.3');
     assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 172.30.33.4' }), trusted).ip, '10.2.4.20',
       'trusted hops in the chain are skipped too');
-    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).ip, '10.2.4.20');
     assert.equal(classify(req({}), trusted).ip, '10.2.3.1', 'no header: the proxy itself');
+  });
+  it('does not take X-Real-IP even from a trusted proxy, which may have passed the client\'s through', () => {
+    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).ip, '10.2.3.1');
   });
   it('without a list, behaves as it always did', () => {
     assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }, '10.2.4.99')).ip, '10.2.4.20');
