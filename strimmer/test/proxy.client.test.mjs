@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { startMockHa, getFreePort, haClient } from './mock-ha.mjs';
+import WebSocket from 'ws';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
@@ -138,6 +139,26 @@ describe('clients that identify themselves', () => {
   });
 
   after(() => { proxy?.kill(); mock?.close(); });
+
+  // Before HA's auth_ok, nothing on the socket is authenticated, so an announcement there must not
+  // widen what this address is sent. Runs first: a learned satellite outlives the connection.
+  it('does not learn a satellite announced before Home Assistant accepted the auth', async () => {
+    const before = out.length;
+    const raw = new WebSocket(`ws://127.0.0.1:${port}/api/websocket`);
+    await new Promise((r) => raw.on('message', r));            // auth_required, and no auth sent
+    raw.send(JSON.stringify({ type: 'voice_satellite/subscribe_events', id: 1, entity_id: 'assist_satellite.office_panel' }));
+    await new Promise((r) => setTimeout(r, 400));
+    raw.terminate();
+    assert.doesNotMatch(out.slice(before), /announces assist_satellite|identified itself/);
+
+    const seq = mock.subscribeEntitiesSeq();
+    const c = haClient(`ws://127.0.0.1:${port}/api/websocket`);
+    await c.authed;
+    c.send({ type: 'subscribe_entities', id: 2 });
+    const ids = new Set((await mock.waitForSubscribeEntities(seq)) ?? []);
+    assert.ok(!ids.has('assist_satellite.office_panel'), 'an unauthenticated claim must not widen the allowlist');
+    c.close();
+  });
 
   it('learns a satellite from the client announcing it, and serves it on reconnect', async () => {
     // First connection: the panel announces itself. Its allowlist was already sent, so this

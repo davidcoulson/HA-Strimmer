@@ -4048,8 +4048,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // identity signal than an IP: it needs no mDNS — a web page cannot advertise it — no DHCP
     // reservation, and no configuration.
     //
-    // Strictly additive. It can only widen this client's allowlist, never narrow it.
-    if (trimming && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
+    // Strictly additive. It can only widen this client's allowlist, never narrow it. Only after
+    // HA's auth_ok: before it, nothing on this socket is authenticated, and HA itself closes a
+    // socket that sends anything but `auth` then, so a real satellite never announces earlier.
+    if (trimming && haAuthed && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
         && typeof m.entity_id === 'string' && m.entity_id.startsWith('assist_satellite.')) {
       const added = learnClientEntity(meta.ip, m.entity_id);
       // Log the announcement itself, not only the case where it changed something. A panel whose
@@ -4062,10 +4064,9 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // panels wrote ~8,600 identical lines a day, which with the rebuild reports beside them left
       // the Supervisor's log buffer holding about ten minutes of history.
       const announceMsg = `${meta.ip ?? '?'} announces ${m.entity_id}${added ? '' : ' (already covered)'}`;
-      // Keyed on the ADDRESS only, and still throttled underneath. This block runs before the auth
-      // gate — only `type: 'auth'` is intercepted above — so `m.entity_id` is unauthenticated
-      // client input. With it in the key, a socket sending a fresh id per frame got one unthrottled
-      // line per frame and, once SAID filled, defeated the cap as well. An address is bounded by
+      // Keyed on the ADDRESS only, and still throttled underneath. `m.entity_id` is client input:
+      // the socket is authenticated, but nothing proves the client IS that satellite. With it in
+      // the key, a socket sending a fresh id per frame got one unthrottled line per frame and, once SAID filled, defeated the cap as well. An address is bounded by
       // the network; a string off the wire is not.
       if (added || onceOnly(`selfid:${meta.ip}`)) log(announceMsg);
       else logThrottled(`selfid:${meta.ip}`, announceMsg, LEVELS.debug);
