@@ -120,6 +120,11 @@ test('without a key the switch is declared and readable, but its command is igno
     assert.deepEqual(commands, [], `nothing was paused (${JSON.stringify(wire)})`);
     assert.equal(lines.filter((m) => /ignored a switch command.*esphome_key/.test(m)).length, 1, 'and the log says why');
   }
+  // Before the allowlist is ready there are no values to settle on, and the refused command must
+  // still not be published as if it had taken effect.
+  const { dev } = await start({ noiseKey: '', snapshot: () => ({ allowlist: { ready: false } }) });
+  assert.equal(await dev.command('trim_pause', false), true, 'not ready: still springs back');
+  assert.equal(state(dev, 'trim_pause'), true, 'and Home Assistant is not told trimming paused');
 });
 
 test('the switch reports what actually took effect, not what was asked', async () => {

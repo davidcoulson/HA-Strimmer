@@ -139,9 +139,14 @@ export function createPublisher({ version, log = () => {}, onceOnly = () => true
       // and its state is worth reading either way — and a refused command springs back, as above.
       const authenticated = Boolean(noiseKey) && !allowPlaintext;
       const pause = onCommand
-        ? dev.switch({ id: 'trim_pause', name: 'Trimming (admins)', icon: 'mdi:content-cut', state: true }, async (on) => {
-          if (authenticated) await onCommand(on);
-          else if (onceOnly('esphome-switch-unauthenticated')) log('  ESPHome API: ignored a switch command, because esphome_key is not set — without it anyone on the network could send one');
+        ? dev.switch({ id: 'trim_pause', name: 'Trimming (admins)', icon: 'mdi:content-cut', state: true }, async (on, self) => {
+          if (!authenticated) {
+            if (onceOnly('esphome-switch-unauthenticated')) log('  ESPHome API: ignored a switch command, because esphome_key is not set — without it anyone on the network could send one');
+            // What it showed before, never what was asked: values() is null until the allowlist is
+            // ready, and falling through to `on` would publish a pause that never happened.
+            return self.state;
+          }
+          await onCommand(on);
           const v = values();
           return v ? v.admin_trimming === 'on' : on;
         })
