@@ -36,7 +36,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
-import { classify, normalizeIp, isPrivate } from './route.mjs';
+import { classify as classifyRoute, normalizeIp, isPrivate } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { certDaysLeft } from './metrics.mjs';
 import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
@@ -158,9 +158,11 @@ const isClientInfoPath = (url) => {
 //      remove them, so "came via Cloudflare" is reliable.
 //   2. The peer address. The TCP source cannot be forged, so a request arriving directly from a
 //      public address is reliably remote.
-//   3. The resolved client address, which comes from X-Forwarded-For. The LEFTMOST entry is
-//      whatever the original caller claimed, so a remote caller behind a reverse proxy that
-//      appends rather than replaces can assert a private address and look local.
+//   3. The resolved client address, which comes from X-Forwarded-For. With `trusted_proxies`
+//      empty the LEFTMOST entry is believed, and that is whatever the original caller claimed, so
+//      a remote caller behind a reverse proxy that appends rather than replaces can assert a
+//      private address and look local. With the list set, only a listed peer is believed and the
+//      chain is read from the right, which closes that.
 //
 // So this narrows who may TRY. The token is still the boundary, and the comment above the auth
 // block still holds. Anything else would be security theatre with a configuration page.
@@ -171,6 +173,17 @@ const CLIENT_API_ACCESS = (() => {
 const CLIENT_API_ALLOW = toList(OPT.client_api_allow ?? process.env.CLIENT_API_ALLOW)
   .map((c) => ({ raw: c, cidr: parseCidr(c), ip: normalizeIp(c) }))
   .filter((r) => r.cidr || r.ip);
+
+// Which peers may tell us who the client is (X-Forwarded-For, X-Real-IP). Empty, every peer is
+// believed, which is how this always behaved, so an update changes nothing; but then any caller can
+// name another address — another panel's, for /strimmer/client.json, or a client_overrides
+// subject's. Listed, only these peers are believed and everyone else is known by their own address.
+// As an add-on Supervisor's Ingress hop is added, since it is a proxy by construction.
+const TRUSTED_PROXIES = toList(OPT.trusted_proxies ?? process.env.TRUSTED_PROXIES)
+  .map((c) => parseCidr(c) || ((ip) => ip === normalizeIp(c)));
+if (TRUSTED_PROXIES.length && inAddon) TRUSTED_PROXIES.push((ip) => ip === '172.30.32.2');
+const isTrustedProxy = TRUSTED_PROXIES.length ? (ip) => TRUSTED_PROXIES.some((t) => t(ip)) : undefined;
+const classify = (req) => classifyRoute(req, isTrustedProxy);
 
 // Returns null when the request may proceed, or a reason to refuse it.
 function clientApiRefusal(req, rt) {
@@ -3435,11 +3448,12 @@ async function serveDashboardPage(req, res, dash) {
 //     out — this path exists only on the proxy, so a 200 here means the proxy is in the path and
 //     a 404 means it is not. That is the whole "is it running" question, answered by arriving.
 //   * A PANEL SEES ITSELF, NOT THE ESTATE. The reply describes one address and nothing else. That
-//     address is clientIp(), which believes the leftmost X-Forwarded-For from ANY peer, so a
-//     caller holding a valid token can name another panel's address and read that panel's report.
-//     Keying on the peer instead would put every panel behind a reverse proxy onto the proxy's own
-//     address. So every field here has to be something any token holder on the network may read
-//     about any panel. That rules out the override rules, the allowlist contents, entity ids, Home
+//     address is clientIp(). With `trusted_proxies` empty (the default) that believes the leftmost
+//     X-Forwarded-For from ANY peer, so a caller holding a valid token can name another panel's
+//     address and read that panel's report; set the list and only the named proxies are believed.
+//     Keying on the peer alone would put every panel behind a reverse proxy onto the proxy's own
+//     address. Since the default stays open, every field here has to be something any token
+//     holder on the network may read about any panel. That rules out the override rules, the allowlist contents, entity ids, Home
 //     Assistant user identities and any other client's address — none of which a panel needs to
 //     render its own status.
 function clientReport(ip) {

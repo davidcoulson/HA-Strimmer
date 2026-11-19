@@ -135,6 +135,7 @@ options:
   # arrived locally, and refuses internet and Cloudflare ones BEFORE checking the token.
   client_api_access: lan
   client_api_allow: []
+  trusted_proxies: []
   ha_base: ""
   ha_ca_file: ""
   allow_ws_url: ""
@@ -230,6 +231,8 @@ schema:
   stats_port: "int(1,65535)?"
   client_api_access: "list(lan|any|off)?"
   client_api_allow:
+    - str?
+  trusted_proxies:
     - str?
   ha_base: "str?"
   ha_ca_file: "str?"

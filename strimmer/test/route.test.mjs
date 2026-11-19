@@ -144,3 +144,22 @@ describe('classify: this data is spoofable', () => {
     assert.notEqual(forged.hop, forged.ip, 'the hop is the one signal worth trusting');
   });
 });
+
+describe('trusted_proxies', () => {
+  const trusted = (ip) => ip === '10.2.3.1' || ip.startsWith('172.30.');
+  it('believes nothing a peer that is not a proxy forwards', () => {
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20' }, '10.2.4.99'), trusted).ip, '10.2.4.99');
+    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }, '10.2.4.99'), trusted).ip, '10.2.4.99');
+  });
+  it('reads a trusted chain from the right, so a typed leftmost entry is not the client', () => {
+    // A caller typed 10.2.4.20; NPM (10.2.3.1) appended what it saw, 74.1.2.3.
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }), trusted).ip, '74.1.2.3');
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 172.30.33.4' }), trusted).ip, '10.2.4.20',
+      'trusted hops in the chain are skipped too');
+    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).ip, '10.2.4.20');
+    assert.equal(classify(req({}), trusted).ip, '10.2.3.1', 'no header: the proxy itself');
+  });
+  it('without a list, behaves as it always did', () => {
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }, '10.2.4.99')).ip, '10.2.4.20');
+  });
+});

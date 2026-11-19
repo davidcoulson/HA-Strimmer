@@ -28,9 +28,10 @@
 // present itself as a trusted LAN client arriving through the tunnel. Treating `origin` or
 // `route` as an allow/deny input would therefore turn a spoofable header into an
 // authorization decision — strictly worse than not having the field at all, because it reads
-// like a security control. Making it trustworthy needs a configured list of trusted hops, so
-// that forwarding headers are only believed from a peer known to be a real proxy. That does
-// not exist here, and until it does this module answers "what happened", never "who may".
+// like a security control. Making `ip` trustworthy needs a configured list of trusted hops, so
+// that forwarding headers are only believed from a peer known to be a real proxy: that is
+// `trusted` (the `trusted_proxies` option). Without one this module still answers "what
+// happened", never "who may"; `route`, `origin` and `hops` stay observational either way.
 
 const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
@@ -79,7 +80,11 @@ function hostOf(headers) {
   return s.replace(/:\d+$/, '').slice(0, 120) || null;
 }
 
-export function classify(req) {
+// `trusted(ip)` says whether an address is a proxy of ours. Omitted, every peer is believed, as
+// before the option existed. Given, forwarded headers count only from a trusted peer, and the
+// chain is walked from the RIGHT, skipping trusted hops, as Home Assistant itself does: the
+// leftmost entry is whatever the original caller typed, so it cannot be the one believed.
+export function classify(req, trusted) {
   const headers = req?.headers || {};
   const hop = normalizeIp(req?.socket?.remoteAddress);
   const chain = String(headers['x-forwarded-for'] || '')
@@ -102,7 +107,11 @@ export function classify(req) {
   // attribution (XFF first). `x-real-ip` is consulted before falling back to the peer because
   // a proxy that sets only that header would otherwise collapse ALL of its clients onto the
   // proxy's own address — one bucket, every device, silently.
-  const ip = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
+  let ip = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
+  if (trusted) {
+    if (!hop || !trusted(hop)) ip = hop;
+    else ip = [...chain].reverse().find((a) => !trusted(a)) || ip;
+  }
 
   return {
     ip,

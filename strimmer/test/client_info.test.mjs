@@ -18,9 +18,9 @@ const PROXY = path.join(DIR, '..', 'ha_ws_trim_proxy.mjs');
 
 // The endpoint authenticates with the caller's own Home Assistant token now — a panel already
 // has one, and this port is reachable by anything on the network.
-const get = (port, p, token = 'david-token') => new Promise((resolve, reject) => {
+const get = (port, p, token = 'david-token', extra = {}) => new Promise((resolve, reject) => {
   http.get({ host: '127.0.0.1', port, path: p,
-    headers: token ? { authorization: `Bearer ${token}` } : {} }, (res) => {
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...extra } }, (res) => {
     let b = ''; res.on('data', (c) => b += c);
     res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }));
   }).on('error', reject);
@@ -40,6 +40,8 @@ describe('the client info endpoint', () => {
         HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
         PORT: String(port), STATS_PORT: String(statsPort),
         STRIP_ENTITIES: '1', TRIM_THEMES: '1',
+        // A proxy that is not the test: loopback's own X-Forwarded-For must not be believed.
+        TRUSTED_PROXIES: '10.9.9.0/24',
         // Configuration that must NOT be echoed back to the network.
         USER_OVERRIDES: JSON.stringify([
           { user: 'David Coulson', always_forward: ['/^update\\./'] },
@@ -120,6 +122,15 @@ describe('the client info endpoint', () => {
     const d = JSON.parse(other.body);
     assert.notEqual(d.client.ip, '10.99.0.1', 'the subject must be the caller, not a parameter');
     assert.match(String(d.client.ip), /127\.0\.0\.1|::1/, 'the subject is whoever asked');
+  });
+
+  // Nor may a header. With trusted_proxies set, a peer that is not one of them is known by its own
+  // address, whatever X-Forwarded-For it sends.
+  it('does not believe X-Forwarded-For from a peer that is not a trusted proxy', async () => {
+    for (const h of [{ 'x-forwarded-for': '10.99.0.1' }, { 'x-real-ip': '10.99.0.1' }]) {
+      const d = JSON.parse((await get(port, '/strimmer/client.json', 'david-token', h)).body);
+      assert.match(String(d.client.ip), /^(127\.0\.0\.1|::1)$/, `${Object.keys(h)[0]} named another panel`);
+    }
   });
 
   it('reports zero connections honestly rather than pretending', async () => {

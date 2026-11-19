@@ -414,6 +414,14 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   build, every panel reconnecting at once — and read 114ms at 14s uptime while the rebuild's own
   worst was 55ms. The week-long "creep" from 46ms to 120ms was startup growing with the instance,
   not the proxy slowing. Do not read a since-boot figure as an operational one.
+- **`trusted_proxies` decides whose `X-Forwarded-For` is believed** (`classify(req, trusted)` in
+  `route.mjs`, wired as `classify` in the proxy). Empty (the default) believes every peer and reads
+  the LEFTMOST entry, exactly as before, so `/strimmer/client.json`, `noteClientDash` and
+  `client_overrides` all key on an address any caller can type. Set, an unlisted peer is known by
+  its own address and a listed one's chain is read from the right, skipping listed hops, as HA does.
+  Default left open on purpose: a hop missing from the list collapses all of its panels onto its
+  address, which breaks ha-paneld and Kiosk Satellite. A BOOTSTRAP key; Supervisor's Ingress hop is
+  added automatically as an add-on once the list is non-empty.
 - **Every socket the proxy opens to HA carries `X-Forwarded-*`** — bridge, identity probe
   (`resolveUser(token, fwd)`), and the `serveDashboardPage` fetch. HA's failed-login ban keys on
   the address it sees; a bare probe made a rejected token the PROXY's failed login.
