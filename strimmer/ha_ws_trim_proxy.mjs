@@ -4932,8 +4932,19 @@ const INGRESS_PEERS = new Set(
   (process.env.INGRESS_PEERS ? process.env.INGRESS_PEERS.split(',') : inAddon ? ['172.30.32.2'] : ['127.0.0.1', '::1'])
     .map((s) => s.trim()).filter(Boolean));
 
+// Standalone, a loopback peer must also be ADDRESSED as loopback. The peer check alone cannot tell
+// the operator from a web page in the operator's browser: a page that rebinds its own name to
+// 127.0.0.1 is same-origin with this port, so it may set any header and read every answer — but
+// the browser still sends the page's name in Host. Not applied as an add-on (Supervisor is the
+// peer, and no browser is). Not applied to an explicit INGRESS_PEERS either: whoever set it named
+// the peers that speak for Ingress, and what Host those send is theirs to know, not ours — a
+// remote peer never says "localhost", so checking would make the override useless.
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+const INGRESS_NEEDS_LOOPBACK_HOST = !inAddon && !process.env.INGRESS_PEERS;
+
 function viaIngress(req) {
   if (!req.headers['x-ingress-path']) return false;
+  if (INGRESS_NEEDS_LOOPBACK_HOST && !LOOPBACK_HOST.test(req.headers.host || '')) return false;
   return INGRESS_PEERS.has(normalizeIp(req.socket?.remoteAddress) || '');
 }
 

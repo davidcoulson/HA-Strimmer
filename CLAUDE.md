@@ -422,6 +422,10 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   (Home Assistant, Node-RED, the SSH add-on…): any of them could forge `X-Ingress-Path` and pause
   anyone or rewrite the console config. Found in review 2026-10-02. Note ha-mcp's "Ingress" proxy
   mode connects directly from the host, so it gets the redacted, read-only view now.
+  Standalone, the loopback peer must also send a loopback `Host` (`localhost`, `127.0.0.1`,
+  `[::1]`): a DNS-rebinding page in the operator's browser is a loopback peer too, and Host is the
+  one thing it cannot forge. An explicit `INGRESS_PEERS` skips that check, since a remote peer
+  never says "localhost".
 - **`serveDashboardPage` takes the HOST from `HA_BASE` only** and the request supplies path and
   query. `new URL(req.url, HA_BASE)` let `GET //<dashboard-name>/…` resolve as protocol-relative
   and fetch from a host named like a dashboard (CodeQL `js/request-forgery`, 2026-10-02). Any new

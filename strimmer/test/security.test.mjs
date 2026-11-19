@@ -68,6 +68,21 @@ describe('what the network may read', () => {
     }
   });
 
+  // DNS rebinding: a page in the operator's browser whose name resolves to 127.0.0.1 arrives from
+  // loopback and may send any header, but the browser puts the PAGE's name in Host.
+  it('standalone, loopback speaks for Ingress only when Host names loopback', async () => {
+    const as = (host) => ({ headers: { ...ING, host } });
+    for (const host of ['rebound.attacker.example', `rebound.attacker.example:${sp}`, `localhost.attacker.example:${sp}`]) {
+      assert.equal((await req(sp, '/access.json', as(host))).status, 403, `Host ${host} is not this machine`);
+      assert.deepEqual(JSON.parse((await req(sp, '/stats.json', as(host))).body).viewer, { ingress: false, admin: false });
+      const write = await req(sp, '/config', { method: 'POST', headers: { ...ING, host, 'content-type': 'application/json' } });
+      assert.equal(write.status, 403, `and ${host} must not write the configuration`);
+    }
+    for (const host of [`localhost:${sp}`, `127.0.0.1:${sp}`, `[::1]:${sp}`, 'LOCALHOST']) {
+      assert.equal((await req(sp, '/access.json', as(host))).status, 200, `Host ${host} is loopback`);
+    }
+  });
+
   it('diagnostics is a download, lists the allowlist per dashboard and carries no credentials', async () => {
     const res = await req(sp, '/diagnostics.json', { headers: ING });
     assert.match(res.headers['content-disposition'], /attachment/);
