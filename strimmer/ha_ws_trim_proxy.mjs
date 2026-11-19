@@ -579,7 +579,7 @@ const ESPHOME_API = OPT.esphome_api !== undefined
   : String(process.env.ESPHOME_API ?? '0') !== '0';
 const ESPHOME_PORT = parseInt(OPT.esphome_port ?? process.env.ESPHOME_PORT ?? '6053', 10) || 6053;
 const ESPHOME_KEY = String(OPT.esphome_key ?? process.env.ESPHOME_KEY ?? '').trim();
-const esphomeSensors = createEsphomePublisher({ version: VERSION, log: (...a) => log(...a) });
+const esphomeSensors = createEsphomePublisher({ version: VERSION, log: (...a) => log(...a), onceOnly: (k) => onceOnly(k) });
 // Counted for the rebuilds sensor: a steadily climbing number is the rebuild storm this add-on
 // has already had once, and it is invisible in any single snapshot.
 let REBUILD_COUNT = 0;

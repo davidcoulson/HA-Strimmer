@@ -349,7 +349,7 @@ it; the two ran side by side long enough to compare, and MQTT was removed. An ex
 |---|---|
 | `esphome_api` | Off by default. On, the add-on listens for Home Assistant's ESPHome integration |
 | `esphome_port` | Default `6053`. The add-on runs with host networking, so this is the **host's** port — move it if something else there already listens |
-| `esphome_key` | Noise pre-shared key, base64 and 32 bytes, the same format as `api: encryption: key:` in an ESPHome device. Make one with `openssl rand -base64 32`. Empty means an unencrypted connection, which is acceptable only on a network you trust |
+| `esphome_key` | Noise pre-shared key, base64 and 32 bytes, the same format as `api: encryption: key:` in an ESPHome device. Make one with `openssl rand -base64 32`. Empty means an unencrypted connection, which is acceptable only on a network you trust; the sensors still publish, but the **Trimming (admins)** switch is read-only, because without a key anyone on the network could flip it |
 
 Add it in **Settings → Devices & services → Add integration → ESPHome** with this host and port, or
 accept the discovered device — the add-on advertises `_esphomelib._tcp` over mDNS. Entity ids are

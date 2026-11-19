@@ -30,11 +30,11 @@ const READY = {
 // Start a publisher on a FakeDevice and hand back both. The subclass only captures the instance
 // the publisher constructs, so the test can inspect it.
 async function start({ snapshot = () => READY, extras = () => ({ rebuilds: 7, certDaysLeft: 61, trimming: true }),
-  onCommand = () => {}, noiseKey = 'aGVsbG8gdGhlcmUgdGhpcyBpcyAzMiBieXRlcyEh' } = {}) {
+  onCommand = () => {}, noiseKey = 'aGVsbG8gdGhlcmUgdGhpcyBpcyAzMiBieXRlcyEh', allowPlaintext, log } = {}) {
   let dev;
   class Captured extends FakeDevice { constructor(o) { super(o); dev = this; } }
-  const pub = createPublisher({ version: '2026.09.25.9', DeviceClass: Captured, intervalMs: 1e9 });
-  await pub.start({ snapshot, extras, onCommand, port: 6053, noiseKey });
+  const pub = createPublisher({ version: '2026.09.25.9', DeviceClass: Captured, intervalMs: 1e9, log });
+  await pub.start({ snapshot, extras, onCommand, port: 6053, noiseKey, allowPlaintext });
   return { pub, dev };
 }
 const state = (dev, id) => dev.entities.get(id).state;
@@ -106,6 +106,20 @@ test('push() publishes at once — the first values after a restart do not wait 
   ready = true;
   pub.push();
   assert.equal(state(dev, 'clients_connected'), 3, 'the allowlist became ready and the values went out');
+});
+
+// With no key the API is plaintext and unauthenticated: anything on the network can connect and
+// send a switch command, and this switch pauses trimming for every administrator.
+test('without a key the switch is declared and readable, but its command is ignored', async () => {
+  for (const wire of [{ noiseKey: '' }, { allowPlaintext: true }]) {
+    const commands = [], lines = [];
+    const { dev } = await start({ ...wire, onCommand: (on) => commands.push(on), log: (m) => lines.push(m) });
+    assert.ok(dev.entities.has('trim_pause'), 'same entity, same id: nothing to orphan in Home Assistant');
+    assert.equal(state(dev, 'trim_pause'), true, 'and it still shows the state');
+    assert.equal(await dev.command('trim_pause', false), true, 'the toggle springs back');
+    assert.deepEqual(commands, [], `nothing was paused (${JSON.stringify(wire)})`);
+    assert.equal(lines.filter((m) => /ignored a switch command.*esphome_key/.test(m)).length, 1, 'and the log says why');
+  }
 });
 
 test('the switch reports what actually took effect, not what was asked', async () => {
