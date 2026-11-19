@@ -3161,7 +3161,7 @@ const WANTS = new Map();
 const WANTS_MAX = 200;
 const WANTS_TTL_MS = 86400000;
 // Globs, not regexes: these come from any logged-in user's browser, and a regex from the wire is a
-// ReDoS waiting to happen. `*` is the only wildcard, at most three of them, and at least one real
+// ReDoS waiting to happen. `*` is the only wildcard, at most two of them, and at least one real
 // character besides, so `*` alone cannot ask for everything.
 const WANT_RE = /^[a-z0-9_.*]{1,200}$/;
 function parseWants(list) {
@@ -3170,9 +3170,9 @@ function parseWants(list) {
   for (const p of list.slice(0, 50)) {
     if (typeof p !== 'string' || !WANT_RE.test(p)) continue;
     const stars = (p.match(/\*/g) || []).length;
-    if (stars > 3 || !/[a-z0-9_]/.test(p)) continue;
+    if (stars > 2 || !/[a-z0-9_]/.test(p) || out.some((r) => (r.literal ?? r.glob) === p)) continue;
     if (!stars) { if (ENTITY_ID_RE.test(p)) out.push({ literal: p }); continue; }
-    out.push({ re: new RegExp(`^${p.replace(/\./g, '\\.').replace(/\*/g, '.*')}$`) });
+    out.push({ glob: p, re: new RegExp(`^${p.replace(/\./g, '\\.').replace(/\*/g, '.*')}$`) });
   }
   return out;
 }
@@ -3182,12 +3182,20 @@ function wantsFor(user) {
   if (hit && Date.now() - hit.at > WANTS_TTL_MS) { WANTS.delete(key); return null; }
   return hit ? hit.rules : null;
 }
+// Returns the rules actually held. A full list takes nothing new rather than evicting: two pages
+// evicting each other's patterns would reconnect each other forever.
 function addWants(user, rules) {
   if (WANTS.size >= WANTS_MAX && !WANTS.has(user.id)) boundByAge(WANTS, WANTS_TTL_MS, WANTS_MAX - 1);
-  const have = WANTS.get(user.id)?.rules ?? [];
-  const key = (r) => r.literal ?? String(r.re);
-  const merged = [...have, ...rules.filter((r) => !have.some((h) => key(h) === key(r)))].slice(-50);
+  const have = wantsFor(user) ?? [];
+  const key = (r) => r.literal ?? r.glob;
+  const merged = [...have, ...rules.filter((r) => !have.some((h) => key(h) === key(r)))].slice(0, 50);
   WANTS.set(user.id, { rules: merged, at: Date.now() });
+  return rules.filter((r) => merged.some((h) => key(h) === key(r)));
+}
+// Whether any ask is still live; expired ones must not keep every connection gated.
+function wantsHeld() {
+  if (WANTS.size) boundByAge(WANTS, WANTS_TTL_MS, WANTS_MAX);
+  return WANTS.size > 0;
 }
 
 const clientDash = new Map();                 // ip -> { path, at }
@@ -3727,6 +3735,8 @@ server.on('upgrade', (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (browserWs) => bridge(browserWs, set, dash, {
       ip: rt.ip, via, ua: req.headers['user-agent'], clientPinned: pinned, fwd: forwardHeadersFor(req),
       resRules: resRulesOf(connRules),
+      // Every never list this connection is under, so a page's strimmer/want cannot undo one.
+      never: [...NEVER, ...((dash && PER_DASH_RULES.get(dash)?.never) || []), ...(connRules?.never ?? [])],
       device: device ? { kind: device[0].kind, name: device[0].name, version: device[0].version } : null,
       origin: rt.origin, route: rt.route, host: rt.host, hop: rt.hop, hops: rt.hops,
     }));
@@ -3807,6 +3817,8 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
   // The user lookup started by the auth message, for strimmer/want; and the user rules' never list.
   let userP = null;
   let userNever = [];
+  let wantCount = 0;
+  const wantNever = () => meta.never ?? NEVER;
   let learnedKick = false;   // only ever drop a connection once for a newly-learned identity
   // Resource rules for THIS connection: the client-matched ones from the upgrade, joined by the
   // user-matched ones once identity resolves. Consulted when its lovelace/resources reply is
@@ -3967,14 +3979,17 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // A page asking for entities. Answered here and never forwarded: Home Assistant does not know
     // the command, and the answer depends on who is asking, which only the token says.
     if (m && m.type === 'strimmer/want' && m.id != null) {
-      const reply = (o) => { try { browserWs.send(JSON.stringify({ id: m.id, type: 'result', ...o })); } catch {} };
-      if (!userP) { reply({ success: false, error: { code: 'unauthorized', message: 'authenticate first' } }); return; }
+      // Replies are written here, not by HA, so they get the same limits HA's would: nothing before
+      // auth, a few per connection, and the backpressure check after each.
+      if (!userP) return;
+      if (++wantCount > 20) return dropClient('sent more than 20 strimmer/want');
+      const reply = (o) => { try { browserWs.send(JSON.stringify({ id: m.id, type: 'result', ...o })); bpCheck(); } catch {} };
       const rules = parseWants(m.entity_ids);
       userP.then((user) => {
-        if (!user?.id) return reply({ success: false, error: { code: 'unauthorized', message: 'unknown user' } });
-        if (!rules.length) return reply({ success: true, result: { strimmer: true, added: 0 } });
-        addWants(user, rules);
-        const wider = applyUserRules(allow, { always: rules, never: [...NEVER, ...userNever] });
+        // haAuthed: a cached identity resolves before HA has accepted (or refused) the token.
+        if (!user?.id || !haAuthed) return reply({ success: false, error: { code: 'unauthorized', message: 'not authenticated' } });
+        const held = rules.length ? addWants(user, rules) : [];
+        const wider = applyUserRules(allow, { always: held, never: [...wantNever(), ...userNever] });
         const added = trimming ? [...wider].filter((id) => !allow.has(id)).length : 0;
         reply({ success: true, result: { strimmer: true, added } });
         if (!added) return;
@@ -3985,7 +4000,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       }).catch(() => reply({ success: false, error: { code: 'unknown_error', message: 'user lookup failed' } }));
       return;
     }
-    if ((userRulesCouldApply(dash) || anyPauseActive(PAUSES) || WANTS.size > 0) && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
+    if ((userRulesCouldApply(dash) || anyPauseActive(PAUSES) || wantsHeld()) && m && m.type === 'auth' && m.access_token && gateQueue === null && !userChecked) {
       userChecked = true;
       toHA(s);
       gateQueue = [];
@@ -4022,7 +4037,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
         if (extra) userNever = extra.never;
         const want = wantsFor(user);
         if (want) {
-          allow = applyUserRules(allow, { always: want, never: [...NEVER, ...userNever] });
+          allow = applyUserRules(allow, { always: want, never: [...wantNever(), ...userNever] });
           allowSigReset();
         }
         // The pause, if this user has one. Checked HERE rather than at the upgrade because the
@@ -4052,7 +4067,7 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // Resolve it for reporting only: no gate, no queue, nothing waits. The answer arrives when it
     // arrives and updates the row in place, so this cannot add a millisecond to a page load.
     // Cached per token like the gated path, so a panel that reconnects hourly asks HA once.
-    if (!userChecked && m && m.type === 'auth' && m.access_token && !userRulesCouldApply(dash) && !anyPauseActive(PAUSES) && !WANTS.size) {
+    if (!userChecked && m && m.type === 'auth' && m.access_token && !userRulesCouldApply(dash) && !anyPauseActive(PAUSES) && !wantsHeld()) {
       userChecked = true;
       (userP = resolveUser(m.access_token, meta.fwd))
         .then((user) => {

@@ -453,7 +453,7 @@ hass.connection.sendMessage({ type: 'strimmer/want', entity_ids: ['*_sextant_*',
   .catch(() => {});   // Home Assistant without Strimmer answers unknown_command
 ```
 
-Strimmer answers it itself (`{strimmer: true, added: n}`) and never forwards it. The ids are entity ids or globs with `*` (at most three; regexes are not accepted, since any signed-in user can send this). They are added for **that user's** connections only, for a day from the last ask, and never past `never_forward` or the user's own never lists. When the ask adds anything, Strimmer drops the connection once so the page reconnects with the wider set, the same way a voice satellite naming itself does. Asks are kept in memory, so a page should send it on every connection; a repeat that adds nothing changes nothing. While any ask is held, every connection waits for its user lookup, as with a pause.
+Strimmer answers it itself (`{strimmer: true, added: n}`) and never forwards it. The ids are entity ids or globs with `*` (at most two; regexes are not accepted, since any signed-in user can send this). They are added for **that user's** connections only, for a day from the last ask, and never past `never_forward` or the user's own never lists. When the ask adds anything, Strimmer drops the connection once so the page reconnects with the wider set, the same way a voice satellite naming itself does. Asks are kept in memory, so a page should send it on every connection; a repeat that adds nothing changes nothing. While any ask is held, every connection waits for its user lookup, as with a pause.
 
 ## Notes & limits
 
