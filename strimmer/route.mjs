@@ -33,6 +33,8 @@
 // `trusted` (the `trusted_proxies` option). Without one this module still answers "what
 // happened", never "who may"; `route`, `origin` and `hops` stay observational either way.
 
+import { BlockList } from 'node:net';
+
 const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
 // Node reports dual-stack peers as IPv4-mapped IPv6 (::ffff:10.2.3.42), proxies sometimes
@@ -63,6 +65,33 @@ export function parseCidr(s) {
   const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
   const net = (toInt(m[1]) & mask) >>> 0;
   return (ip) => isV4(ip) && ((toInt(ip) & mask) >>> 0) === net;
+}
+
+// The trusted_proxies test. net.BlockList rather than parseCidr: it range-checks every octet,
+// compares IPv6 by value (2001:db8:0:0:0:0:0:1 is 2001:db8::1), and takes IPv6 subnets. An entry it
+// cannot use is returned in `invalid` so the caller can say so; silently, a typo became a rule that
+// never matched.
+const familyOf = (ip) => (ip.includes(':') ? 'ipv6' : 'ipv4');
+export function trustList(entries) {
+  const list = new BlockList();
+  const used = [], invalid = [];
+  for (const raw of entries) {
+    const s = String(raw ?? '').trim();
+    if (!s) continue;
+    const [addr, bits, ...rest] = s.split('/');
+    const a = normalizeIp(addr);
+    try {
+      if (rest.length || (bits !== undefined && !/^\d{1,3}$/.test(bits))) throw new Error('bad prefix');
+      if (bits === undefined) list.addAddress(a, familyOf(a));
+      else list.addSubnet(a, Number(bits), familyOf(a));
+      used.push(s);
+    } catch { invalid.push(s); }
+  }
+  const check = (ip) => {
+    const a = normalizeIp(ip);
+    try { return Boolean(a) && list.check(a, familyOf(a)); } catch { return false; }
+  };
+  return { check, used, invalid };
 }
 
 // RFC1918 and friends. Deliberately includes loopback and Docker's own ranges: a connection

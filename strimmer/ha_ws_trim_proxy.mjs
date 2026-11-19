@@ -36,7 +36,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
-import { classify as classifyRoute, normalizeIp, isPrivate, parseCidr } from './route.mjs';
+import { classify as classifyRoute, normalizeIp, isPrivate, parseCidr, trustList } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { certDaysLeft } from './metrics.mjs';
 import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
@@ -179,10 +179,12 @@ const CLIENT_API_ALLOW = toList(OPT.client_api_allow ?? process.env.CLIENT_API_A
 // name another address — another panel's, for /strimmer/client.json, or a client_overrides
 // subject's. Listed, only these peers are believed and everyone else is known by their own address.
 // As an add-on Supervisor's Ingress hop is added, since it is a proxy by construction.
-const TRUSTED_PROXIES = toList(OPT.trusted_proxies ?? process.env.TRUSTED_PROXIES)
-  .map((c) => parseCidr(c) || ((ip) => ip === normalizeIp(c)));
-if (TRUSTED_PROXIES.length && inAddon) TRUSTED_PROXIES.push((ip) => ip === '172.30.32.2');
-const isTrustedProxy = TRUSTED_PROXIES.length ? (ip) => TRUSTED_PROXIES.some((t) => t(ip)) : undefined;
+// An entry that cannot be used still counts as setting the list, so a typo fails CLOSED (forwarded
+// addresses ignored) rather than open; the boot log names it (see TRUSTED_PROXIES.invalid).
+const TRUSTED_PROXY_ENTRIES = toList(OPT.trusted_proxies ?? process.env.TRUSTED_PROXIES).map((s) => s.trim()).filter(Boolean);
+const TRUSTED_PROXIES = trustList(TRUSTED_PROXY_ENTRIES.length && inAddon
+  ? [...TRUSTED_PROXY_ENTRIES, '172.30.32.2'] : TRUSTED_PROXY_ENTRIES);
+const isTrustedProxy = TRUSTED_PROXY_ENTRIES.length ? TRUSTED_PROXIES.check : undefined;
 const classify = (req) => classifyRoute(req, isTrustedProxy);
 
 // Returns null when the request may proceed, or a reason to refuse it.
@@ -5514,6 +5516,11 @@ for (const m of CONFIG_WARNINGS) warn(`  config: ${m}`);
   }
 }
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
+if (isTrustedProxy) {
+  log(`trusted_proxies: X-Forwarded-For is believed only from ${TRUSTED_PROXIES.used.join(', ') || 'nothing'}`);
+  for (const bad of TRUSTED_PROXIES.invalid) warn(`trusted_proxies: "${bad}" is not an address or CIDR, and is ignored`);
+  if (!TRUSTED_PROXIES.used.length) warn('trusted_proxies: no usable entry, so every forwarded address is ignored and each client is known by its peer address');
+}
 // One line for the whole rule set, because 'my override does nothing' is the commonest
 // complaint and the first thing worth knowing is whether it was parsed at all.
 // Before anything can ask for a user: a restart should not make every session pay again.

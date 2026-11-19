@@ -41,7 +41,7 @@ describe('the client info endpoint', () => {
         PORT: String(port), STATS_PORT: String(statsPort),
         STRIP_ENTITIES: '1', TRIM_THEMES: '1',
         // A proxy that is not the test: loopback's own X-Forwarded-For must not be believed.
-        TRUSTED_PROXIES: '10.9.9.0/24',
+        TRUSTED_PROXIES: '10.9.9.0/24,npm.lan',
         // Configuration that must NOT be echoed back to the network.
         USER_OVERRIDES: JSON.stringify([
           { user: 'David Coulson', always_forward: ['/^update\\./'] },
@@ -126,6 +126,11 @@ describe('the client info endpoint', () => {
 
   // Nor may a header. With trusted_proxies set, a peer that is not one of them is known by its own
   // address, whatever X-Forwarded-For it sends.
+  it('names, at boot, a trusted_proxies entry it cannot use', () => {
+    assert.match(out, /trusted_proxies: "npm\.lan" is not an address or CIDR/);
+    assert.match(out, /believed only from 10\.9\.9\.0\/24/);
+  });
+
   it('does not believe X-Forwarded-For from a peer that is not a trusted proxy', async () => {
     for (const h of [{ 'x-forwarded-for': '10.99.0.1' }, { 'x-real-ip': '10.99.0.1' }]) {
       const d = JSON.parse((await get(port, '/strimmer/client.json', 'david-token', h)).body);

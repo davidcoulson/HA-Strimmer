@@ -6,7 +6,7 @@
 // reverse proxy, through Cloudflare, and the hairpin case that looks like a bug.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, normalizeIp, isPrivate, parseCidr } from '../route.mjs';
+import { classify, normalizeIp, isPrivate, parseCidr, trustList } from '../route.mjs';
 
 const req = (headers = {}, remoteAddress = '10.2.3.1') => ({ headers, socket: { remoteAddress } });
 
@@ -169,5 +169,19 @@ describe('parseCidr', () => {
     assert.equal(parseCidr('10.0.256.0/24'), null);
     assert.equal(parseCidr('10.0.0.0/24')('10.0.0.300'), false);
     assert.equal(parseCidr('10.0.0.0/16')('10.0.255.1'), true);
+  });
+});
+
+describe('trustList', () => {
+  it('compares addresses by value, takes IPv6 subnets, and reports what it could not use', () => {
+    const t = trustList(['2001:db8:0:0:0:0:0:1', 'fd00::/8', '10.9.9.0/24', '::ffff:10.2.3.1',
+      'npm.lan', '10.0.256.0/24', '10.9.9.0/33', '10.9.9.0/24/1', '']);
+    assert.equal(t.check('2001:db8::1'), true, 'two spellings of one address');
+    assert.equal(t.check('fd12::5'), true);
+    assert.equal(t.check('::ffff:10.9.9.4'), true, 'a peer arrives either way');
+    assert.equal(t.check('10.2.3.1'), true);
+    assert.equal(t.check('10.1.0.5'), false);
+    assert.equal(t.check('unknown'), false, 'junk in a header is not trusted');
+    assert.deepEqual(t.invalid, ['npm.lan', '10.0.256.0/24', '10.9.9.0/33', '10.9.9.0/24/1']);
   });
 });
