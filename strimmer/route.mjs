@@ -152,7 +152,8 @@ export function classify(req, trusted) {
   // attribution (XFF first). `x-real-ip` is consulted before falling back to the peer because
   // a proxy that sets only that header would otherwise collapse ALL of its clients onto the
   // proxy's own address — one bucket, every device, silently.
-  let ip = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
+  const claim = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
+  let ip = claim;
   if (trusted) {
     if (!hop || !trusted(hop)) ip = hop;
     // X-Forwarded-For only. X-Real-IP is one value with no chain, so a proxy that passes the
@@ -165,7 +166,11 @@ export function classify(req, trusted) {
     hop: hop || null,
     host: hostOf(headers),
     route: viaCf ? 'cloudflare' : viaIngress ? 'ingress' : forwarded ? 'proxy' : 'direct',
-    origin: ip ? (isPrivate(ip) ? 'lan' : 'internet') : null,
+    // From the believed address AND what the headers claimed. `ip` is for attribution; an ignored
+    // header must not make a request look MORE local than it says it is, or an internet request
+    // through a LAN proxy missing from trusted_proxies passes the `lan` gate on client.json. With
+    // no list, claim is ip and this is what it always was.
+    origin: ip ? (isPrivate(ip) && isPrivate(claim) ? 'lan' : 'internet') : null,
     // The full chain, but only when it says more than `ip` already does — one entry is just
     // the client repeated, and a table column that is always redundant trains you to skip it.
     hops: chain.length > 1 ? chain : null,

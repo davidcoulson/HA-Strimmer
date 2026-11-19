@@ -131,6 +131,15 @@ describe('the client info endpoint', () => {
     assert.match(out, /believed only from 10\.9\.9\.0\/24/);
   });
 
+  // Loopback here is a LAN reverse proxy someone left off the list. Its clients are attributed to
+  // it, but one it says came from the internet is still refused before the token is looked at.
+  it('still refuses, in lan mode, an untrusted peer forwarding a public address', async () => {
+    for (const h of [{ 'x-forwarded-for': '74.1.2.3' }, { 'x-real-ip': '74.1.2.3' }]) {
+      const res = await get(port, '/strimmer/client.json', 'david-token', h);
+      assert.equal(res.status, 403, `${Object.keys(h)[0]} claimed the internet`);
+    }
+  });
+
   it('does not believe X-Forwarded-For from a peer that is not a trusted proxy', async () => {
     for (const h of [{ 'x-forwarded-for': '10.99.0.1' }, { 'x-real-ip': '10.99.0.1' }]) {
       const d = JSON.parse((await get(port, '/strimmer/client.json', 'david-token', h)).body);
