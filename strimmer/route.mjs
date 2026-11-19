@@ -154,18 +154,19 @@ export function classify(req, trusted) {
   // proxy's own address — one bucket, every device, silently.
   let ip = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
   let local = isPrivate(ip);
+  const realIp = normalizeIp(headers['x-real-ip']);
   if (trusted && (!hop || !trusted(hop))) {
     ip = hop;
     // `ip` is for attribution. An ignored header must not make a request look MORE local than it
     // says: through a LAN proxy missing from the list, an internet caller arrives as `<typed>,
     // <its real address>`, so every entry is checked, not just the leftmost the caller wrote.
-    const realIp = normalizeIp(headers['x-real-ip']);
     local = isPrivate(hop) && chain.every(isPrivate) && (!realIp || isPrivate(realIp));
   } else if (trusted) {
     // X-Forwarded-For only. X-Real-IP is one value with no chain, so a proxy that passes the
     // client's own through unchanged would let the client name any address.
     ip = [...chain].reverse().find((a) => !trusted(a)) || chain[0] || hop;
-    local = isPrivate(ip);
+    // With no chain `ip` is the proxy itself, and a public X-Real-IP beside it still says internet.
+    local = isPrivate(ip) && (chain.length > 0 || !realIp || isPrivate(realIp));
   }
 
   return {

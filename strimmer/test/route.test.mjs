@@ -167,6 +167,12 @@ describe('trusted_proxies', () => {
   it('does not take X-Real-IP even from a trusted proxy, which may have passed the client\'s through', () => {
     assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).ip, '10.2.3.1');
   });
+  it('a listed proxy sending only a public X-Real-IP is still the internet, though the address is its own', () => {
+    const r = classify(req({ 'x-real-ip': '74.1.2.3' }), trusted);
+    assert.equal(r.ip, '10.2.3.1', 'X-Real-IP is still not believed as the client');
+    assert.equal(r.origin, 'internet');
+    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).origin, 'lan');
+  });
   it('without a list, behaves as it always did', () => {
     assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }, '10.2.4.99')).ip, '10.2.4.20');
   });
