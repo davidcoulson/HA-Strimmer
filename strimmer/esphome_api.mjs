@@ -54,7 +54,7 @@ export function pickAdvertiseAddress(ifaces = os.networkInterfaces()) {
   return best ? best.ip : null;
 }
 
-export function createPublisher({ version, log = () => {}, intervalMs = 60000, DeviceClass = Device } = {}) {
+export function createPublisher({ version, log = () => {}, onceOnly = () => true, intervalMs = 60000, DeviceClass = Device } = {}) {
   let dev = null;
   let timer = null;
   let entities = null;
@@ -132,8 +132,20 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000, D
       // The one control. Its handler returns what ACTUALLY took effect rather than what was
       // asked for: the toggle in Home Assistant then settles on the truth instead of springing
       // back a moment later, and a refused or clamped command shows as refused.
+      //
+      // Without a key the API is plaintext and takes commands from anything that can reach the
+      // port, so the command is ignored: this switch pauses trimming for every administrator.
+      // It is still DECLARED — dropping it would leave the entity unavailable in Home Assistant,
+      // and its state is worth reading either way — and a refused command springs back, as above.
+      const authenticated = Boolean(noiseKey) && !allowPlaintext;
       const pause = onCommand
-        ? dev.switch({ id: 'trim_pause', name: 'Trimming (admins)', icon: 'mdi:content-cut', state: true }, async (on) => {
+        ? dev.switch({ id: 'trim_pause', name: 'Trimming (admins)', icon: 'mdi:content-cut', state: true }, async (on, self) => {
+          if (!authenticated) {
+            if (onceOnly('esphome-switch-unauthenticated')) log('  ESPHome API: ignored a switch command, because esphome_key is not set — without it anyone on the network could send one');
+            // What it showed before, never what was asked: values() is null until the allowlist is
+            // ready, and falling through to `on` would publish a pause that never happened.
+            return self.state;
+          }
           await onCommand(on);
           const v = values();
           return v ? v.admin_trimming === 'on' : on;
@@ -144,7 +156,7 @@ export function createPublisher({ version, log = () => {}, intervalMs = 60000, D
       await dev.start();
       log(`  ESPHome API: ${sensors.size} sensors, ${binary.size} binary sensor`
         + `${pause ? ' and 1 switch' : ''} on port ${dev.port}`
-        + `${noiseKey ? ' (encrypted)' : ' (PLAINTEXT — set esphome_key)'}`
+        + `${noiseKey ? ' (encrypted)' : ' (PLAINTEXT — set esphome_key; the switch is read-only until then)'}`
         + `${mdns === false ? '' : advertise ? `, advertised at ${advertise}` : ', advertised on every address'}`);
       publish();
       timer = setInterval(publish, intervalMs);

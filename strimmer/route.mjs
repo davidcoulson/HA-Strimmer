@@ -28,9 +28,12 @@
 // present itself as a trusted LAN client arriving through the tunnel. Treating `origin` or
 // `route` as an allow/deny input would therefore turn a spoofable header into an
 // authorization decision — strictly worse than not having the field at all, because it reads
-// like a security control. Making it trustworthy needs a configured list of trusted hops, so
-// that forwarding headers are only believed from a peer known to be a real proxy. That does
-// not exist here, and until it does this module answers "what happened", never "who may".
+// like a security control. Making `ip` trustworthy needs a configured list of trusted hops, so
+// that forwarding headers are only believed from a peer known to be a real proxy: that is
+// `trusted` (the `trusted_proxies` option). Without one this module still answers "what
+// happened", never "who may"; `route`, `origin` and `hops` stay observational either way.
+
+import { BlockList } from 'node:net';
 
 const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
@@ -46,6 +49,49 @@ export function normalizeIp(value) {
   const withPort = s.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$/);
   if (withPort) s = withPort[1];                           // 10.2.3.42:51234 -> 10.2.3.42
   return s.toLowerCase();
+}
+
+// Parse "10.2.4.0/24" into a test. IPv4 only on purpose: a CIDR here exists to name a VLAN of
+// wall panels, and anything needing IPv6 subtleties is better served by listing addresses.
+// Octets are range-checked on both sides: unchecked, `10.0.256.0/24` carried into the next octet
+// and matched 10.1.0.x.
+const isV4 = (ip) => IPV4.test(ip) && ip.split('.').every((o) => Number(o) <= 255);
+export function parseCidr(s) {
+  const m = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(s);
+  if (!m || !isV4(m[1])) return null;
+  const bits = Number(m[2]);
+  if (bits > 32) return null;
+  const toInt = (ip) => ip.split('.').reduce((a, o) => (a << 8 >>> 0) + Number(o), 0) >>> 0;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  const net = (toInt(m[1]) & mask) >>> 0;
+  return (ip) => isV4(ip) && ((toInt(ip) & mask) >>> 0) === net;
+}
+
+// The trusted_proxies test. net.BlockList rather than parseCidr: it range-checks every octet,
+// compares IPv6 by value (2001:db8:0:0:0:0:0:1 is 2001:db8::1), and takes IPv6 subnets. An entry it
+// cannot use is returned in `invalid` so the caller can say so; silently, a typo became a rule that
+// never matched.
+const familyOf = (ip) => (ip.includes(':') ? 'ipv6' : 'ipv4');
+export function trustList(entries) {
+  const list = new BlockList();
+  const used = [], invalid = [];
+  for (const raw of entries) {
+    const s = String(raw ?? '').trim();
+    if (!s) continue;
+    const [addr, bits, ...rest] = s.split('/');
+    const a = normalizeIp(addr);
+    try {
+      if (rest.length || (bits !== undefined && !/^\d{1,3}$/.test(bits))) throw new Error('bad prefix');
+      if (bits === undefined) list.addAddress(a, familyOf(a));
+      else list.addSubnet(a, Number(bits), familyOf(a));
+      used.push(s);
+    } catch { invalid.push(s); }
+  }
+  const check = (ip) => {
+    const a = normalizeIp(ip);
+    try { return Boolean(a) && list.check(a, familyOf(a)); } catch { return false; }
+  };
+  return { check, used, invalid };
 }
 
 // RFC1918 and friends. Deliberately includes loopback and Docker's own ranges: a connection
@@ -79,7 +125,11 @@ function hostOf(headers) {
   return s.replace(/:\d+$/, '').slice(0, 120) || null;
 }
 
-export function classify(req) {
+// `trusted(ip)` says whether an address is a proxy of ours. Omitted, every peer is believed, as
+// before the option existed. Given, only X-Forwarded-For counts, only from a trusted peer, and the
+// chain is walked from the RIGHT, skipping trusted hops, as Home Assistant itself does: the
+// leftmost entry is whatever the original caller typed, so it cannot be the one believed.
+export function classify(req, trusted) {
   const headers = req?.headers || {};
   const hop = normalizeIp(req?.socket?.remoteAddress);
   const chain = String(headers['x-forwarded-for'] || '')
@@ -102,14 +152,29 @@ export function classify(req) {
   // attribution (XFF first). `x-real-ip` is consulted before falling back to the peer because
   // a proxy that sets only that header would otherwise collapse ALL of its clients onto the
   // proxy's own address — one bucket, every device, silently.
-  const ip = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
+  let ip = chain[0] || normalizeIp(headers['x-real-ip']) || hop;
+  let local = isPrivate(ip);
+  const realIp = normalizeIp(headers['x-real-ip']);
+  if (trusted && (!hop || !trusted(hop))) {
+    ip = hop;
+    // `ip` is for attribution. An ignored header must not make a request look MORE local than it
+    // says: through a LAN proxy missing from the list, an internet caller arrives as `<typed>,
+    // <its real address>`, so every entry is checked, not just the leftmost the caller wrote.
+    local = isPrivate(hop) && chain.every(isPrivate) && (!realIp || isPrivate(realIp));
+  } else if (trusted) {
+    // X-Forwarded-For only. X-Real-IP is one value with no chain, so a proxy that passes the
+    // client's own through unchanged would let the client name any address.
+    ip = [...chain].reverse().find((a) => !trusted(a)) || chain[0] || hop;
+    // With no chain `ip` is the proxy itself, and a public X-Real-IP beside it still says internet.
+    local = isPrivate(ip) && (chain.length > 0 || !realIp || isPrivate(realIp));
+  }
 
   return {
     ip,
     hop: hop || null,
     host: hostOf(headers),
     route: viaCf ? 'cloudflare' : viaIngress ? 'ingress' : forwarded ? 'proxy' : 'direct',
-    origin: ip ? (isPrivate(ip) ? 'lan' : 'internet') : null,
+    origin: ip ? (local ? 'lan' : 'internet') : null,
     // The full chain, but only when it says more than `ip` already does — one entry is just
     // the client repeated, and a table column that is always redundant trains you to skip it.
     hops: chain.length > 1 ? chain : null,

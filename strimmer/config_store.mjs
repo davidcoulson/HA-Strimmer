@@ -40,6 +40,9 @@ export const BOOTSTRAP_KEYS = new Set([
   // ports above: a listener's address and key belong where they can be fixed from Home Assistant
   // when this console is what is broken.
   'esphome_port', 'esphome_key',
+  // Whose X-Forwarded-For is believed. A mistake here moves every panel onto one address, so it
+  // belongs where it can be fixed when the console is what is broken.
+  'trusted_proxies',
 ]);
 
 // Options a past version had and this one does not.

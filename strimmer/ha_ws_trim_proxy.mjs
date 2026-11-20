@@ -36,7 +36,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { extractEntities, collectTemplates, expandGroupMembers, buildRegistryCtx, splitDeviceEntities, deviceEntityIds } from './lovelace_extract.mjs';
 import * as stats from './stats.mjs';
 import * as history from './history.mjs';
-import { classify, normalizeIp, isPrivate } from './route.mjs';
+import { classify as classifyRoute, normalizeIp, isPrivate, parseCidr, trustList } from './route.mjs';
 import { createDiscovery, DEFAULT_SERVICES, preferredRow } from './mdns.mjs';
 import { certDaysLeft } from './metrics.mjs';
 import { createPublisher as createEsphomePublisher } from './esphome_api.mjs';
@@ -91,7 +91,7 @@ const inAddon = !!process.env.SUPERVISOR_TOKEN;
 // Bump together with config.yaml `version`. Logged at boot so the add-on log shows exactly
 // which code is running — the only reliable way to tell a Rebuild actually picked up changes
 // (a local add-on bakes in whatever files are in the host's /addons folder, not GitHub).
-const VERSION = '2026.11.19.1';
+const VERSION = '2026.11.19.2';
 
 const toList = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]/))
   .map((s) => String(s).trim()).filter(Boolean);
@@ -158,9 +158,11 @@ const isClientInfoPath = (url) => {
 //      remove them, so "came via Cloudflare" is reliable.
 //   2. The peer address. The TCP source cannot be forged, so a request arriving directly from a
 //      public address is reliably remote.
-//   3. The resolved client address, which comes from X-Forwarded-For. The LEFTMOST entry is
-//      whatever the original caller claimed, so a remote caller behind a reverse proxy that
-//      appends rather than replaces can assert a private address and look local.
+//   3. The resolved client address, which comes from X-Forwarded-For. With `trusted_proxies`
+//      empty the LEFTMOST entry is believed, and that is whatever the original caller claimed, so
+//      a remote caller behind a reverse proxy that appends rather than replaces can assert a
+//      private address and look local. With the list set, only a listed peer is believed and the
+//      chain is read from the right, which closes that.
 //
 // So this narrows who may TRY. The token is still the boundary, and the comment above the auth
 // block still holds. Anything else would be security theatre with a configuration page.
@@ -171,6 +173,20 @@ const CLIENT_API_ACCESS = (() => {
 const CLIENT_API_ALLOW = toList(OPT.client_api_allow ?? process.env.CLIENT_API_ALLOW)
   .map((c) => ({ raw: c, cidr: parseCidr(c), ip: normalizeIp(c) }))
   .filter((r) => r.cidr || r.ip);
+
+// Which peers may tell us who the client is. Empty, every peer is believed (X-Forwarded-For, else
+// X-Real-IP), which is how this always behaved, so an update changes nothing; but then any caller can
+// name another address — another panel's, for /strimmer/client.json, or a client_overrides
+// subject's. Listed, only these peers' X-Forwarded-For is believed (never X-Real-IP, which a proxy
+// may pass through from the client) and everyone else is known by their own address.
+// As an add-on Supervisor's Ingress hop is added, since it is a proxy by construction.
+// An entry that cannot be used still counts as setting the list, so a typo fails CLOSED (forwarded
+// addresses ignored) rather than open; the boot log names it (see TRUSTED_PROXIES.invalid).
+const TRUSTED_PROXY_ENTRIES = toList(OPT.trusted_proxies ?? process.env.TRUSTED_PROXIES).map((s) => s.trim()).filter(Boolean);
+const TRUSTED_PROXIES = trustList(TRUSTED_PROXY_ENTRIES.length && inAddon
+  ? [...TRUSTED_PROXY_ENTRIES, '172.30.32.2'] : TRUSTED_PROXY_ENTRIES);
+const isTrustedProxy = TRUSTED_PROXY_ENTRIES.length ? TRUSTED_PROXIES.check : undefined;
+const classify = (req) => classifyRoute(req, isTrustedProxy);
 
 // Returns null when the request may proceed, or a reason to refuse it.
 function clientApiRefusal(req, rt) {
@@ -579,7 +595,7 @@ const ESPHOME_API = OPT.esphome_api !== undefined
   : String(process.env.ESPHOME_API ?? '0') !== '0';
 const ESPHOME_PORT = parseInt(OPT.esphome_port ?? process.env.ESPHOME_PORT ?? '6053', 10) || 6053;
 const ESPHOME_KEY = String(OPT.esphome_key ?? process.env.ESPHOME_KEY ?? '').trim();
-const esphomeSensors = createEsphomePublisher({ version: VERSION, log: (...a) => log(...a) });
+const esphomeSensors = createEsphomePublisher({ version: VERSION, log: (...a) => log(...a), onceOnly: (k) => onceOnly(k) });
 // Counted for the rebuilds sensor: a steadily climbing number is the rebuild storm this add-on
 // has already had once, and it is invisible in any single snapshot.
 let REBUILD_COUNT = 0;
@@ -2814,22 +2830,6 @@ function resolveUser(token, fwd = null) {
 
 // ---- client-pinned rules ----
 
-// Parse "10.2.4.0/24" into a test. IPv4 only on purpose: a CIDR here exists to name a VLAN of
-// wall panels, and anything needing IPv6 subtleties is better served by listing addresses.
-function parseCidr(s) {
-  const m = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(s);
-  if (!m) return null;
-  const bits = Number(m[2]);
-  if (bits > 32) return null;
-  const toInt = (ip) => ip.split('.').reduce((a, o) => (a << 8 >>> 0) + Number(o), 0) >>> 0;
-  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
-  const net = (toInt(m[1]) & mask) >>> 0;
-  return (ip) => {
-    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) return false;
-    return ((toInt(ip) & mask) >>> 0) === net;
-  };
-}
-
 // Resolve each rule's `client` to addresses and each `devices` entry to entity ids.
 //
 // Run at allowlist-build time rather than at connect time: a DNS lookup on the hot path would
@@ -3479,11 +3479,15 @@ async function serveDashboardPage(req, res, dash) {
 //     it or whether it is talking straight to Home Assistant. It does not need a header to find
 //     out — this path exists only on the proxy, so a 200 here means the proxy is in the path and
 //     a 404 means it is not. That is the whole "is it running" question, answered by arriving.
-//   * A PANEL SEES ITSELF, NOT THE ESTATE. The reply describes the caller and nothing else. There
-//     is deliberately no way to ask about another address: this port is reachable by anything on
-//     the network, so every field here has to be something that network may read. That rules out
-//     the override rules, the allowlist contents, entity ids, Home Assistant user identities and
-//     any other client's address — none of which a panel needs to render its own status.
+//   * A PANEL SEES ITSELF, NOT THE ESTATE. The reply describes one address and nothing else. That
+//     address is clientIp(). With `trusted_proxies` empty (the default) that believes the leftmost
+//     X-Forwarded-For from ANY peer, so a caller holding a valid token can name another panel's
+//     address and read that panel's report; set the list and only the named proxies are believed.
+//     Keying on the peer alone would put every panel behind a reverse proxy onto the proxy's own
+//     address. Since the default stays open, every field here has to be something any token
+//     holder on the network may read about any panel. That rules out the override rules, the allowlist contents, entity ids, Home
+//     Assistant user identities and any other client's address — none of which a panel needs to
+//     render its own status.
 function clientReport(ip) {
   const snap = stats.snapshot(statsExtras());
   const mine = (snap.clients?.list || []).filter((c) => c.ip === ip);
@@ -4130,8 +4134,10 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
     // identity signal than an IP: it needs no mDNS — a web page cannot advertise it — no DHCP
     // reservation, and no configuration.
     //
-    // Strictly additive. It can only widen this client's allowlist, never narrow it.
-    if (trimming && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
+    // Strictly additive. It can only widen this client's allowlist, never narrow it. Only after
+    // HA's auth_ok: before it, nothing on this socket is authenticated, and HA itself closes a
+    // socket that sends anything but `auth` then, so a real satellite never announces earlier.
+    if (trimming && haAuthed && m && typeof m.type === 'string' && m.type.startsWith('voice_satellite/')
         && typeof m.entity_id === 'string' && m.entity_id.startsWith('assist_satellite.')) {
       const added = learnClientEntity(meta.ip, m.entity_id);
       // Log the announcement itself, not only the case where it changed something. A panel whose
@@ -4144,10 +4150,9 @@ function bridge(browserWs, baseAllow = ALLOW, dash = null, meta = {}) {
       // panels wrote ~8,600 identical lines a day, which with the rebuild reports beside them left
       // the Supervisor's log buffer holding about ten minutes of history.
       const announceMsg = `${meta.ip ?? '?'} announces ${m.entity_id}${added ? '' : ' (already covered)'}`;
-      // Keyed on the ADDRESS only, and still throttled underneath. This block runs before the auth
-      // gate — only `type: 'auth'` is intercepted above — so `m.entity_id` is unauthenticated
-      // client input. With it in the key, a socket sending a fresh id per frame got one unthrottled
-      // line per frame and, once SAID filled, defeated the cap as well. An address is bounded by
+      // Keyed on the ADDRESS only, and still throttled underneath. `m.entity_id` is client input:
+      // the socket is authenticated, but nothing proves the client IS that satellite. With it in
+      // the key, a socket sending a fresh id per frame got one unthrottled line per frame and, once SAID filled, defeated the cap as well. An address is bounded by
       // the network; a string off the wire is not.
       if (added || onceOnly(`selfid:${meta.ip}`)) log(announceMsg);
       else logThrottled(`selfid:${meta.ip}`, announceMsg, LEVELS.debug);
@@ -5014,8 +5019,19 @@ const INGRESS_PEERS = new Set(
   (process.env.INGRESS_PEERS ? process.env.INGRESS_PEERS.split(',') : inAddon ? ['172.30.32.2'] : ['127.0.0.1', '::1'])
     .map((s) => s.trim()).filter(Boolean));
 
+// Standalone, a loopback peer must also be ADDRESSED as loopback. The peer check alone cannot tell
+// the operator from a web page in the operator's browser: a page that rebinds its own name to
+// 127.0.0.1 is same-origin with this port, so it may set any header and read every answer — but
+// the browser still sends the page's name in Host. Not applied as an add-on (Supervisor is the
+// peer, and no browser is). Not applied to an explicit INGRESS_PEERS either: whoever set it named
+// the peers that speak for Ingress, and what Host those send is theirs to know, not ours — a
+// remote peer never says "localhost", so checking would make the override useless.
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+const INGRESS_NEEDS_LOOPBACK_HOST = !inAddon && !process.env.INGRESS_PEERS;
+
 function viaIngress(req) {
   if (!req.headers['x-ingress-path']) return false;
+  if (INGRESS_NEEDS_LOOPBACK_HOST && !LOOPBACK_HOST.test(req.headers.host || '')) return false;
   return INGRESS_PEERS.has(normalizeIp(req.socket?.remoteAddress) || '');
 }
 
@@ -5583,6 +5599,11 @@ for (const m of CONFIG_WARNINGS) warn(`  config: ${m}`);
   }
 }
 log(`mode: ${inAddon ? 'add-on' : 'dev'} | target ${HA_BASE} | allowlist via ${ALLOW_WS_URL}`);
+if (isTrustedProxy) {
+  log(`trusted_proxies: X-Forwarded-For is believed only from ${TRUSTED_PROXIES.used.join(', ') || 'nothing'}`);
+  for (const bad of TRUSTED_PROXIES.invalid) warn(`trusted_proxies: "${bad}" is not an address or CIDR, and is ignored`);
+  if (!TRUSTED_PROXIES.used.some((e) => TRUSTED_PROXY_ENTRIES.includes(e))) warn(`trusted_proxies: no usable entry, so ${inAddon ? 'only Supervisor\'s Ingress (172.30.32.2) is believed and every other client' : 'every forwarded address is ignored and each client'} is known by its peer address`);
+}
 // One line for the whole rule set, because 'my override does nothing' is the commonest
 // complaint and the first thing worth knowing is whether it was parsed at all.
 // Before anything can ask for a user: a restart should not make every session pay again.

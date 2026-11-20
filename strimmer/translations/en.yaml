@@ -292,6 +292,13 @@ configuration:
       Addresses or CIDRs that may reach the endpoint whatever the access mode says — for a panel
       on a subnet this app does not consider local, or a management host reaching it from
       elsewhere. Leave empty unless you need it.
+  trusted_proxies:
+    name: Trusted reverse proxies
+    description: >-
+      Addresses or CIDRs (IPv4 or IPv6) of the reverse proxies in front of this app (Nginx Proxy Manager,
+      Caddy, cloudflared). Their X-Forwarded-For is believed (X-Real-IP is then not used); anyone
+      else is known by their own address, so a client cannot claim to be another panel. Empty (the default) believes every
+      caller, as before. List EVERY hop: one left out puts all of its clients onto its address.
   log_level:
     name: How much to log
     description: >-

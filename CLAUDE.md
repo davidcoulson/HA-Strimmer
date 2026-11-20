@@ -300,7 +300,8 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   display name otherwise, so rewording a sensor would orphan its statistics); `dp` in the catalogue
   is the decimals a float32 reading is displayed to; and the node name `strimmer` is what the
   device's MAC — Home Assistant's unique id for it — is derived from, so changing it makes a new
-  device with no history. The mDNS announcement carries ONE address, chosen by `pickAdvertiseAddress` (LAN before Docker bridges, never Tailscale's 100.64/10): the library advertises every address by default, and Home Assistant stored the tailnet one, so HA reached a device on its own machine through Tailscale. `esphome_port`/`esphome_key` are BOOTSTRAP_KEYS. Note the option test: a
+  device with no history. With no `esphome_key` the API is unauthenticated, so the pause switch is
+  still declared (same id, still shows its state) but its command is ignored and logged once. The mDNS announcement carries ONE address, chosen by `pickAdvertiseAddress` (LAN before Docker bridges, never Tailscale's 100.64/10): the library advertises every address by default, and Home Assistant stored the tailnet one, so HA reached a device on its own machine through Tailscale. `esphome_port`/`esphome_key` are BOOTSTRAP_KEYS. Note the option test: a
   DEFAULT-OFF option cannot use the `(OPT.x ?? true) !== false` shape the default-on ones use —
   written that way it is false for everyone and the listener never starts.
 - **Reachability:** the app must resolve `http://homeassistant:8123`. `host_network: true`
@@ -413,6 +414,17 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   build, every panel reconnecting at once — and read 114ms at 14s uptime while the rebuild's own
   worst was 55ms. The week-long "creep" from 46ms to 120ms was startup growing with the instance,
   not the proxy slowing. Do not read a since-boot figure as an operational one.
+- **`trusted_proxies` decides whose `X-Forwarded-For` is believed** (`classify(req, trusted)` in
+  `route.mjs`, wired as `classify` in the proxy). Empty (the default) believes every peer: the
+  leftmost entry, else `X-Real-IP`, exactly as before, so `/strimmer/client.json`, `noteClientDash`
+  and `client_overrides` all key on an address any caller can type. Set, matching is a
+  `net.BlockList` (`trustList`); unusable entries are named in the boot log and still count as
+  setting the list, so it fails closed. A listed peer's chain is read from the right, skipping
+  listed hops, as HA does, and `X-Real-IP` is never used. An unlisted peer is known by its own
+  address, and is `lan` only if it and EVERY ignored header entry are private — the leftmost alone
+  is what the caller typed. `parseCidr` range-checks octets. Default left open on purpose: a hop
+  missing from the list collapses all of its panels onto its address, which breaks ha-paneld and
+  Kiosk Satellite. A BOOTSTRAP key; Supervisor's Ingress hop is added automatically as an add-on.
 - **Every socket the proxy opens to HA carries `X-Forwarded-*`** — bridge, identity probe
   (`resolveUser(token, fwd)`), and the `serveDashboardPage` fetch. HA's failed-login ban keys on
   the address it sees; a bare probe made a rejected token the PROXY's failed login.
@@ -422,6 +434,10 @@ HA_TOKEN="<token>" HA_BASE="http://homeassistant.mgmt:8123" \
   (Home Assistant, Node-RED, the SSH add-on…): any of them could forge `X-Ingress-Path` and pause
   anyone or rewrite the console config. Found in review 2026-10-02. Note ha-mcp's "Ingress" proxy
   mode connects directly from the host, so it gets the redacted, read-only view now.
+  Standalone, the loopback peer must also send a loopback `Host` (`localhost`, `127.0.0.1`,
+  `[::1]`): a DNS-rebinding page in the operator's browser is a loopback peer too, and Host is the
+  one thing it cannot forge. An explicit `INGRESS_PEERS` skips that check, since a remote peer
+  never says "localhost".
 - **`serveDashboardPage` takes the HOST from `HA_BASE` only** and the request supplies path and
   query. `new URL(req.url, HA_BASE)` let `GET //<dashboard-name>/…` resolve as protocol-relative
   and fetch from a host named like a dashboard (CodeQL `js/request-forgery`, 2026-10-02). Any new

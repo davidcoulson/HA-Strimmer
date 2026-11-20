@@ -6,7 +6,7 @@
 // reverse proxy, through Cloudflare, and the hairpin case that looks like a bug.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, normalizeIp, isPrivate } from '../route.mjs';
+import { classify, normalizeIp, isPrivate, parseCidr, trustList } from '../route.mjs';
 
 const req = (headers = {}, remoteAddress = '10.2.3.1') => ({ headers, socket: { remoteAddress } });
 
@@ -142,5 +142,60 @@ describe('classify: this data is spoofable', () => {
     assert.equal(forged.origin, 'lan', 'a public attacker now reads as LAN');
     assert.equal(forged.hop, '198.51.100.7', 'only the peer address cannot be faked');
     assert.notEqual(forged.hop, forged.ip, 'the hop is the one signal worth trusting');
+  });
+});
+
+describe('trusted_proxies', () => {
+  const trusted = (ip) => ip === '10.2.3.1' || ip.startsWith('172.30.');
+  it('believes nothing a peer that is not a proxy forwards', () => {
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20' }, '10.2.4.99'), trusted).ip, '10.2.4.99');
+    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }, '10.2.4.99'), trusted).ip, '10.2.4.99');
+  });
+  it('reads a trusted chain from the right, so a typed leftmost entry is not the client', () => {
+    // A caller typed 10.2.4.20; NPM (10.2.3.1) appended what it saw, 74.1.2.3.
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }), trusted).ip, '74.1.2.3');
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 172.30.33.4' }), trusted).ip, '10.2.4.20',
+      'trusted hops in the chain are skipped too');
+    assert.equal(classify(req({}), trusted).ip, '10.2.3.1', 'no header: the proxy itself');
+  });
+  it('labels origin by the believed address behind a listed proxy, by every claim behind an unlisted one', () => {
+    assert.equal(classify(req({ 'x-forwarded-for': '74.9.9.9, 10.2.4.20' }), trusted).origin, 'lan',
+      'a LAN panel behind a listed proxy, whatever was typed on the left');
+    assert.equal(classify(req({ 'x-forwarded-for': '10.0.0.5, 74.1.2.3' }, '10.2.4.99'), trusted).origin, 'internet');
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20' }, '10.2.4.99'), trusted).origin, 'lan');
+  });
+  it('does not take X-Real-IP even from a trusted proxy, which may have passed the client\'s through', () => {
+    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).ip, '10.2.3.1');
+  });
+  it('a listed proxy sending only a public X-Real-IP is still the internet, though the address is its own', () => {
+    const r = classify(req({ 'x-real-ip': '74.1.2.3' }), trusted);
+    assert.equal(r.ip, '10.2.3.1', 'X-Real-IP is still not believed as the client');
+    assert.equal(r.origin, 'internet');
+    assert.equal(classify(req({ 'x-real-ip': '10.2.4.20' }), trusted).origin, 'lan');
+  });
+  it('without a list, behaves as it always did', () => {
+    assert.equal(classify(req({ 'x-forwarded-for': '10.2.4.20, 74.1.2.3' }, '10.2.4.99')).ip, '10.2.4.20');
+  });
+});
+
+describe('parseCidr', () => {
+  it('refuses an octet over 255 rather than carrying it into the next one', () => {
+    assert.equal(parseCidr('10.0.256.0/24'), null);
+    assert.equal(parseCidr('10.0.0.0/24')('10.0.0.300'), false);
+    assert.equal(parseCidr('10.0.0.0/16')('10.0.255.1'), true);
+  });
+});
+
+describe('trustList', () => {
+  it('compares addresses by value, takes IPv6 subnets, and reports what it could not use', () => {
+    const t = trustList(['2001:db8:0:0:0:0:0:1', 'fd00::/8', '10.9.9.0/24', '::ffff:10.2.3.1',
+      'npm.lan', '10.0.256.0/24', '10.9.9.0/33', '10.9.9.0/24/1', '']);
+    assert.equal(t.check('2001:db8::1'), true, 'two spellings of one address');
+    assert.equal(t.check('fd12::5'), true);
+    assert.equal(t.check('::ffff:10.9.9.4'), true, 'a peer arrives either way');
+    assert.equal(t.check('10.2.3.1'), true);
+    assert.equal(t.check('10.1.0.5'), false);
+    assert.equal(t.check('unknown'), false, 'junk in a header is not trusted');
+    assert.deepEqual(t.invalid, ['npm.lan', '10.0.256.0/24', '10.9.9.0/33', '10.9.9.0/24/1']);
   });
 });
