@@ -51,6 +51,15 @@ describe('a Settings list searches the instance', () => {
       'a chosen suggestion must close the menu, then be saved like a typed value');
   });
 
+  it('cannot be reopened by a search that was still pending when a choice was made', () => {
+    // The debounce timer and any in-flight answer outlive the click. Either one reopening the
+    // menu during a slow save puts back rows that save from the list as it was before.
+    const close = fn('suggestMenu').match(/const close = \(\) => \{[\s\S]*?\n  \};/)?.[0];
+    assert.ok(close, 'the menu must have a close');
+    assert.match(close, /clearTimeout\(timer\);/, 'a debounced search must be cancelled');
+    assert.match(close, /seq\+\+;/, 'an answer in flight must be made stale');
+  });
+
   it('keeps unsaved text when another setting is saved', () => {
     // Every save redraws the tab. A box that does not save on blur must get its text back.
     assert.match(c, /add\.value = LIST_DRAFTS\[o\.key\] \|\| '';/);

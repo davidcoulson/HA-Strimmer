@@ -1957,7 +1957,12 @@ function suggestMenu(input, kind, fixed, add) {
   input.setAttribute('aria-expanded', 'false');
   let cursor = -1;
   let seq = 0;
+  let timer = null;
   const close = () => {
+    // A debounced search still waiting, or an answer still in flight, must not reopen a menu
+    // that was closed because a choice was made: its rows would save from a stale list.
+    clearTimeout(timer);
+    seq++;
     menu.style.display = 'none'; menu.textContent = ''; cursor = -1;
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-activedescendant');
@@ -2015,7 +2020,6 @@ function suggestMenu(input, kind, fixed, add) {
     } catch { close(); }
   };
 
-  let timer = null;
   input.oninput = () => {
     clearTimeout(timer);
     const q = input.value.trim();
