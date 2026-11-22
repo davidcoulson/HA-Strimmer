@@ -860,7 +860,7 @@ describe('config endpoints', () => {
     const port = await getFreePort(); const sp = await getFreePort();
     const proxy = spawn(process.execPath, [PROXY], { cwd: path.join(DIR, '..'), stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, HA_BASE: mock.base, HA_TOKEN: 't', DASH_PATHS: 'test-dash',
-        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1' } });
+        PORT: String(port), STATS_PORT: String(sp), STRIP_ENTITIES: '1', TRIM_RESOURCES: '1' } });
     try {
       let out = ''; proxy.stdout.on('data', (b) => out += b); proxy.stderr.on('data', (b) => out += b);
       const deadline = Date.now() + 10000;
@@ -879,6 +879,23 @@ describe('config endpoints', () => {
       assert.ok(themes, 'an option that is not set must still be listed');
       assert.equal(themes.editable, true);
       assert.equal(themes.type, 'bool', 'the console needs the type to pick a control');
+
+      // Issue #13: a list says what its add box can offer, so nobody types ids from memory.
+      const sug = (k) => d.options.find((o) => o.key === k).suggest;
+      const dashes = sug('dashboards').map((r) => r.value);
+      // auto-dash is on the mock instance and NOT in DASH_PATHS: the list is what exists, not
+      // what is already served, or there would be nothing new to pick.
+      for (const want of ['lovelace', 'test-dash', 'auto-dash']) assert.ok(dashes.includes(want), `${want} must be offered, got ${dashes}`);
+      assert.equal(sug('always_forward'), 'entity', 'entities are searched, not shipped whole');
+      assert.ok(sug('always_forward_device_class').some((r) => r.value === 'door'),
+        'the device classes in use on this instance');
+      assert.deepEqual(sug('exclude_device_categories'), [{ value: 'config' }, { value: 'diagnostic' }]);
+      assert.equal(sug('mdns_services'), null, 'a list with nothing to offer stays a plain box');
+      // Never-send needs the resources that ARE being sent; the dropped ones are no use to it.
+      const never = sug('resources_never_forward').map((r) => r.value);
+      assert.ok(never.includes('res/my-fancy-card.js'), `every registered resource must be offered (the resource trim is on here), got ${never}`);
+      assert.ok(never.every((v) => !v.startsWith('/')), `a leading slash can parse as a /regex/: ${never}`);
+      assert.equal(sug('resources_always_forward'), 'resource');
 
       // Setup options are NAMED so the console can explain where they live, but they get no
       // rows: they belong in the add-on configuration and listing them here put one setting in

@@ -305,6 +305,8 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pick-opt i { color: var(--muted); font-style: normal; font-size: 12px; margin-left: auto; white-space: nowrap; }
   .pick-none { padding: 5px 9px; font-size: 12px; color: var(--muted); }
+  .chips .pick { flex: none; }
+  .chips .pick-menu { right: auto; width: max-content; min-width: 100%; max-width: min(420px, 86vw); }
 
   /* Tables survive only in the raw-data corner, where exact numbers are the point. */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -1908,14 +1910,7 @@ function multiPicker(kind, placeholder, fixed) {
   const input = document.createElement('input');
   input.type = 'text';
   input.placeholder = placeholder;
-  const menu = document.createElement('div');
-  menu.className = 'pick-menu';
-  menu.style.display = 'none';
-  wrap.append(chips, input, menu);
-
   const values = [];
-  let cursor = -1;
-  let seq = 0;
 
   const renderChips = () => {
     chips.textContent = '';
@@ -1936,17 +1931,54 @@ function multiPicker(kind, placeholder, fixed) {
     values.push(t);
     renderChips();
     input.value = '';
-    close();
+    sm.close();
   };
-  const close = () => { menu.style.display = 'none'; menu.textContent = ''; cursor = -1; };
+  const sm = suggestMenu(input, kind, fixed, add);
+  wrap.append(chips, input, sm.menu);
+  return { el: wrap, values, commitPending: () => { if (input.value.trim()) add(input.value); } };
+}
+
+// The search-as-you-type menu under a text field, shared by the wizard's pickers and the Settings
+// lists. `add(value)` gets the suggestion chosen, or exactly what was typed when Enter is pressed
+// with nothing highlighted. `fixed` is an array (or a function returning one) of strings or
+// { value, note } rows; without it `kind` picks the search endpoint.
+let PICK_MENUS = 0;
+function suggestMenu(input, kind, fixed, add) {
+  const menu = document.createElement('div');
+  menu.className = 'pick-menu';
+  menu.style.display = 'none';
+  // Focus stays in the text field, so a screen reader hears the menu only through these: the
+  // field is a combobox that owns a listbox, and the highlighted row is its active descendant.
+  menu.id = `pick-menu-${++PICK_MENUS}`;
+  menu.setAttribute('role', 'listbox');
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', menu.id);
+  input.setAttribute('aria-expanded', 'false');
+  let cursor = -1;
+  let seq = 0;
+  let timer = null;
+  const close = () => {
+    // A debounced search still waiting, or an answer still in flight, must not reopen a menu
+    // that was closed because a choice was made: its rows would save from a stale list.
+    clearTimeout(timer);
+    seq++;
+    menu.style.display = 'none'; menu.textContent = ''; cursor = -1;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  };
 
   const show = (rows) => {
     menu.textContent = '';
     cursor = -1;
+    input.removeAttribute('aria-activedescendant');
     if (!rows.length) { close(); return; }
-    rows.forEach((r) => {
+    rows.forEach((r, i) => {
       const opt = document.createElement('div');
       opt.className = 'pick-opt';
+      opt.id = `${menu.id}-${i}`;
+      opt.setAttribute('role', 'option');
+      opt.setAttribute('aria-selected', 'false');
       const b = document.createElement('b');
       b.textContent = r.value;
       opt.appendChild(b);
@@ -1960,14 +1992,17 @@ function multiPicker(kind, placeholder, fixed) {
       menu.appendChild(opt);
     });
     menu.style.display = '';
+    input.setAttribute('aria-expanded', 'true');
   };
 
   const search = async (q) => {
     const mine = ++seq;
     if (fixed) {
-      const rows = fixed.filter((v) => !q || v.toLowerCase().includes(q.toLowerCase()))
-        .slice(0, 10).map((v) => ({ value: v }));
-      return show(rows);
+      const all = (typeof fixed === 'function' ? fixed() : fixed)
+        .map((v) => (typeof v === 'string' ? { value: v } : v));
+      // The caption is searched too: a dashboard is remembered by its title, not its url_path.
+      return show(all.filter((r) => !q || `${r.value} ${r.note || ''}`.toLowerCase().includes(q.toLowerCase()))
+        .slice(0, 50));
     }
     if (!q) return close();
     try {
@@ -1985,7 +2020,6 @@ function multiPicker(kind, placeholder, fixed) {
     } catch { close(); }
   };
 
-  let timer = null;
   input.oninput = () => {
     clearTimeout(timer);
     const q = input.value.trim();
@@ -2010,10 +2044,11 @@ function multiPicker(kind, placeholder, fixed) {
       else add(input.value);
       return;
     } else if (e.key === 'Escape') { close(); return; } else { return; }
-    opts.forEach((o, i) => o.classList.toggle('on', i === cursor));
+    opts.forEach((o, i) => { o.classList.toggle('on', i === cursor); o.setAttribute('aria-selected', String(i === cursor)); });
+    if (opts[cursor]) input.setAttribute('aria-activedescendant', opts[cursor].id);
   };
 
-  return { el: wrap, values, commitPending: () => { if (input.value.trim()) add(input.value); } };
+  return { menu, close };
 }
 
 function overrideWizard(d, save, say, addBtn) {
@@ -2207,7 +2242,9 @@ function overrideWizard(d, save, say, addBtn) {
     // connection needs is about what to SEND. The suggestions are the resources the trim has
     // dropped somewhere, since a resource kept everywhere needs no rule.
     pick('Send resources', 'resource', 'a URL fragment, e.g. voice-satellite-card', 'resources_always_forward', resourceSuggestions());
-    pick('Never send resources', 'resource', 'a URL fragment or /regex/', 'resources_never_forward', resourceSuggestions());
+    // Never-send is chosen from what IS being sent, so it gets every registered resource.
+    pick('Never send resources', 'resource', 'a URL fragment or /regex/', 'resources_never_forward',
+      d.options.find((o) => o.key === 'resources_never_forward')?.suggest || resourceSuggestions());
 
     actions.append(button('Add this override', () => {
       // A value typed but not committed with Enter is still what the person meant.
@@ -2237,6 +2274,11 @@ function overrideWizard(d, save, say, addBtn) {
 // Each value is a chip with a remove button, and one empty box adds another. The value is still
 // exactly what it was — a literal or a /regex/ — so the chip is monospace: these are config
 // elements, not prose, and they should not be mistaken for labels the UI chose.
+// What is typed in a list's add box and not yet saved, by option key. Every save redraws the whole
+// Settings tab, and a box that no longer saves on blur would otherwise lose its text to a save of
+// some OTHER setting. Cleared only when that option's own save succeeds.
+const LIST_DRAFTS = {};
+
 function chipList(o, d, save, say) {
   const wrap = document.createElement('div');
   wrap.className = 'chips';
@@ -2270,17 +2312,35 @@ function chipList(o, d, save, say) {
     add.type = 'text';
     add.className = 'chip-add';
     add.placeholder = '+ add';
+    add.setAttribute('aria-label', `Add to: ${o.label}`);
+    add.value = LIST_DRAFTS[o.key] || '';
+    add.addEventListener('input', () => { LIST_DRAFTS[o.key] = add.value; });
     const commit = () => {
       const v = add.value.trim();
       if (!v) return;
-      if (values.includes(v)) { add.value = ''; return say(o.label + ': already in the list'); }
+      if (values.includes(v)) { add.value = ''; delete LIST_DRAFTS[o.key]; return say(o.label + ': already in the list'); }
       add.disabled = true;
-      save(o, 'adopt', [...values, v]);
+      // Kept as the draft until the save succeeds, so a refused save leaves it in the box.
+      LIST_DRAFTS[o.key] = v;
+      save(o, 'adopt', [...values, v], () => { delete LIST_DRAFTS[o.key]; });
     };
-    // Enter commits; blur does too, so a value typed and clicked away from is not lost silently.
-    add.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-    add.onblur = commit;
-    wrap.appendChild(add);
+    if (o.suggest) {
+      // A list this instance can fill in (issue #13): the wizard's search menu on the same box.
+      // Still free text, because an entry is often a /regex/ that no list can offer. Blur does
+      // NOT commit here: half-typed search text would be saved as an entry. It stays in the box.
+      const fixed = Array.isArray(o.suggest) ? o.suggest.filter((r) => !values.includes(r.value))
+        : o.suggest === 'resource' ? resourceSuggestions : null;
+      if (!fixed) add.placeholder = '+ search or type';
+      // Closed first: the menu would otherwise stay clickable until the save redraws the page,
+      // and a second pick would save again from this same captured `values`.
+      const sm = suggestMenu(add, o.suggest, fixed, (v) => { sm.close(); add.value = v; commit(); });
+      wrap.appendChild(h('span', { cls: 'pick' }, add, sm.menu));
+    } else {
+      // Enter commits; blur does too, so a value typed and clicked away from is not lost silently.
+      add.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+      add.onblur = commit;
+      wrap.appendChild(add);
+    }
   }
   return wrap;
 }
@@ -2402,7 +2462,7 @@ async function renderConfig() {
   // Outcomes go to the snackbar at the bottom of the screen, which is where the eye is after
   // clicking a control further down a long page.
   const say = (t) => toast(t);
-  const save = async (o, action, value) => {
+  const save = async (o, action, value, onOk) => {
     try {
       const r = await fetch('./config', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -2410,6 +2470,7 @@ async function renderConfig() {
       });
       const j = await r.json();
       if (r.ok) {
+        onOk?.();
         toast(`${o.label || o.key}: ${j.note}`);
         if (/restart/i.test(j.note || '')) restartPending = true;
       } else toast(`${o.label || o.key}: ${j.error}`, 'err');
