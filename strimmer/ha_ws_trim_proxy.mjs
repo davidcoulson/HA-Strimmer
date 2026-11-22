@@ -5193,6 +5193,8 @@ const statsServer = http.createServer(async (req, res) => {
     const suggestFor = (s) => (Array.isArray(s) ? s.map((value) => ({ value }))
       : s === 'dashboard' ? ALL_DASHBOARDS
       : s === 'device_class' ? ALL_DEVICE_CLASSES.map((value) => ({ value }))
+      // Without the leading slash: a value shaped like /a/b reads as a regex with flags `b`.
+      : s === 'resource_all' ? [...RESOURCE_ALL_PATHS].sort().map((p) => ({ value: p.replace(/^\/+/, '') }))
       : s || null);
     const own = ownership(YAML_OPT, CONFIG_STORE);
     const eff = effectiveOptions(YAML_OPT, CONFIG_STORE);

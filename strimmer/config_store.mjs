@@ -133,9 +133,10 @@ export const OPTIONS = {
   trim_translations: { type: 'bool', section: 'trim', label: 'Frontend translations', short: 'Translations', icon: 'translate' },
 
   // Dashboards and entities
-  // `suggest` is what the console's add box offers: 'entity' and 'resource' are searches the
-  // panel runs, 'dashboard' and 'device_class' are lists /config.json fills from the instance,
-  // and an array is the whole set of values the option accepts. Every list stays free text.
+  // `suggest` is what the console's add box offers: 'entity' and 'resource' (the resources the
+  // trim has dropped) are searches the panel runs, 'dashboard', 'device_class' and 'resource_all'
+  // (every registered resource) are lists /config.json fills from the instance, and an array is
+  // the whole set of values the option accepts. Every list stays free text.
   dashboards: { type: 'list', section: 'entities', label: 'Dashboards to serve', suggest: 'dashboard' },
   always_forward: { type: 'list', section: 'entities', label: 'Always forward these entities', suggest: 'entity' },
   always_forward_device_class: { type: 'list', section: 'entities', label: 'Always forward these device classes', suggest: 'device_class' },
@@ -144,7 +145,7 @@ export const OPTIONS = {
 
   // Custom cards
   resources_always_forward: { type: 'list', section: 'resources', label: 'Always send these resources', suggest: 'resource' },
-  resources_never_forward: { type: 'list', section: 'resources', label: 'Never send these resources', suggest: 'resource' },
+  resources_never_forward: { type: 'list', section: 'resources', label: 'Never send these resources', suggest: 'resource_all' },
 
   // Overrides
   overrides: { type: 'objects', section: 'overrides', label: 'Override rules' },
