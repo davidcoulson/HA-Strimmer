@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.22.1 — 2026-11-22
+
+**Node 26.13.1 base image,** Node's security release of 2026-11-11. Most of its fixes are in HTTP/2 and in
+TLS servers, and Strimmer has neither: both listeners are plain HTTP/1.1, and TLS is only used as a client.
+One fix (CVE-2026-123864) is in the HTTP parser those listeners do use. Whether it can be reached here was
+not established, so treat this as a security update.
+
+Rebuild the app to pick it up. Nothing else to do on upgrade.
+
 ## 2026.11.19.2 — 2026-11-19
 
 Fixes from a security review of 2026.11.18.2. It found nothing of high or medium severity.
