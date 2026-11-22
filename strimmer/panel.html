@@ -305,6 +305,8 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pick-opt i { color: var(--muted); font-style: normal; font-size: 12px; margin-left: auto; white-space: nowrap; }
   .pick-none { padding: 5px 9px; font-size: 12px; color: var(--muted); }
+  .chips .pick { flex: none; }
+  .chips .pick-menu { right: auto; width: max-content; min-width: 100%; max-width: min(420px, 86vw); }
 
   /* Tables survive only in the raw-data corner, where exact numbers are the point. */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -1908,14 +1910,7 @@ function multiPicker(kind, placeholder, fixed) {
   const input = document.createElement('input');
   input.type = 'text';
   input.placeholder = placeholder;
-  const menu = document.createElement('div');
-  menu.className = 'pick-menu';
-  menu.style.display = 'none';
-  wrap.append(chips, input, menu);
-
   const values = [];
-  let cursor = -1;
-  let seq = 0;
 
   const renderChips = () => {
     chips.textContent = '';
@@ -1936,8 +1931,23 @@ function multiPicker(kind, placeholder, fixed) {
     values.push(t);
     renderChips();
     input.value = '';
-    close();
+    sm.close();
   };
+  const sm = suggestMenu(input, kind, fixed, add);
+  wrap.append(chips, input, sm.menu);
+  return { el: wrap, values, commitPending: () => { if (input.value.trim()) add(input.value); } };
+}
+
+// The search-as-you-type menu under a text field, shared by the wizard's pickers and the Settings
+// lists. `add(value)` gets the suggestion chosen, or exactly what was typed when Enter is pressed
+// with nothing highlighted. `fixed` is an array (or a function returning one) of strings or
+// { value, note } rows; without it `kind` picks the search endpoint.
+function suggestMenu(input, kind, fixed, add) {
+  const menu = document.createElement('div');
+  menu.className = 'pick-menu';
+  menu.style.display = 'none';
+  let cursor = -1;
+  let seq = 0;
   const close = () => { menu.style.display = 'none'; menu.textContent = ''; cursor = -1; };
 
   const show = (rows) => {
@@ -1965,9 +1975,11 @@ function multiPicker(kind, placeholder, fixed) {
   const search = async (q) => {
     const mine = ++seq;
     if (fixed) {
-      const rows = fixed.filter((v) => !q || v.toLowerCase().includes(q.toLowerCase()))
-        .slice(0, 10).map((v) => ({ value: v }));
-      return show(rows);
+      const all = (typeof fixed === 'function' ? fixed() : fixed)
+        .map((v) => (typeof v === 'string' ? { value: v } : v));
+      // The caption is searched too: a dashboard is remembered by its title, not its url_path.
+      return show(all.filter((r) => !q || `${r.value} ${r.note || ''}`.toLowerCase().includes(q.toLowerCase()))
+        .slice(0, 50));
     }
     if (!q) return close();
     try {
@@ -2013,7 +2025,7 @@ function multiPicker(kind, placeholder, fixed) {
     opts.forEach((o, i) => o.classList.toggle('on', i === cursor));
   };
 
-  return { el: wrap, values, commitPending: () => { if (input.value.trim()) add(input.value); } };
+  return { menu, close };
 }
 
 function overrideWizard(d, save, say, addBtn) {
@@ -2277,10 +2289,21 @@ function chipList(o, d, save, say) {
       add.disabled = true;
       save(o, 'adopt', [...values, v]);
     };
-    // Enter commits; blur does too, so a value typed and clicked away from is not lost silently.
-    add.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-    add.onblur = commit;
-    wrap.appendChild(add);
+    if (o.suggest) {
+      // A list this instance can fill in (issue #13): the wizard's search menu on the same box.
+      // Still free text, because an entry is often a /regex/ that no list can offer. Blur does
+      // NOT commit here: half-typed search text would be saved as an entry. It stays in the box.
+      const fixed = Array.isArray(o.suggest) ? o.suggest.filter((r) => !values.includes(r.value))
+        : o.suggest === 'resource' ? resourceSuggestions : null;
+      if (!fixed) add.placeholder = '+ search or type';
+      const sm = suggestMenu(add, o.suggest, fixed, (v) => { add.value = v; commit(); });
+      wrap.appendChild(h('span', { cls: 'pick' }, add, sm.menu));
+    } else {
+      // Enter commits; blur does too, so a value typed and clicked away from is not lost silently.
+      add.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+      add.onblur = commit;
+      wrap.appendChild(add);
+    }
   }
   return wrap;
 }

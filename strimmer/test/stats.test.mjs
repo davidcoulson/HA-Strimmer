@@ -880,6 +880,18 @@ describe('config endpoints', () => {
       assert.equal(themes.editable, true);
       assert.equal(themes.type, 'bool', 'the console needs the type to pick a control');
 
+      // Issue #13: a list says what its add box can offer, so nobody types ids from memory.
+      const sug = (k) => d.options.find((o) => o.key === k).suggest;
+      const dashes = sug('dashboards').map((r) => r.value);
+      // auto-dash is on the mock instance and NOT in DASH_PATHS: the list is what exists, not
+      // what is already served, or there would be nothing new to pick.
+      for (const want of ['lovelace', 'test-dash', 'auto-dash']) assert.ok(dashes.includes(want), `${want} must be offered, got ${dashes}`);
+      assert.equal(sug('always_forward'), 'entity', 'entities are searched, not shipped whole');
+      assert.ok(sug('always_forward_device_class').some((r) => r.value === 'door'),
+        'the device classes in use on this instance');
+      assert.deepEqual(sug('exclude_device_categories'), [{ value: 'config' }, { value: 'diagnostic' }]);
+      assert.equal(sug('mdns_services'), null, 'a list with nothing to offer stays a plain box');
+
       // Setup options are NAMED so the console can explain where they live, but they get no
       // rows: they belong in the add-on configuration and listing them here put one setting in
       // two places, with the console showing the copy that is not authoritative.

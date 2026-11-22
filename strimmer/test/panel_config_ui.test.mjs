@@ -38,3 +38,25 @@ describe('a setting the console owns can be handed back', () => {
     assert.match(panel, /\.owned-dot\s*\{/, 'the marker needs a style or it shows nothing');
   });
 });
+
+// Issue #13: the Settings lists offer what the instance has instead of asking for ids from memory.
+describe('a Settings list searches the instance', () => {
+  const c = fn('chipList');
+
+  it('puts the search menu on the add box when the server says what to offer', () => {
+    assert.match(c, /if \(o\.suggest\) \{/);
+    assert.match(c, /suggestMenu\(add, o\.suggest, fixed, \(v\) => \{ add\.value = v; commit\(\); \}\)/,
+      'a chosen suggestion must be saved like a typed value');
+  });
+
+  it('does not save half-typed search text when the box loses focus', () => {
+    const [searching, plain] = c.slice(c.indexOf('if (o.suggest) {')).split('} else {');
+    assert.doesNotMatch(searching, /onblur/, 'a search box abandoned mid-word must not become an entry');
+    assert.match(plain, /add\.onblur = commit;/, 'a plain box still keeps what was typed');
+  });
+
+  it('still takes a value no list could offer', () => {
+    // suggestMenu's Enter falls back to the raw text; overrides_ui.test.mjs pins that handler.
+    assert.match(fn('suggestMenu'), /else add\(input\.value\)/);
+  });
+});

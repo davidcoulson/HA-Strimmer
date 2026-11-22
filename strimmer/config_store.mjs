@@ -133,15 +133,18 @@ export const OPTIONS = {
   trim_translations: { type: 'bool', section: 'trim', label: 'Frontend translations', short: 'Translations', icon: 'translate' },
 
   // Dashboards and entities
-  dashboards: { type: 'list', section: 'entities', label: 'Dashboards to serve' },
-  always_forward: { type: 'list', section: 'entities', label: 'Always forward these entities' },
-  always_forward_device_class: { type: 'list', section: 'entities', label: 'Always forward these device classes' },
-  never_forward: { type: 'list', section: 'entities', label: 'Never forward these entities' },
-  exclude_device_categories: { type: 'list', section: 'entities', label: 'Drop these entity categories' },
+  // `suggest` is what the console's add box offers: 'entity' and 'resource' are searches the
+  // panel runs, 'dashboard' and 'device_class' are lists /config.json fills from the instance,
+  // and an array is the whole set of values the option accepts. Every list stays free text.
+  dashboards: { type: 'list', section: 'entities', label: 'Dashboards to serve', suggest: 'dashboard' },
+  always_forward: { type: 'list', section: 'entities', label: 'Always forward these entities', suggest: 'entity' },
+  always_forward_device_class: { type: 'list', section: 'entities', label: 'Always forward these device classes', suggest: 'device_class' },
+  never_forward: { type: 'list', section: 'entities', label: 'Never forward these entities', suggest: 'entity' },
+  exclude_device_categories: { type: 'list', section: 'entities', label: 'Drop these entity categories', suggest: ['config', 'diagnostic'] },
 
   // Custom cards
-  resources_always_forward: { type: 'list', section: 'resources', label: 'Always send these resources' },
-  resources_never_forward: { type: 'list', section: 'resources', label: 'Never send these resources' },
+  resources_always_forward: { type: 'list', section: 'resources', label: 'Always send these resources', suggest: 'resource' },
+  resources_never_forward: { type: 'list', section: 'resources', label: 'Never send these resources', suggest: 'resource' },
 
   // Overrides
   overrides: { type: 'objects', section: 'overrides', label: 'Override rules' },

@@ -1091,6 +1091,16 @@ async function buildAllowOnce(rpc, renderTemplate) {
   // entities the allowlist does NOT contain, which by definition appear nowhere else in here.
   // ~9,600 short strings; the entity registry it sits beside is 10MB.
   ALL_ENTITIES = states.map((e) => [e.entity_id, e.attributes?.friendly_name ?? null]);
+  // What the Settings pick lists offer (issue #13): the device classes in use, and the dashboards
+  // that exist. Best-effort: a refused or failed list keeps the last one, and never fails a build.
+  ALL_DEVICE_CLASSES = [...new Set(states.map((e) => e.attributes?.device_class).filter(Boolean))].sort();
+  try {
+    const list = await rpc({ type: 'lovelace/dashboards/list' });
+    // The default dashboard has a null url_path and is reachable as `lovelace`.
+    ALL_DASHBOARDS = [{ value: 'lovelace', note: 'the default dashboard' },
+      ...(Array.isArray(list) ? list : []).filter((d) => d.url_path)
+        .map((d) => ({ value: String(d.url_path), note: d.title && d.title !== d.url_path ? String(d.title) : '' }))];
+  } catch { /* keep the last list */ }
   const byId = new Map(states.map((st) => [st.entity_id, st]));
   const registries = await fetchRegistries(rpc);
   // The device list the console's picker searches. `entities` is what naming this device in a
@@ -2025,6 +2035,9 @@ let ALL_ENTITIES = [];
 // registry has just been read. Names only — no areas, no identifiers, nothing the picker cannot
 // render. The entity registry this is derived from is ~10MB; this is a few hundred short strings.
 let ALL_DEVICES = [];
+// For the Settings pick lists: [{ value: url_path, note: title }] and the device classes in use.
+let ALL_DASHBOARDS = [];
+let ALL_DEVICE_CLASSES = [];
 
 // Every token a dashboard might need a resource FOR: `custom:x` card/row/badge/feature types,
 // and icon-pack prefixes (`foo:bar` where foo isn't built in).
@@ -5177,6 +5190,10 @@ const statsServer = http.createServer(async (req, res) => {
   // What each option is set to, and which source is answering for it.
   if (path.endsWith('/config.json')) {
     if (requireIngress(req, res, '/config.json')) return;
+    const suggestFor = (s) => (Array.isArray(s) ? s.map((value) => ({ value }))
+      : s === 'dashboard' ? ALL_DASHBOARDS
+      : s === 'device_class' ? ALL_DEVICE_CLASSES.map((value) => ({ value }))
+      : s || null);
     const own = ownership(YAML_OPT, CONFIG_STORE);
     const eff = effectiveOptions(YAML_OPT, CONFIG_STORE);
     // The declared catalogue first, so an option nobody has set yet is still offered — that is
@@ -5235,6 +5252,8 @@ const statsServer = http.createServer(async (req, res) => {
         section: OPTIONS[k]?.section || null,
         // What an empty value means, when that is not simply "empty".
         choices: OPTIONS[k]?.choices || null,
+        // What the add box offers for a list: a search the panel runs, or the rows themselves.
+        suggest: suggestFor(OPTIONS[k]?.suggest),
         emptyMeans: OPTIONS[k]?.emptyMeans
           ? (k === 'mdns_services' ? `the built-in set (${DEFAULT_SERVICES.join(', ')})` : OPTIONS[k].emptyMeans)
           : null,
